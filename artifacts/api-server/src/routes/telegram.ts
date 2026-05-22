@@ -280,6 +280,37 @@ router.get("/tg/groups", async (req, res) => {
   res.json({ groups: tgSession.groups });
 });
 
+// ─── Resolve group by link/username ──────────────────────────────────────────
+router.post("/tg/resolve-group", async (req, res) => {
+  if (!tgSession?.client) { res.status(401).json({ error: "未登录" }); return; }
+  const { link } = req.body as { link?: string };
+  if (!link) { res.status(400).json({ error: "请提供群链接" }); return; }
+
+  let username = link.trim();
+  username = username.replace(/^https?:\/\/t\.me\//i, "");
+  username = username.replace(/^@/, "");
+  username = username.replace(/\?.*$/, "");
+
+  try {
+    const entity = await tgSession.client.getEntity(username);
+    const id = String((entity as unknown as { id: bigint | number }).id);
+    const title = (entity as { title?: string; firstName?: string }).title
+      ?? (entity as { firstName?: string }).firstName
+      ?? username;
+    const isChannel = "broadcast" in entity;
+    const group: GroupInfo = { id, title, type: isChannel ? "channel" : "group" };
+    res.json({ ok: true, group });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    req.log.error({ err, username }, "resolve-group failed");
+    if (msg.includes("USERNAME_NOT_OCCUPIED") || msg.includes("Cannot find")) {
+      res.status(404).json({ error: "找不到该群，请检查链接是否正确" });
+    } else {
+      res.status(500).json({ error: msg });
+    }
+  }
+});
+
 // ─── Set watch group ──────────────────────────────────────────────────────────
 router.post("/tg/set-group", (req, res) => {
   const { groupId, autoBet, betAmount } = req.body as {
@@ -306,7 +337,7 @@ router.get("/tg/bets", (_req, res) => {
 // ─── Disconnect ───────────────────────────────────────────────────────────────
 router.post("/tg/disconnect", async (_req, res) => {
   if (tgSession?.client) {
-    try { await tgSession.client.invoke(new Api.auth.LogOut({})); } catch { /* ok */ }
+    try { await tgSession.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
     try { await tgSession.client.disconnect(); } catch { /* ok */ }
   }
   tgSession = null;

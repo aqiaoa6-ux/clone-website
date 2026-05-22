@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { Menu, Moon, RefreshCw } from 'lucide-react';
+import { Menu, Moon, RefreshCw, Users } from 'lucide-react';
 import SettingsDrawer from '@/components/SettingsDrawer';
+import TelegramLoginModal from '@/components/TelegramLoginModal';
+import GroupSetupModal from '@/components/GroupSetupModal';
 
 interface LotteryTerm {
   term: number;
@@ -14,6 +16,20 @@ interface LotteryTerm {
   r3: string;
   openTime: number;
   closeTime: number;
+}
+
+interface MeInfo {
+  id: number | bigint;
+  firstName?: string;
+  lastName?: string;
+  username?: string;
+  phone?: string;
+}
+
+interface GroupInfo {
+  id: string;
+  title: string;
+  type: string;
 }
 
 function getSumColor(result: number): string {
@@ -37,6 +53,8 @@ const mockRecords = [
 
 export default function Dashboard() {
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [loginOpen, setLoginOpen] = useState(false);
+  const [groupOpen, setGroupOpen] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [currentPeriod, setCurrentPeriod] = useState(0);
   const [latestTerm, setLatestTerm] = useState<LotteryTerm | null>(null);
@@ -44,6 +62,8 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState(false);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [tgMe, setTgMe] = useState<MeInfo | null>(null);
+  const [watchGroup, setWatchGroup] = useState<GroupInfo | null>(null);
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -51,7 +71,7 @@ export default function Dashboard() {
     try {
       const res = await fetch('/api/lottery/fengpan');
       if (!res.ok) throw new Error('API error');
-      const data = await res.json();
+      const data = await res.json() as { message?: { all?: { keno28?: { data?: LotteryTerm[] } } } };
       const items: LotteryTerm[] = data?.message?.all?.keno28?.data ?? [];
       if (items.length > 0) {
         const latest = items[0];
@@ -79,18 +99,33 @@ export default function Dashboard() {
     countdownRef.current = setInterval(() => {
       const diff = Math.max(0, Math.floor((nextOpenTimeRef.current - Date.now()) / 1000));
       setCountdown(diff);
-      if (diff === 0) {
-        setTimeout(fetchLotteryData, 3000);
-      }
+      if (diff === 0) setTimeout(fetchLotteryData, 3000);
     }, 1000);
-    return () => {
-      if (countdownRef.current) clearInterval(countdownRef.current);
-    };
+    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
   }, [fetchLotteryData]);
 
-  const prevBalls = latestTerm
-    ? [latestTerm.sum1, latestTerm.sum2, latestTerm.sum3]
-    : [4, 3, 6];
+  useEffect(() => {
+    fetch('/api/tg/status')
+      .then(r => r.json())
+      .then((d: { connected?: boolean; me?: MeInfo; watchGroupId?: string }) => {
+        if (d.connected && d.me) setTgMe(d.me);
+      })
+      .catch(() => { /* ignore */ });
+  }, []);
+
+  function handleConnected(me: MeInfo) {
+    setTgMe(me);
+    setLoginOpen(false);
+    setTimeout(() => setGroupOpen(true), 400);
+  }
+
+  async function handleDisconnect() {
+    await fetch('/api/tg/disconnect', { method: 'POST' });
+    setTgMe(null);
+    setWatchGroup(null);
+  }
+
+  const prevBalls = latestTerm ? [latestTerm.sum1, latestTerm.sum2, latestTerm.sum3] : [4, 3, 6];
   const prevResult = latestTerm?.result ?? 13;
   const prevLabel = latestTerm?.r3 ?? '小单';
   const prevTerm = latestTerm?.term ?? 0;
@@ -99,53 +134,59 @@ export default function Dashboard() {
     <div className="min-h-screen bg-background text-foreground flex justify-center pb-8 relative">
       <div className="w-full max-w-[430px] bg-background shadow-2xl overflow-hidden flex flex-col relative">
 
-        {/* Top Header */}
+        {/* Header */}
         <div className="flex items-center justify-between p-3 border-b border-border/50">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setDrawerOpen(true)}
-            className="text-muted-foreground hover:text-white"
-            data-testid="button-open-drawer"
-          >
+          <Button variant="ghost" size="icon" onClick={() => setDrawerOpen(true)} className="text-muted-foreground hover:text-white" data-testid="button-open-drawer">
             <Menu className="w-6 h-6" />
           </Button>
 
           <div className="flex items-center gap-2">
             <Button
               size="sm"
-              className="bg-[#3b5de7] hover:bg-blue-600 text-white h-8 text-xs px-3"
+              onClick={() => tgMe ? handleDisconnect() : setLoginOpen(true)}
+              className={`${tgMe ? 'bg-green-600 hover:bg-green-700' : 'bg-[#3b5de7] hover:bg-blue-600'} text-white h-8 text-xs px-3`}
               data-testid="button-connect-tg"
             >
-              连接TG
+              {tgMe ? `已连接` : '连接TG'}
             </Button>
             <Button
               size="sm"
               className={`${isRunning ? 'bg-orange-600 hover:bg-orange-700' : 'bg-[#00e676] hover:bg-green-600'} text-white h-8 text-xs px-4`}
               onClick={() => setIsRunning(!isRunning)}
-              data-testid="button-start-stop"
+              data-testid="button-start"
             >
               {isRunning ? '运行中' : '启动'}
             </Button>
-            <Button
-              size="sm"
-              className="bg-[#f44336] hover:bg-red-600 text-white h-8 text-xs px-4"
-              onClick={() => setIsRunning(false)}
-              data-testid="button-stop"
-            >
+            <Button size="sm" className="bg-[#f44336] hover:bg-red-600 text-white h-8 text-xs px-4" onClick={() => setIsRunning(false)} data-testid="button-stop">
               停止
             </Button>
           </div>
 
-          <Button
-            variant="ghost"
-            size="icon"
-            className="text-muted-foreground"
-            data-testid="button-theme"
-          >
+          <Button variant="ghost" size="icon" className="text-muted-foreground" data-testid="button-theme">
             <Moon className="w-5 h-5" />
           </Button>
         </div>
+
+        {/* TG Connected bar */}
+        {tgMe && (
+          <div className="flex items-center justify-between px-4 py-2 bg-green-900/20 border-b border-green-800/30">
+            <div className="flex items-center gap-2 text-xs text-green-400">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              <span>
+                {tgMe.firstName}{tgMe.lastName ? ` ${tgMe.lastName}` : ''}
+                {tgMe.username ? ` @${tgMe.username}` : ''}
+              </span>
+            </div>
+            <button
+              onClick={() => setGroupOpen(true)}
+              className="flex items-center gap-1 text-xs text-[#4CA2FF] hover:text-blue-400 transition-colors"
+              data-testid="button-set-group"
+            >
+              <Users className="w-3 h-3" />
+              {watchGroup ? watchGroup.title : '设置投注群'}
+            </button>
+          </div>
+        )}
 
         <div className="p-4 flex-1 overflow-y-auto pb-10">
 
@@ -161,18 +202,9 @@ export default function Dashboard() {
                 </span>
               ) : (
                 <>
-                  <span className="text-[#3b5de7] font-medium" data-testid="text-current-period">
-                    {currentPeriod}期:
-                  </span>
-                  <span className="text-[#c8a520] font-bold" data-testid="text-countdown">
-                    {countdown}秒
-                  </span>
-                  <button
-                    onClick={fetchLotteryData}
-                    className="ml-1 text-muted-foreground hover:text-white transition-colors"
-                    title={lastFetched ? `上次更新: ${lastFetched.toLocaleTimeString()}` : ''}
-                    data-testid="button-refresh"
-                  >
+                  <span className="text-[#3b5de7] font-medium" data-testid="text-current-period">{currentPeriod}期:</span>
+                  <span className="text-[#c8a520] font-bold" data-testid="text-countdown">{countdown}秒</span>
+                  <button onClick={fetchLotteryData} className="ml-1 text-muted-foreground hover:text-white transition-colors" title={lastFetched ? `上次更新: ${lastFetched.toLocaleTimeString()}` : ''} data-testid="button-refresh">
                     <RefreshCw className="w-3.5 h-3.5" />
                   </button>
                 </>
@@ -186,97 +218,63 @@ export default function Dashboard() {
                 <div className="flex items-center gap-1 ml-1">
                   {prevBalls.map((b, i) => (
                     <span key={i} className="flex items-center gap-0.5">
-                      <span
-                        className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs"
-                        style={{ backgroundColor: '#3b5de7' + '33', border: '1px solid #3b5de766', color: '#4CA2FF' }}
-                        data-testid={`text-ball-${i}`}
-                      >
-                        {b}
-                      </span>
+                      <span className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs" style={{ backgroundColor: '#3b5de733', border: '1px solid #3b5de766', color: '#4CA2FF' }} data-testid={`text-ball-${i}`}>{b}</span>
                       {i < 2 && <span className="text-muted-foreground text-xs">+</span>}
                     </span>
                   ))}
                   <span className="text-muted-foreground text-xs">=</span>
-                  <span
-                    className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs"
-                    style={{
-                      backgroundColor: getSumColor(prevResult) + '33',
-                      border: `1px solid ${getSumColor(prevResult)}66`,
-                      color: getSumColor(prevResult),
-                    }}
-                    data-testid="text-result"
-                  >
-                    {prevResult}
-                  </span>
+                  <span className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs" style={{ backgroundColor: getSumColor(prevResult) + '33', border: `1px solid ${getSumColor(prevResult)}66`, color: getSumColor(prevResult) }} data-testid="text-result">{prevResult}</span>
                 </div>
                 <span className="text-muted-foreground text-xs ml-1">({prevLabel})</span>
               </div>
             )}
           </div>
 
-          {/* Balance Display */}
+          {/* Balance */}
           <div className="bg-card border border-border rounded-lg p-4 mb-4">
             <div className="text-muted-foreground text-sm mb-1">当前余额:</div>
-            <div className="text-[#00e676] text-3xl font-bold font-mono tracking-tight" data-testid="text-balance">
-              1198306.57
-            </div>
+            <div className="text-[#00e676] text-3xl font-bold font-mono tracking-tight" data-testid="text-balance">1198306.57</div>
           </div>
 
           {/* Stats Cards */}
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="bg-card border border-border rounded-lg p-3">
               <div className="text-muted-foreground text-xs mb-1">今日盈亏</div>
-              <div className="text-[#00e676] font-bold" data-testid="text-today-pnl">+0.00</div>
+              <div className="text-[#00e676] font-bold">+0.00</div>
             </div>
             <div className="bg-card border border-border rounded-lg p-3">
               <div className="text-muted-foreground text-xs mb-1">总盈亏</div>
-              <div className="text-[#f44336] font-bold" data-testid="text-total-pnl">-919000.00</div>
+              <div className="text-[#f44336] font-bold">-919000.00</div>
             </div>
           </div>
 
           {/* Stats Row */}
           <div className="bg-card border border-border rounded-lg p-3 grid grid-cols-4 gap-2 mb-6 divide-x divide-border">
-            <div className="text-center">
-              <div className="text-muted-foreground text-[10px] mb-1">总投注</div>
-              <div className="text-sm font-medium" data-testid="text-total-bets">17次</div>
-            </div>
-            <div className="text-center">
-              <div className="text-muted-foreground text-[10px] mb-1">中奖</div>
-              <div className="text-sm font-medium" data-testid="text-wins">8次</div>
-            </div>
-            <div className="text-center">
-              <div className="text-muted-foreground text-[10px] mb-1">最大连中</div>
-              <div className="text-sm font-medium" data-testid="text-max-streak">4</div>
-            </div>
-            <div className="text-center">
-              <div className="text-muted-foreground text-[10px] mb-1">胜率</div>
-              <div className="text-sm font-medium" data-testid="text-win-rate">47.06%</div>
-            </div>
+            {[['总投注', '17次'], ['中奖', '8次'], ['最大连中', '4'], ['胜率', '47.06%']].map(([label, val]) => (
+              <div key={label} className="text-center">
+                <div className="text-muted-foreground text-[10px] mb-1">{label}</div>
+                <div className="text-sm font-medium">{val}</div>
+              </div>
+            ))}
           </div>
 
           {/* Betting Records */}
           <div>
             <div className="flex justify-between items-center mb-3">
-              <h3 className="text-sm font-medium flex items-center gap-1.5">
-                <span>📋</span> 投注记录
-              </h3>
+              <h3 className="text-sm font-medium flex items-center gap-1.5"><span>📋</span> 投注记录</h3>
               <div className="flex gap-2">
-                <Button size="sm" className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2" data-testid="button-search">期号搜索</Button>
-                <Button size="sm" className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2" data-testid="button-reset">重置</Button>
-                <Button size="sm" className="bg-transparent border border-[#f44336] text-[#f44336] hover:bg-[#f44336]/10 h-7 text-xs px-2" data-testid="button-clear-bets">🚫 清空投注</Button>
+                <Button size="sm" className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2">期号搜索</Button>
+                <Button size="sm" className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2">重置</Button>
+                <Button size="sm" className="bg-transparent border border-[#f44336] text-[#f44336] hover:bg-[#f44336]/10 h-7 text-xs px-2">🚫 清空投注</Button>
               </div>
             </div>
-
             <div className="rounded-md border border-border overflow-hidden text-xs">
               <table className="w-full text-center">
                 <thead className="bg-[#2d3654]/50 border-b border-border">
                   <tr>
-                    <th className="py-2 px-1 font-normal text-muted-foreground">期号</th>
-                    <th className="py-2 px-1 font-normal text-muted-foreground">投注内容</th>
-                    <th className="py-2 px-1 font-normal text-muted-foreground">开奖</th>
-                    <th className="py-2 px-1 font-normal text-muted-foreground">盈亏</th>
-                    <th className="py-2 px-1 font-normal text-muted-foreground">金额</th>
-                    <th className="py-2 px-1 font-normal text-muted-foreground">状态</th>
+                    {['期号', '投注内容', '开奖', '盈亏', '金额', '状态'].map(h => (
+                      <th key={h} className="py-2 px-1 font-normal text-muted-foreground">{h}</th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
@@ -296,21 +294,25 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Bottom Status Bar */}
-        <div className="absolute bottom-0 left-0 w-full bg-[#1a1f2e] border-t border-border p-2 text-[10px] text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis px-4 z-10 shadow-[0_-4px_10px_rgba(0,0,0,0.2)]">
+        {/* Bottom bar */}
+        <div className="absolute bottom-0 left-0 w-full bg-[#1a1f2e] border-t border-border p-2 text-[10px] text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis px-4 z-10">
           {latestTerm ? (
-            <>
-              <span className="text-white/70">{latestTerm.term}期:</span>{' '}
-              {latestTerm.sum1}+{latestTerm.sum2}+{latestTerm.sum3}={latestTerm.result}{' '}
-              <span className="text-[#4CA2FF]">{latestTerm.r3}</span>
-            </>
-          ) : (
-            <span className="text-white/70">3433393:</span>
-          )}{' '}
-          单金额 <span className="text-[#f44336]">-39200</span> 金额 <span className="text-white/60">400000</span>
+            <><span className="text-white/70">{latestTerm.term}期:</span> {latestTerm.sum1}+{latestTerm.sum2}+{latestTerm.sum3}={latestTerm.result} <span className="text-[#4CA2FF]">{latestTerm.r3}</span></>
+          ) : <span className="text-white/70">加载中...</span>}
+          {' '}单金额 <span className="text-[#f44336]">-39200</span> 金额 <span className="text-white/60">400000</span>
         </div>
 
-        <SettingsDrawer isOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
+        <SettingsDrawer
+          isOpen={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          tgMe={tgMe}
+          watchGroup={watchGroup}
+          onConnectTg={() => { setDrawerOpen(false); setTimeout(() => setLoginOpen(true), 200); }}
+          onSetGroup={() => { setDrawerOpen(false); setTimeout(() => setGroupOpen(true), 200); }}
+          onDisconnect={handleDisconnect}
+        />
+        <TelegramLoginModal isOpen={loginOpen} onClose={() => setLoginOpen(false)} onConnected={handleConnected} />
+        <GroupSetupModal isOpen={groupOpen} onClose={() => setGroupOpen(false)} onGroupSet={setWatchGroup} currentGroupId={watchGroup?.id} />
       </div>
     </div>
   );

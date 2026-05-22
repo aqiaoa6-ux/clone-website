@@ -70,9 +70,12 @@ autoInstallPeers: false
 
 onlyBuiltDependencies:
   - '@swc/core'
+  - bufferutil
   - esbuild
+  - es5-ext
   - msw
   - unrs-resolver
+  - utf-8-validate
 
 overrides:
   # replit uses linux-x64 only, we can exclude all other platforms
