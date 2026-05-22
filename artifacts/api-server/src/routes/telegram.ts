@@ -75,6 +75,8 @@ interface TgSession {
   todayResetAt: number;
   // per-period dedup
   lastBetPeriod?: number;
+  // pending delayed bet (1-min after signal)
+  pendingBetTimer?: ReturnType<typeof setTimeout>;
   // kkpay integration
   kkpayUsername: string;
   kkpayEntityId?: string;
@@ -210,6 +212,7 @@ function saveSession(): void {
 function stopWatchdog(session: TgSession): void {
   if (session.watchdogTimer) { clearInterval(session.watchdogTimer); session.watchdogTimer = undefined; }
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
+  if (session.pendingBetTimer) { clearTimeout(session.pendingBetTimer); session.pendingBetTimer = undefined; }
 }
 
 function startConnectionWatchdog(session: TgSession): void {
@@ -399,10 +402,14 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
     const chatId = String(msg.chatId ?? "");
     const senderId = String(msg.senderId ?? "");
 
-    // Must come from the resolved kkpay entity
-    if (!session.kkpayEntityId) return;
+    const wgid = session.watchGroupId;
     const eid = session.kkpayEntityId;
-    if (chatId !== eid && senderId !== eid && `-100${chatId}` !== eid) return;
+
+    // Match: (a) message from kkpay entity anywhere, OR (b) any message in the watch group
+    const isFromKkpay = eid && (senderId === eid || chatId === eid || `-100${chatId}` === eid);
+    const inWatchGroup = wgid && (chatId === wgid || `-100${chatId}` === wgid);
+
+    if (!isFromKkpay && !inWatchGroup) return;
 
     const bal = parseBalanceFromKkpay(text);
     if (bal !== null) {
@@ -414,6 +421,7 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
         balanceSource: session.balanceSource,
         balanceUpdatedAt: session.balanceUpdatedAt,
       });
+      saveSession();
     }
   };
 
@@ -600,68 +608,81 @@ function startWatching(session: TgSession) {
       betContent = BET_TYPE_TEXT[session.cfg.betType];
     }
 
-    // Risk check
-    const risk = checkRiskLimits(session);
-    if (!risk.ok) {
-      const group = session.groups.find(
-        (g) => g.id === targetId || `-100${g.id}` === targetId,
-      );
-      betLog.unshift({
-        id: String(Date.now()),
-        groupId: targetId,
-        groupTitle: group?.title ?? targetId,
-        messageText: text.slice(0, 80),
-        betContent,
-        amount: session.currentBet,
-        timestamp: Date.now(),
-        status: "paused",
-        pauseReason: risk.reason,
-        period: triggerPeriod,
-      });
-      if (betLog.length > 200) betLog.pop();
-      return;
-    }
-
+    // Capture bet parameters at signal time (amount may change during the wait)
+    const plannedContent = betContent;
+    const plannedAmount = session.currentBet;
     const group = session.groups.find(
       (g) => g.id === targetId || `-100${g.id}` === targetId,
     );
 
-    try {
-      // Format: 大100 / 小100 / 小单100 / 大单100
-      await session.client.sendMessage(targetId, {
-        message: `${betContent}${session.currentBet}`,
-      });
-      session.lastBetAt = Date.now();
-      if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
-      betLog.unshift({
-        id: String(Date.now()),
-        groupId: targetId,
-        groupTitle: group?.title ?? targetId,
-        messageText: text.slice(0, 80),
-        betContent,
-        amount: session.currentBet,
-        timestamp: Date.now(),
-        status: "sent",
-        period: triggerPeriod,
-      });
-      if (betLog.length > 200) betLog.pop();
-      // Push real-time event to SSE clients
-      pushEvent("bet:new", { bet: betLog[0] });
-      // Send "ye" to the group to get updated balance from kkpay bot
-      queryBalanceInGroup(session, 2000);
-    } catch {
-      betLog.unshift({
-        id: String(Date.now()),
-        groupId: targetId,
-        groupTitle: group?.title ?? targetId,
-        messageText: text.slice(0, 80),
-        betContent,
-        amount: session.currentBet,
-        timestamp: Date.now(),
-        status: "failed",
-      });
-      if (betLog.length > 200) betLog.pop();
+    // Cancel any existing pending bet, then schedule 1 minute after signal
+    if (session.pendingBetTimer) {
+      clearTimeout(session.pendingBetTimer);
+      session.pendingBetTimer = undefined;
     }
+
+    session.pendingBetTimer = setTimeout(() => {
+      session.pendingBetTimer = undefined;
+      if (!session.cfg.autoBet) return;
+
+      // Re-check risk limits at execution time
+      const risk = checkRiskLimits(session);
+      if (!risk.ok) {
+        betLog.unshift({
+          id: String(Date.now()),
+          groupId: targetId,
+          groupTitle: group?.title ?? targetId,
+          messageText: text.slice(0, 80),
+          betContent: plannedContent,
+          amount: plannedAmount,
+          timestamp: Date.now(),
+          status: "paused",
+          pauseReason: risk.reason,
+          period: triggerPeriod,
+        });
+        if (betLog.length > 200) betLog.pop();
+        pushEvent("bet:new", { bet: betLog[0] });
+        return;
+      }
+
+      void (async () => {
+        try {
+          // Format: 大100 / 小100 / 小单100 / 大单100
+          await session.client.sendMessage(targetId, {
+            message: `${plannedContent}${plannedAmount}`,
+          });
+          session.lastBetAt = Date.now();
+          if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
+          betLog.unshift({
+            id: String(Date.now()),
+            groupId: targetId,
+            groupTitle: group?.title ?? targetId,
+            messageText: text.slice(0, 80),
+            betContent: plannedContent,
+            amount: plannedAmount,
+            timestamp: Date.now(),
+            status: "sent",
+            period: triggerPeriod,
+          });
+          if (betLog.length > 200) betLog.pop();
+          pushEvent("bet:new", { bet: betLog[0] });
+          // Send "ye" to the group to get updated balance from kkpay bot
+          queryBalanceInGroup(session, 2000);
+        } catch {
+          betLog.unshift({
+            id: String(Date.now()),
+            groupId: targetId,
+            groupTitle: group?.title ?? targetId,
+            messageText: text.slice(0, 80),
+            betContent: plannedContent,
+            amount: plannedAmount,
+            timestamp: Date.now(),
+            status: "failed",
+          });
+          if (betLog.length > 200) betLog.pop();
+        }
+      })();
+    }, 60 * 1000);
   };
 
   session.client.addEventHandler(messageHandler, new NewMessage({}));
