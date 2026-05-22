@@ -26,9 +26,10 @@ interface Props {
   onConnectTg?: () => void;
   onSetGroup?: () => void;
   onDisconnect?: () => void;
+  onOpenConfig?: () => void;
 }
 
-export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onConnectTg, onSetGroup, onDisconnect }: Props) {
+export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onConnectTg, onSetGroup, onDisconnect, onOpenConfig }: Props) {
   const [normalPlay, setNormalPlay] = useState(true);
   const [followPlay, setFollowPlay] = useState(true);
 
@@ -81,8 +82,8 @@ export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onCo
               <div className="text-xs text-muted-foreground mb-4">策略配置</div>
 
               <div className="space-y-3">
-                <Button className="w-full bg-[#3b5de7] hover:bg-blue-600 text-white border-0">
-                  全局设置
+                <Button className="w-full bg-[#3b5de7] hover:bg-blue-600 text-white border-0" onClick={() => { onOpenConfig?.(); }}>
+                  投注配置
                 </Button>
 
                 <div className="flex items-center justify-between py-2 px-1">

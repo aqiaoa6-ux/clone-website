@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { Menu, Moon, RefreshCw, Users } from 'lucide-react';
+import { Menu, Moon, RefreshCw, Users, SlidersHorizontal } from 'lucide-react';
 import SettingsDrawer from '@/components/SettingsDrawer';
 import TelegramLoginModal from '@/components/TelegramLoginModal';
 import GroupSetupModal from '@/components/GroupSetupModal';
+import BetConfigModal, { type BetConfig } from '@/components/BetConfigModal';
 
 interface LotteryTerm {
   term: number;
@@ -55,6 +56,7 @@ export default function Dashboard() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [groupOpen, setGroupOpen] = useState(false);
+  const [configOpen, setConfigOpen] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [currentPeriod, setCurrentPeriod] = useState(0);
   const [latestTerm, setLatestTerm] = useState<LotteryTerm | null>(null);
@@ -64,6 +66,7 @@ export default function Dashboard() {
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
   const [tgMe, setTgMe] = useState<MeInfo | null>(null);
   const [watchGroup, setWatchGroup] = useState<GroupInfo | null>(null);
+  const [betConfig, setBetConfig] = useState<Partial<BetConfig>>({ betAmount: 100, autoBet: false, strategy: 'normal' });
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -107,8 +110,20 @@ export default function Dashboard() {
   useEffect(() => {
     fetch('/api/tg/status')
       .then(r => r.json())
-      .then((d: { connected?: boolean; me?: MeInfo; watchGroupId?: string }) => {
+      .then((d: { connected?: boolean; me?: MeInfo; watchGroupId?: string; autoBet?: boolean; betAmount?: number; strategy?: BetConfig['strategy']; betMultiplier?: number; maxConsecutiveLosses?: number; stopLoss?: number; targetProfit?: number; cooldownSeconds?: number; betType?: BetConfig['betType'] }) => {
         if (d.connected && d.me) setTgMe(d.me);
+        setBetConfig({
+          autoBet: d.autoBet ?? false,
+          betAmount: d.betAmount ?? 100,
+          strategy: d.strategy ?? 'normal',
+          betMultiplier: d.betMultiplier ?? 2,
+          maxConsecutiveLosses: d.maxConsecutiveLosses ?? 5,
+          stopLoss: d.stopLoss ?? 5000,
+          targetProfit: d.targetProfit ?? 3000,
+          cooldownSeconds: d.cooldownSeconds ?? 0,
+          betType: d.betType ?? 'follow',
+        });
+        if (d.autoBet) setIsRunning(true);
       })
       .catch(() => { /* ignore */ });
   }, []);
@@ -123,6 +138,25 @@ export default function Dashboard() {
     await fetch('/api/tg/disconnect', { method: 'POST' });
     setTgMe(null);
     setWatchGroup(null);
+    setIsRunning(false);
+  }
+
+  async function handleToggleRun() {
+    const next = !isRunning;
+    setIsRunning(next);
+    if (tgMe) {
+      await fetch('/api/tg/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...betConfig, autoBet: next }),
+      }).catch(() => {});
+      setBetConfig(prev => ({ ...prev, autoBet: next }));
+    }
+  }
+
+  function handleSaveConfig(cfg: BetConfig) {
+    setBetConfig(cfg);
+    if (cfg.autoBet) setIsRunning(true);
   }
 
   const prevBalls = latestTerm ? [latestTerm.sum1, latestTerm.sum2, latestTerm.sum3] : [4, 3, 6];
@@ -140,25 +174,43 @@ export default function Dashboard() {
             <Menu className="w-6 h-6" />
           </Button>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Button
               size="sm"
-              onClick={() => tgMe ? handleDisconnect() : setLoginOpen(true)}
+              onClick={() => tgMe ? setGroupOpen(true) : setLoginOpen(true)}
               className={`${tgMe ? 'bg-green-600 hover:bg-green-700' : 'bg-[#3b5de7] hover:bg-blue-600'} text-white h-8 text-xs px-3`}
               data-testid="button-connect-tg"
             >
-              {tgMe ? `已连接` : '连接TG'}
+              {tgMe ? '已连接' : '连接TG'}
             </Button>
             <Button
               size="sm"
-              className={`${isRunning ? 'bg-orange-600 hover:bg-orange-700' : 'bg-[#00e676] hover:bg-green-600'} text-white h-8 text-xs px-4`}
-              onClick={() => setIsRunning(!isRunning)}
+              className={`${isRunning ? 'bg-orange-500 hover:bg-orange-600' : 'bg-[#00e676] hover:bg-green-500'} text-black font-semibold h-8 text-xs px-3`}
+              onClick={handleToggleRun}
               data-testid="button-start"
             >
               {isRunning ? '运行中' : '启动'}
             </Button>
-            <Button size="sm" className="bg-[#f44336] hover:bg-red-600 text-white h-8 text-xs px-4" onClick={() => setIsRunning(false)} data-testid="button-stop">
+            <Button size="sm" className="bg-[#f44336] hover:bg-red-600 text-white h-8 text-xs px-3" onClick={async () => {
+              if (isRunning) {
+                setIsRunning(false);
+                if (tgMe) {
+                  await fetch('/api/tg/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...betConfig, autoBet: false }) }).catch(() => {});
+                  setBetConfig(prev => ({ ...prev, autoBet: false }));
+                }
+              }
+            }} data-testid="button-stop">
               停止
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground hover:text-white h-8 w-8 p-0"
+              onClick={() => setConfigOpen(true)}
+              data-testid="button-config"
+              title="投注配置"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
             </Button>
           </div>
 
@@ -169,22 +221,35 @@ export default function Dashboard() {
 
         {/* TG Connected bar */}
         {tgMe && (
-          <div className="flex items-center justify-between px-4 py-2 bg-green-900/20 border-b border-green-800/30">
+          <div className="flex items-center justify-between px-3 py-1.5 bg-green-900/20 border-b border-green-800/30">
             <div className="flex items-center gap-2 text-xs text-green-400">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span>
+              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
+              <span className="truncate max-w-[120px]">
                 {tgMe.firstName}{tgMe.lastName ? ` ${tgMe.lastName}` : ''}
                 {tgMe.username ? ` @${tgMe.username}` : ''}
               </span>
             </div>
-            <button
-              onClick={() => setGroupOpen(true)}
-              className="flex items-center gap-1 text-xs text-[#4CA2FF] hover:text-blue-400 transition-colors"
-              data-testid="button-set-group"
-            >
-              <Users className="w-3 h-3" />
-              {watchGroup ? watchGroup.title : '设置投注群'}
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setGroupOpen(true)}
+                className="flex items-center gap-1 text-xs text-[#4CA2FF] hover:text-blue-400 transition-colors"
+                data-testid="button-set-group"
+              >
+                <Users className="w-3 h-3" />
+                <span className="truncate max-w-[90px]">{watchGroup ? watchGroup.title : '设置投注群'}</span>
+              </button>
+              <button
+                onClick={() => setConfigOpen(true)}
+                className="flex items-center gap-1 text-xs text-[#c8a520] hover:text-yellow-400 transition-colors"
+                data-testid="button-open-config"
+              >
+                <SlidersHorizontal className="w-3 h-3" />
+                <span>
+                  {betConfig.strategy === 'martingale' ? '马丁' : betConfig.strategy === 'anti-martingale' ? '反马丁' : '普通'}
+                  {' '}¥{betConfig.betAmount ?? 100}
+                </span>
+              </button>
+            </div>
           </div>
         )}
 
@@ -310,9 +375,16 @@ export default function Dashboard() {
           onConnectTg={() => { setDrawerOpen(false); setTimeout(() => setLoginOpen(true), 200); }}
           onSetGroup={() => { setDrawerOpen(false); setTimeout(() => setGroupOpen(true), 200); }}
           onDisconnect={handleDisconnect}
+          onOpenConfig={() => { setDrawerOpen(false); setTimeout(() => setConfigOpen(true), 200); }}
         />
         <TelegramLoginModal isOpen={loginOpen} onClose={() => setLoginOpen(false)} onConnected={handleConnected} />
         <GroupSetupModal isOpen={groupOpen} onClose={() => setGroupOpen(false)} onGroupSet={setWatchGroup} currentGroupId={watchGroup?.id} />
+        <BetConfigModal
+          isOpen={configOpen}
+          onClose={() => setConfigOpen(false)}
+          onSave={handleSaveConfig}
+          initialConfig={betConfig}
+        />
       </div>
     </div>
   );
