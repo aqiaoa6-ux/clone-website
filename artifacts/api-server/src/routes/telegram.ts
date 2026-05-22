@@ -652,14 +652,14 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   }
 }
 
-// ─── Schedule 30-second auto-bet after a result ───────────────────────────────
+// ─── Schedule 50-second auto-bet after a result ───────────────────────────────
 function scheduleAutoNextBet(session: TgSession): void {
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (!session.cfg.autoBet || !session.watchGroupId) return;
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
     void autoPlaceBet(session);
-  }, 30 * 1000);
+  }, 50 * 1000);
 }
 
 function computeNextBet(session: TgSession, won: boolean): number {
