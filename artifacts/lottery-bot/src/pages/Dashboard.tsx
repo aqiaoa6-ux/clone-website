@@ -5,6 +5,8 @@ import SettingsDrawer from '@/components/SettingsDrawer';
 import TelegramLoginModal from '@/components/TelegramLoginModal';
 import GroupSetupModal from '@/components/GroupSetupModal';
 import BetConfigModal, { type BetConfig } from '@/components/BetConfigModal';
+import TrendModal from '@/components/TrendModal';
+import type { LotteryTerm as TrendTerm } from '@/components/TrendModal';
 
 interface LotteryTerm {
   term: number;
@@ -67,6 +69,8 @@ export default function Dashboard() {
   const [tgMe, setTgMe] = useState<MeInfo | null>(null);
   const [watchGroup, setWatchGroup] = useState<GroupInfo | null>(null);
   const [betConfig, setBetConfig] = useState<Partial<BetConfig>>({ betAmount: 100, autoBet: false, strategy: 'normal' });
+  const [trendOpen, setTrendOpen] = useState(false);
+  const [allItems, setAllItems] = useState<TrendTerm[]>([]);
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -79,6 +83,7 @@ export default function Dashboard() {
       if (items.length > 0) {
         const latest = items[0];
         setLatestTerm(latest);
+        setAllItems(items as TrendTerm[]);
         nextOpenTimeRef.current = latest.openTime + 210000;
         setCurrentPeriod(latest.term + 1);
         setFetchError(false);
@@ -376,6 +381,7 @@ export default function Dashboard() {
           onSetGroup={() => { setDrawerOpen(false); setTimeout(() => setGroupOpen(true), 200); }}
           onDisconnect={handleDisconnect}
           onOpenConfig={() => { setDrawerOpen(false); setTimeout(() => setConfigOpen(true), 200); }}
+          onOpenTrend={() => { setDrawerOpen(false); setTimeout(() => setTrendOpen(true), 200); }}
         />
         <TelegramLoginModal isOpen={loginOpen} onClose={() => setLoginOpen(false)} onConnected={handleConnected} />
         <GroupSetupModal isOpen={groupOpen} onClose={() => setGroupOpen(false)} onGroupSet={setWatchGroup} currentGroupId={watchGroup?.id} />
@@ -384,6 +390,11 @@ export default function Dashboard() {
           onClose={() => setConfigOpen(false)}
           onSave={handleSaveConfig}
           initialConfig={betConfig}
+        />
+        <TrendModal
+          isOpen={trendOpen}
+          onClose={() => setTrendOpen(false)}
+          initialItems={allItems}
         />
       </div>
     </div>

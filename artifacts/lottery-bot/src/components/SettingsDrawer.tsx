@@ -27,9 +27,10 @@ interface Props {
   onSetGroup?: () => void;
   onDisconnect?: () => void;
   onOpenConfig?: () => void;
+  onOpenTrend?: () => void;
 }
 
-export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onConnectTg, onSetGroup, onDisconnect, onOpenConfig }: Props) {
+export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onConnectTg, onSetGroup, onDisconnect, onOpenConfig, onOpenTrend }: Props) {
   const [normalPlay, setNormalPlay] = useState(true);
   const [followPlay, setFollowPlay] = useState(true);
 
@@ -104,7 +105,7 @@ export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onCo
                   清除TG缓存
                 </Button>
 
-                <Button variant="secondary" className="w-full bg-[#2d3654] hover:bg-[#3d4664] text-white border-0">
+                <Button variant="secondary" className="w-full bg-[#2d3654] hover:bg-[#3d4664] text-white border-0" onClick={() => { onOpenTrend?.(); }}>
                   开奖走势
                 </Button>
               </div>
