@@ -457,19 +457,23 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
     //   Format A (KKCOIN):  "中奖 +700000 KKCOIN" / "挂逼 -100000 KKCOIN"
     //   Format B (单金额):  "3435823期: 4+1+8=13 小单 单金额 -39200 金额 400000"
 
-    const hasWin  = /中奖|✅/.test(text);
+    // "未中奖" contains "中奖" — use lookbehind so it never triggers hasWin
+    const hasWin  = /(?<!未)中奖|✅/.test(text);
     const hasLoss = /挂逼|未中|未赢|❌/.test(text);
 
     // Format B: detect win/loss from sign of 单金额
-    let danjineWon: boolean | undefined;
+    // When present, the numeric sign is the definitive indicator and overrides keywords
     const danjineMatch = text.match(/单金额\s*([+-]?\d[\d,]*(?:\.\d+)?)/);
-    if (danjineMatch && !hasWin && !hasLoss) {
+    let isWin: boolean;
+    let isLoss: boolean;
+    if (danjineMatch) {
       const val = parseFloat(danjineMatch[1].replace(/,/g, ""));
-      danjineWon = val >= 0;
+      isWin  = val >= 0;
+      isLoss = val < 0;
+    } else {
+      isWin  = hasWin;
+      isLoss = hasLoss && !hasWin;
     }
-
-    const isWin  = hasWin  || danjineWon === true;
-    const isLoss = hasLoss || danjineWon === false;
 
     // Trigger settlement if: from kkpay entity, OR in watch group and looks like a result
     const isKkpayResult =
@@ -619,26 +623,13 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   const targetId = session.watchGroupId;
   if (!targetId) return;
 
-  // Never bet while a previous bet is still awaiting a result
-  if (betLog.some((b) => b.status === "sent")) return;
+  // Never bet while a previous bet is still awaiting a result or risk limits just blocked us
+  const recentBet = betLog[0];
+  if (recentBet?.status === "sent" || recentBet?.status === "paused") return;
 
   const risk = checkRiskLimits(session);
-  if (!risk.ok) {
-    betLog.unshift({
-      id: String(Date.now()),
-      groupId: targetId,
-      groupTitle: session.groups.find((g) => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId,
-      messageText: "[自动投注]",
-      betContent: "",
-      amount: session.currentBet,
-      timestamp: Date.now(),
-      status: "paused",
-      pauseReason: risk.reason,
-    });
-    if (betLog.length > 200) betLog.pop();
-    pushEvent("bet:new", { bet: betLog[0] });
-    return;
-  }
+  // Silently skip — no log entry spam when limits are hit
+  if (!risk.ok) return;
 
   const direction = decideAlgorithmAuto(session);
   if (!direction) return;
@@ -777,8 +768,9 @@ function startWatching(session: TgSession) {
 
     const text = msg.message ?? "";
 
-    // Never bet while a previous bet is still awaiting a result
-    if (betLog.some((b) => b.status === "sent")) return;
+    // Never bet while a previous bet is awaiting a result or risk limits just blocked us
+    const recentMsg = betLog[0];
+    if (recentMsg?.status === "sent" || recentMsg?.status === "paused") return;
 
     // Per-period dedup: only bet once per lottery period
     const triggerPeriod = parsePeriodFromMessage(text);
@@ -805,25 +797,9 @@ function startWatching(session: TgSession) {
       (g) => g.id === targetId || `-100${g.id}` === targetId,
     );
 
-    // Check risk limits before betting
+    // Check risk limits — silently skip, no log spam
     const risk = checkRiskLimits(session);
-    if (!risk.ok) {
-      betLog.unshift({
-        id: String(Date.now()),
-        groupId: targetId,
-        groupTitle: group?.title ?? targetId,
-        messageText: text.slice(0, 80),
-        betContent: plannedContent,
-        amount: plannedAmount,
-        timestamp: Date.now(),
-        status: "paused",
-        pauseReason: risk.reason,
-        period: triggerPeriod,
-      });
-      if (betLog.length > 200) betLog.pop();
-      pushEvent("bet:new", { bet: betLog[0] });
-      return;
-    }
+    if (!risk.ok) return;
 
     // Cancel any pending 30-second auto-bet (signal takes priority)
     if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
