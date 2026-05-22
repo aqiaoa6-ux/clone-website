@@ -27,8 +27,6 @@ type BetType =
   | "small-even";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random";
-type PlayMode = "normal" | "double" | "kill";
-
 interface BetCfg {
   autoBet: boolean;
   betAmount: number;
@@ -44,11 +42,6 @@ interface BetCfg {
   stepBackOnWin: boolean;
   betOptions: BetOption[];
   algorithms: AlgorithmId[];
-  // play mode
-  playMode: PlayMode;
-  doubleGroupA: BetOption;
-  doubleGroupB: BetOption;
-  killOption: BetOption;
 }
 
 interface TgSession {
@@ -142,10 +135,6 @@ const DEFAULT_CFG: BetCfg = {
   stepBackOnWin: true,
   betOptions: ["big", "small"],
   algorithms: ["signal_follow"],
-  playMode: "normal",
-  doubleGroupA: "big-odd",
-  doubleGroupB: "small-even",
-  killOption: "big-odd",
 };
 
 const QUADRANT_OPTIONS: BetOption[] = ["big-odd", "big-even", "small-odd", "small-even"];
@@ -516,7 +505,6 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
             result: rMatch?.[0],
             betId: sentBet.id,
           });
-          queryBalanceInGroup(session, 1000);
         }
       }
     }
@@ -527,31 +515,9 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
 }
 
 function decideAlgorithm(session: TgSession, msgText: string): string | null {
-  const { playMode, betOptions, doubleGroupA, doubleGroupB, killOption, algorithms } = session.cfg;
+  const { betOptions, algorithms } = session.cfg;
 
-  // ── Double mode: always bet the configured pair ──────────────────────────────
-  if (playMode === "double") {
-    // For signal modes, only bet when a signal is present
-    const algoId = algorithms[session.algIndex % algorithms.length];
-    session.algIndex += 1;
-    if (algoId === "signal_follow" || algoId === "signal_reverse") {
-      if (!parseBetFromMessage(msgText)) return null; // no signal → skip
-    }
-    return `${BET_OPTION_LABELS[doubleGroupA]}+${BET_OPTION_LABELS[doubleGroupB]}`;
-  }
-
-  // ── Kill mode: bet all quadrant options except the killed one ────────────────
-  if (playMode === "kill") {
-    const algoId = algorithms[session.algIndex % algorithms.length];
-    session.algIndex += 1;
-    if (algoId === "signal_follow" || algoId === "signal_reverse") {
-      if (!parseBetFromMessage(msgText)) return null;
-    }
-    const active = QUADRANT_OPTIONS.filter((o) => o !== killOption);
-    return active.map((o) => BET_OPTION_LABELS[o]).join("+");
-  }
-
-  // ── Normal mode: algorithm-driven direction selection ────────────────────────
+  // ── Algorithm-driven direction selection ─────────────────────────────────────
   const opts = betOptions;
   const algos = algorithms;
   if (!opts.length || !algos.length) return null;
@@ -766,8 +732,6 @@ function startWatching(session: TgSession) {
           });
           if (betLog.length > 200) betLog.pop();
           pushEvent("bet:new", { bet: betLog[0] });
-          // Send "ye" to the group to get updated balance from kkpay bot
-          queryBalanceInGroup(session, 2000);
         } catch {
           betLog.unshift({
             id: String(Date.now()),
@@ -1109,10 +1073,6 @@ router.post("/tg/config", (req, res) => {
     stepBackOnWin: body.stepBackOnWin ?? prev.stepBackOnWin,
     betOptions: body.betOptions ?? prev.betOptions,
     algorithms: body.algorithms ?? prev.algorithms,
-    playMode: (body.playMode as PlayMode | undefined) ?? prev.playMode,
-    doubleGroupA: (body.doubleGroupA as BetOption | undefined) ?? prev.doubleGroupA,
-    doubleGroupB: (body.doubleGroupB as BetOption | undefined) ?? prev.doubleGroupB,
-    killOption: (body.killOption as BetOption | undefined) ?? prev.killOption,
   };
 
   // Reset level / bet when amounts or level changes
@@ -1144,7 +1104,6 @@ router.post("/tg/bet-result", (req, res) => {
 
   if (won !== undefined) {
     settleBet(tgSession, { won, pnl, result, betId });
-    queryBalanceInGroup(tgSession, 1000);
   }
 
   res.json({

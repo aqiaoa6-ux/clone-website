@@ -294,15 +294,11 @@ export default function Dashboard() {
 
     const body: Record<string, unknown> = { autoBet: next };
     if (next && betSetupConfig.algorithms) {
-      body.algorithms   = betSetupConfig.algorithms;
-      body.betOptions   = betSetupConfig.betOptions ?? ['big', 'small'];
-      body.amountLevels = betSetupConfig.amountLevels;
+      body.algorithms    = betSetupConfig.algorithms;
+      body.betOptions    = betSetupConfig.betOptions ?? ['big', 'small'];
+      body.amountLevels  = betSetupConfig.amountLevels;
       body.stepBackOnWin = betSetupConfig.stepBackOnWin;
-      body.startLevel   = betSetupConfig.startLevel;
-      body.playMode     = betSetupConfig.playMode;
-      body.doubleGroupA = betSetupConfig.doubleGroupA;
-      body.doubleGroupB = betSetupConfig.doubleGroupB;
-      body.killOption   = betSetupConfig.killOption;
+      body.startLevel    = betSetupConfig.startLevel;
     }
     await fetch('/api/tg/config', {
       method: 'POST',
