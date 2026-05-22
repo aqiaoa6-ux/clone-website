@@ -31,7 +31,7 @@
       "small"
     ],
     "algorithms": [
-      "signal_follow"
+      "cold_pick"
     ]
   }
 }

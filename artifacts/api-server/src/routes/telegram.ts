@@ -261,7 +261,8 @@ async function restoreSession(): Promise<void> {
       stringSession,
       phone: data.phone ?? "",
       groups: await fetchGroups(client),
-      cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg } : { ...DEFAULT_CFG },
+      // Always restore autoBet=false so pressing Start always triggers the first bet
+      cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG },
       consecutiveLosses: 0,
       sessionPnl: data.sessionPnl ?? 0,
       currentBet: data.cfg?.betAmount ?? DEFAULT_CFG.betAmount,
