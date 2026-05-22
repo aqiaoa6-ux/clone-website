@@ -296,13 +296,6 @@ export default function BetSetupPanel({ isOpen, onClose, onSave, initialConfig, 
                 )}
               </div>
               <div className="flex items-center gap-2">
-                {/* auto-bet quick toggle */}
-                <button
-                  onClick={() => setCfg(p => ({ ...p, autoBet: !p.autoBet }))}
-                  className={`text-xs px-2.5 py-1 rounded-full font-medium transition-all ${cfg.autoBet ? 'bg-[#00e676]/20 text-[#00e676] border border-[#00e676]/30' : 'bg-white/5 text-muted-foreground border border-white/10'}`}
-                >
-                  {cfg.autoBet ? '● 自动投注' : '○ 自动投注'}
-                </button>
                 <button onClick={onClose} className="text-muted-foreground hover:text-white p-1">
                   <X className="w-4 h-4" />
                 </button>

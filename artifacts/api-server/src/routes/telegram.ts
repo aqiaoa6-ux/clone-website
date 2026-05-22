@@ -81,6 +81,8 @@ interface TgSession {
   kkpayUsername: string;
   kkpayEntityId?: string;
   balanceSource: "manual" | "kkpay";
+  // only accept balance updates within 60 s of our own query / bet
+  lastBalanceQueryAt: number;
   balanceUpdatedAt: number;
   // watchdog timers
   watchdogTimer?: ReturnType<typeof setInterval>;
@@ -289,6 +291,7 @@ async function restoreSession(): Promise<void> {
       kkpayEntityId: undefined,
       balanceSource: data.balanceSource ?? "manual",
       balanceUpdatedAt: 0,
+      lastBalanceQueryAt: 0,
       me,
       watchGroupId: data.watchGroupId,
     };
@@ -376,6 +379,7 @@ function queryBalanceInGroup(session: TgSession, delayMs = 0): void {
   if (!session.watchGroupId) return;
   const fire = async () => {
     try {
+      session.lastBalanceQueryAt = Date.now(); // mark we expect a balance reply
       await session.client.sendMessage(session.watchGroupId!, { message: "ye" });
     } catch { /* ignore */ }
   };
@@ -467,18 +471,24 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
 
     if (!isFromKkpay && !inWatchGroup) return;
 
-    // ── Balance update (any kkpay message in the group) ──────────────────────
+    // ── Balance update — only from our own queries (within 60 s window) ──────
+    // Ignores other group members' kkpay replies so we never show someone
+    // else's balance as our own.
     const bal = parseBalanceFromKkpay(text);
     if (bal !== null) {
-      session.balance = bal;
-      session.balanceSource = "kkpay";
-      session.balanceUpdatedAt = Date.now();
-      pushEvent("balance:update", {
-        balance: session.balance,
-        balanceSource: session.balanceSource,
-        balanceUpdatedAt: session.balanceUpdatedAt,
-      });
-      saveSession();
+      const ownQuery = (Date.now() - session.lastBalanceQueryAt) < 60_000;
+      if (ownQuery) {
+        session.balance = bal;
+        session.balanceSource = "kkpay";
+        session.balanceUpdatedAt = Date.now();
+        session.lastBalanceQueryAt = 0; // reset so next reply needs a fresh query
+        pushEvent("balance:update", {
+          balance: session.balance,
+          balanceSource: session.balanceSource,
+          balanceUpdatedAt: session.balanceUpdatedAt,
+        });
+        saveSession();
+      }
     }
 
     // ── Win / loss auto-settle (only from kkpay bot's own messages) ──────────
@@ -829,6 +839,7 @@ router.post("/tg/send-code", async (req, res) => {
       kkpayEntityId: undefined,
       balanceSource: "manual",
       balanceUpdatedAt: 0,
+      lastBalanceQueryAt: 0,
     };
 
     req.log.info({ phone }, "TG code sent");

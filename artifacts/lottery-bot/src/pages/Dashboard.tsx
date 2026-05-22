@@ -281,14 +281,35 @@ export default function Dashboard() {
   async function handleToggleRun() {
     const next = !isRunning;
     setIsRunning(next);
-    if (tgMe) {
-      await fetch('/api/tg/config', {
+    if (!tgMe) return;
+
+    // When starting: ensure the watch group is set and push full betSetupConfig
+    if (next && betSetupConfig.groupId) {
+      await fetch('/api/tg/set-group', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...betConfig, autoBet: next }),
+        body: JSON.stringify({ groupId: betSetupConfig.groupId }),
       }).catch(() => {});
-      setBetConfig(prev => ({ ...prev, autoBet: next }));
     }
+
+    const body: Record<string, unknown> = { autoBet: next };
+    if (next && betSetupConfig.algorithms) {
+      body.algorithms   = betSetupConfig.algorithms;
+      body.betOptions   = betSetupConfig.betOptions ?? ['big', 'small'];
+      body.amountLevels = betSetupConfig.amountLevels;
+      body.stepBackOnWin = betSetupConfig.stepBackOnWin;
+      body.startLevel   = betSetupConfig.startLevel;
+      body.playMode     = betSetupConfig.playMode;
+      body.doubleGroupA = betSetupConfig.doubleGroupA;
+      body.doubleGroupB = betSetupConfig.doubleGroupB;
+      body.killOption   = betSetupConfig.killOption;
+    }
+    await fetch('/api/tg/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+    setBetConfig(prev => ({ ...prev, autoBet: next }));
   }
 
   function handleSaveConfig(cfg: BetConfig) {
@@ -328,22 +349,11 @@ export default function Dashboard() {
             </Button>
             <Button
               size="sm"
-              className={`${isRunning ? 'bg-orange-500 hover:bg-orange-600' : 'bg-[#00e676] hover:bg-green-500'} text-black font-semibold h-8 text-xs px-3`}
+              className={`${isRunning ? 'bg-[#f44336] hover:bg-red-600 text-white' : 'bg-[#00e676] hover:bg-green-500 text-black'} font-semibold h-8 text-xs px-3`}
               onClick={handleToggleRun}
               data-testid="button-start"
             >
-              {isRunning ? '运行中' : '启动'}
-            </Button>
-            <Button size="sm" className="bg-[#f44336] hover:bg-red-600 text-white h-8 text-xs px-3" onClick={async () => {
-              if (isRunning) {
-                setIsRunning(false);
-                if (tgMe) {
-                  await fetch('/api/tg/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...betConfig, autoBet: false }) }).catch(() => {});
-                  setBetConfig(prev => ({ ...prev, autoBet: false }));
-                }
-              }
-            }} data-testid="button-stop">
-              停止
+              {isRunning ? '暂停' : '启动'}
             </Button>
             <Button
               size="sm"
