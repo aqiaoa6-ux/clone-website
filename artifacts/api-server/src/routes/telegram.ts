@@ -594,6 +594,9 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   const targetId = session.watchGroupId;
   if (!targetId) return;
 
+  // Never bet while a previous bet is still awaiting a result
+  if (betLog.some((b) => b.status === "sent")) return;
+
   const risk = checkRiskLimits(session);
   if (!risk.ok) {
     betLog.unshift({
@@ -748,6 +751,9 @@ function startWatching(session: TgSession) {
     if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
 
     const text = msg.message ?? "";
+
+    // Never bet while a previous bet is still awaiting a result
+    if (betLog.some((b) => b.status === "sent")) return;
 
     // Per-period dedup: only bet once per lottery period
     const triggerPeriod = parsePeriodFromMessage(text);
