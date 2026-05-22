@@ -264,7 +264,8 @@ async function restoreSession(): Promise<void> {
       // Always restore autoBet=false so pressing Start always triggers the first bet
       cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG },
       consecutiveLosses: 0,
-      sessionPnl: data.sessionPnl ?? 0,
+      // Reset sessionPnl each restart so old stop-loss/take-profit never silently blocks new bets
+      sessionPnl: 0,
       currentBet: data.cfg?.betAmount ?? DEFAULT_CFG.betAmount,
       lastBetAt: 0,
       currentLevel: 0,
@@ -1065,6 +1066,10 @@ router.get("/tg/status", (req, res) => {
       phone: me.phone,
     },
     watchGroupId: tgSession.watchGroupId,
+    watchGroupTitle: (() => {
+      const wgid = tgSession!.watchGroupId;
+      return tgSession!.groups.find((g) => g.id === wgid || `-100${g.id}` === wgid)?.title;
+    })(),
     ...tgSession.cfg,
     consecutiveLosses: tgSession.consecutiveLosses,
     sessionPnl: tgSession.sessionPnl,
@@ -1079,6 +1084,8 @@ router.get("/tg/status", (req, res) => {
     balanceUpdatedAt: tgSession.balanceUpdatedAt,
     kkpayUsername: tgSession.kkpayUsername,
     kkpayEntityId: tgSession.kkpayEntityId,
+    riskBlocked: !checkRiskLimits(tgSession).ok,
+    riskReason: checkRiskLimits(tgSession).reason,
   });
 });
 

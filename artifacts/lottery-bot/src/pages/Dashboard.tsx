@@ -95,6 +95,7 @@ export default function Dashboard() {
   const [showKkpayInput, setShowKkpayInput] = useState(false);
   const [kkpayInput, setKkpayInput] = useState('');
   const [sseConnected, setSseConnected] = useState(true);
+  const [riskBlockReason, setRiskBlockReason] = useState<string | null>(null);
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -148,7 +149,7 @@ export default function Dashboard() {
       }
       if (statusRes.ok) {
         const sd = await statusRes.json() as {
-          connected?: boolean; me?: MeInfo; watchGroupId?: string;
+          connected?: boolean; me?: MeInfo; watchGroupId?: string; watchGroupTitle?: string;
           autoBet?: boolean; betAmount?: number; strategy?: BetConfig['strategy'];
           betMultiplier?: number; maxConsecutiveLosses?: number; stopLoss?: number;
           targetProfit?: number; cooldownSeconds?: number; betType?: BetConfig['betType'];
@@ -156,8 +157,17 @@ export default function Dashboard() {
           totalBets?: number; wins?: number; maxStreak?: number; winRate?: string;
           balanceSource?: 'manual' | 'kkpay'; balanceUpdatedAt?: number;
           kkpayUsername?: string; kkpayEntityId?: string;
+          riskBlocked?: boolean; riskReason?: string;
+          algorithms?: string[]; betOptions?: string[]; amountLevels?: number[];
+          stepBackOnWin?: boolean;
         };
         if (sd.connected && sd.me) setTgMe(sd.me);
+        // Restore the watch group so user doesn't need to re-enter it after reconnect
+        if (sd.watchGroupId) {
+          const title = sd.watchGroupTitle ?? sd.watchGroupId;
+          setWatchGroup({ id: sd.watchGroupId, title, type: 'group' });
+          setBetSetupConfig(prev => ({ ...prev, groupId: sd.watchGroupId, groupTitle: title }));
+        }
         setBetConfig({
           autoBet: sd.autoBet ?? false,
           betAmount: sd.betAmount ?? 100,
@@ -169,6 +179,7 @@ export default function Dashboard() {
           cooldownSeconds: sd.cooldownSeconds ?? 0,
           betType: sd.betType ?? 'follow',
         });
+        setRiskBlockReason(sd.riskBlocked && sd.riskReason ? sd.riskReason : null);
         if (sd.autoBet) setIsRunning(true);
         if (sd.balance !== undefined) setBalance(sd.balance);
         if (sd.todayPnl !== undefined) setTodayPnl(sd.todayPnl);
@@ -283,12 +294,15 @@ export default function Dashboard() {
     setIsRunning(next);
     if (!tgMe) return;
 
-    // When starting: ensure the watch group is set and push full betSetupConfig
-    if (next && betSetupConfig.groupId) {
+    if (next) setRiskBlockReason(null);
+
+    // When starting: ensure the watch group is set — use betSetupConfig or fall back to watchGroup
+    const groupIdToSet = betSetupConfig.groupId ?? watchGroup?.id;
+    if (next && groupIdToSet) {
       await fetch('/api/tg/set-group', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId: betSetupConfig.groupId }),
+        body: JSON.stringify({ groupId: groupIdToSet }),
       }).catch(() => {});
     }
 
@@ -367,6 +381,14 @@ export default function Dashboard() {
             <Moon className="w-5 h-5" />
           </Button>
         </div>
+
+        {/* Risk blocked warning */}
+        {riskBlockReason && (
+          <div className="flex items-center justify-between px-3 py-1.5 bg-red-900/30 border-b border-red-700/40">
+            <span className="text-xs text-red-400 flex-1">⚠️ 风控暂停：{riskBlockReason}</span>
+            <button onClick={() => setRiskBlockReason(null)} className="text-xs text-red-400/60 hover:text-red-300 ml-2">✕</button>
+          </div>
+        )}
 
         {/* TG Connected bar */}
         {tgMe && (
