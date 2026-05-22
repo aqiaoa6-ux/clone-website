@@ -3,6 +3,8 @@ import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { Api } from "telegram";
 import { NewMessage, NewMessageEvent } from "telegram/events/index.js";
+import fs from "fs";
+import path from "path";
 
 const router = Router();
 
@@ -76,6 +78,25 @@ interface TgSession {
   kkpayEntityId?: string;
   balanceSource: "manual" | "kkpay";
   balanceUpdatedAt: number;
+  // watchdog timers
+  watchdogTimer?: ReturnType<typeof setInterval>;
+  saveTimer?: ReturnType<typeof setInterval>;
+}
+
+// ─── Session persistence ──────────────────────────────────────────────────────
+const SESSION_FILE = path.join(process.cwd(), ".tg-session.json");
+
+interface PersistedData {
+  sessionString: string;
+  phone: string;
+  balance: number;
+  todayPnl: number;
+  todayResetAt: number;
+  sessionPnl: number;
+  kkpayUsername: string;
+  balanceSource: "manual" | "kkpay";
+  watchGroupId?: string;
+  cfg?: Partial<BetCfg>;
 }
 
 interface GroupInfo {
@@ -150,6 +171,128 @@ let tgSession: TgSession | null = null;
 const betLog: BetRecord[] = [];
 let messageHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
 let kkpayHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
+
+// ─── TG client options (shared) ───────────────────────────────────────────────
+function makeClientOptions() {
+  return {
+    connectionRetries: 1000,
+    autoReconnect: true,
+    retryDelay: 2000,
+    floodSleepThreshold: 60,
+    deviceModel: "iPhone 14",
+    systemVersion: "iOS 17.0",
+    appVersion: "9.7.0",
+  };
+}
+
+// ─── Session save / restore ───────────────────────────────────────────────────
+function saveSession(): void {
+  if (!tgSession) return;
+  try {
+    const data: PersistedData = {
+      sessionString: tgSession.stringSession.save(),
+      phone: tgSession.phone,
+      balance: tgSession.balance,
+      todayPnl: tgSession.todayPnl,
+      todayResetAt: tgSession.todayResetAt,
+      sessionPnl: tgSession.sessionPnl,
+      kkpayUsername: tgSession.kkpayUsername,
+      balanceSource: tgSession.balanceSource,
+      watchGroupId: tgSession.watchGroupId,
+      cfg: tgSession.cfg,
+    };
+    fs.writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2), "utf-8");
+  } catch { /* ignore */ }
+}
+
+function stopWatchdog(session: TgSession): void {
+  if (session.watchdogTimer) { clearInterval(session.watchdogTimer); session.watchdogTimer = undefined; }
+  if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
+}
+
+function startConnectionWatchdog(session: TgSession): void {
+  stopWatchdog(session);
+
+  // Periodic session save — every 5 min to capture refreshed auth tokens
+  session.saveTimer = setInterval(() => {
+    if (tgSession !== session) { clearInterval(session.saveTimer); return; }
+    saveSession();
+  }, 5 * 60 * 1000);
+
+  // Connection health check — every 30 s
+  session.watchdogTimer = setInterval(() => {
+    if (tgSession !== session) { clearInterval(session.watchdogTimer); return; }
+    if (session.client.connected) return;
+    void (async () => {
+      try {
+        await session.client.connect();
+        // Re-attach handlers after reconnect
+        if (messageHandler) {
+          try { session.client.removeEventHandler(messageHandler, new NewMessage({})); } catch { /* ok */ }
+          session.client.addEventHandler(messageHandler, new NewMessage({}));
+        }
+        if (kkpayHandler) {
+          try { session.client.removeEventHandler(kkpayHandler, new NewMessage({})); } catch { /* ok */ }
+          session.client.addEventHandler(kkpayHandler, new NewMessage({}));
+        }
+        saveSession();
+        pushEvent("session:reconnected", { at: Date.now() });
+      } catch { /* will retry next cycle */ }
+    })();
+  }, 30 * 1000);
+}
+
+async function restoreSession(): Promise<void> {
+  try {
+    if (!fs.existsSync(SESSION_FILE)) return;
+    const raw = fs.readFileSync(SESSION_FILE, "utf-8");
+    const data = JSON.parse(raw) as PersistedData;
+    if (!data.sessionString) return;
+
+    const { apiId, apiHash } = getCredentials();
+    if (!apiId || !apiHash) return;
+
+    const stringSession = new StringSession(data.sessionString);
+    const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
+    await client.connect();
+
+    const me = (await client.getMe()) as Api.User;
+    if (!me?.id) return;
+
+    tgSession = {
+      client,
+      stringSession,
+      phone: data.phone ?? "",
+      groups: await fetchGroups(client),
+      cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg } : { ...DEFAULT_CFG },
+      consecutiveLosses: 0,
+      sessionPnl: data.sessionPnl ?? 0,
+      currentBet: data.cfg?.betAmount ?? DEFAULT_CFG.betAmount,
+      lastBetAt: 0,
+      currentLevel: 0,
+      algIndex: 0,
+      recentResults: [],
+      balance: data.balance ?? 1000000,
+      todayPnl: data.todayPnl ?? 0,
+      todayResetAt: data.todayResetAt ?? todayMidnight(),
+      kkpayUsername: data.kkpayUsername ?? "kkpay",
+      kkpayEntityId: undefined,
+      balanceSource: data.balanceSource ?? "manual",
+      balanceUpdatedAt: 0,
+      me,
+      watchGroupId: data.watchGroupId,
+    };
+
+    startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
+    startConnectionWatchdog(tgSession);
+  } catch {
+    // Session expired — remove stale file so user can login fresh
+    try { fs.unlinkSync(SESSION_FILE); } catch { /* ok */ }
+  }
+}
+
+// Auto-restore saved session on server startup
+void restoreSession();
 
 // ─── SSE client registry ──────────────────────────────────────────────────────
 const sseClients = new Set<Response>();
@@ -533,12 +676,7 @@ router.post("/tg/send-code", async (req, res) => {
     }
 
     const stringSession = new StringSession("");
-    const client = new TelegramClient(stringSession, apiId, apiHash, {
-      connectionRetries: 3,
-      deviceModel: "iPhone 14",
-      systemVersion: "iOS 17.0",
-      appVersion: "9.7.0",
-    });
+    const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
 
     await client.connect();
     const result = await client.sendCode({ apiId, apiHash }, phone);
@@ -608,6 +746,8 @@ router.post("/tg/verify-code", async (req, res) => {
     tgSession.me = me;
     tgSession.groups = await fetchGroups(tgSession.client);
     startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
+    saveSession();
+    startConnectionWatchdog(tgSession);
 
     req.log.info({ username: me.username }, "TG sign-in success");
     res.json({
@@ -671,6 +811,8 @@ router.post("/tg/verify-password", async (req, res) => {
     tgSession.me = me;
     tgSession.groups = await fetchGroups(tgSession.client);
     startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
+    saveSession();
+    startConnectionWatchdog(tgSession);
 
     req.log.info({ username: me.username }, "TG 2FA success");
     res.json({
@@ -1032,16 +1174,15 @@ router.get("/tg/events", (req, res) => {
 
 // ─── Disconnect ───────────────────────────────────────────────────────────────
 router.post("/tg/disconnect", async (_req, res) => {
-  if (tgSession?.client) {
-    try {
-      await tgSession.client.invoke(new Api.auth.LogOut());
-    } catch { /* ok */ }
-    try {
-      await tgSession.client.disconnect();
-    } catch { /* ok */ }
+  if (tgSession) {
+    stopWatchdog(tgSession);
+    try { await tgSession.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
+    try { await tgSession.client.disconnect(); } catch { /* ok */ }
   }
   tgSession = null;
   messageHandler = null;
+  kkpayHandler = null;
+  try { fs.unlinkSync(SESSION_FILE); } catch { /* ok */ }
   res.json({ ok: true });
 });
 

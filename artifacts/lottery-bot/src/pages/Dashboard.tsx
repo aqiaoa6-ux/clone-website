@@ -96,6 +96,7 @@ export default function Dashboard() {
   const [kkpayUsername, setKkpayUsername] = useState('kkpay');
   const [showKkpayInput, setShowKkpayInput] = useState(false);
   const [kkpayInput, setKkpayInput] = useState('');
+  const [sseConnected, setSseConnected] = useState(true);
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -190,9 +191,15 @@ export default function Dashboard() {
     fetchBetsAndStats();
     const poll = setInterval(fetchBetsAndStats, 5000);
 
-    // SSE real-time updates
-    const es = new EventSource('/api/tg/events');
-    es.onmessage = (e: MessageEvent<string>) => {
+    // SSE real-time updates with auto-reconnect
+    let es: EventSource | null = null;
+    let retryMs = 1000;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let destroyed = false;
+
+    const handleMessage = (e: MessageEvent<string>) => {
+      setSseConnected(true);
+      retryMs = 1000;
       try {
         const ev = JSON.parse(e.data) as {
           type: string;
@@ -227,13 +234,36 @@ export default function Dashboard() {
           if (ev.balance !== undefined) setBalance(ev.balance);
           if (ev.balanceSource) setBalanceSource(ev.balanceSource);
           if (ev.balanceUpdatedAt !== undefined) setBalanceUpdatedAt(ev.balanceUpdatedAt);
+        } else if (ev.type === 'session:reconnected') {
+          fetchBetsAndStats();
         }
       } catch { /* ignore */ }
     };
 
+    const connect = () => {
+      if (destroyed) return;
+      es = new EventSource('/api/tg/events');
+      es.onmessage = handleMessage;
+      es.onerror = () => {
+        setSseConnected(false);
+        es?.close();
+        es = null;
+        if (!destroyed) {
+          retryTimer = setTimeout(() => {
+            retryMs = Math.min(retryMs * 2, 30000);
+            connect();
+          }, retryMs);
+        }
+      };
+      es.onopen = () => { setSseConnected(true); retryMs = 1000; };
+    };
+    connect();
+
     return () => {
+      destroyed = true;
       clearInterval(poll);
-      es.close();
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
     };
   }, [fetchBetsAndStats]);
 
@@ -284,6 +314,12 @@ export default function Dashboard() {
           </Button>
 
           <div className="flex items-center gap-1.5">
+            {!sseConnected && (
+              <span className="flex items-center gap-1 text-[10px] text-yellow-400 animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block" />
+                重连中
+              </span>
+            )}
             <Button
               size="sm"
               onClick={() => tgMe ? setGroupOpen(true) : setLoginOpen(true)}
