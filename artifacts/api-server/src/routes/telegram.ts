@@ -623,9 +623,8 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   const targetId = session.watchGroupId;
   if (!targetId) return;
 
-  // Never bet while a previous bet is still awaiting a result or risk limits just blocked us
-  const recentBet = betLog[0];
-  if (recentBet?.status === "sent" || recentBet?.status === "paused") return;
+  // Never bet while a previous bet is still awaiting a result
+  if (betLog.some((b) => b.status === "sent")) return;
 
   const risk = checkRiskLimits(session);
   // Silently skip — no log entry spam when limits are hit
@@ -768,9 +767,8 @@ function startWatching(session: TgSession) {
 
     const text = msg.message ?? "";
 
-    // Never bet while a previous bet is awaiting a result or risk limits just blocked us
-    const recentMsg = betLog[0];
-    if (recentMsg?.status === "sent" || recentMsg?.status === "paused") return;
+    // Never bet while a previous bet is still awaiting a result
+    if (betLog.some((b) => b.status === "sent")) return;
 
     // Per-period dedup: only bet once per lottery period
     const triggerPeriod = parsePeriodFromMessage(text);
