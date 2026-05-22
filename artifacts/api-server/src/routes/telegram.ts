@@ -1172,7 +1172,15 @@ router.post("/tg/config", (req, res) => {
 
   if (tgSession.watchGroupId) startWatching(tgSession);
 
-  // When autoBet is turned ON, immediately fire first bet (no signal needed)
+  // When autoBet is turned OFF — cancel any pending auto-bet timer immediately
+  if (body.autoBet === false && prev.autoBet) {
+    if (tgSession.autoNextBetTimer) {
+      clearTimeout(tgSession.autoNextBetTimer);
+      tgSession.autoNextBetTimer = undefined;
+    }
+  }
+
+  // When autoBet is turned ON — immediately fire first bet (no signal needed)
   const wasOff = !prev.autoBet;
   if (body.autoBet === true && wasOff && tgSession.watchGroupId) {
     void autoPlaceBet(tgSession);
