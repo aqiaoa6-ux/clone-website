@@ -68,6 +68,8 @@ interface TgSession {
   todayResetAt: number;
   // per-period dedup
   lastBetPeriod?: number;
+  // one-bet-per-cycle lock: true after any bet is placed, false only when the 50s timer fires
+  betPlacedThisCycle: boolean;
   // kkpay integration
   kkpayUsername: string;
   kkpayEntityId?: string;
@@ -270,6 +272,7 @@ async function restoreSession(): Promise<void> {
       lastBetAt: 0,
       currentLevel: 0,
       algIndex: 0,
+      betPlacedThisCycle: false,
       recentResults: [],
       balance: data.balance ?? 1000000,
       todayPnl: data.todayPnl ?? 0,
@@ -628,6 +631,9 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   // Never bet while a previous bet is still awaiting a result
   if (betLog.some((b) => b.status === "sent")) return;
 
+  // One bet per cycle — only clear by the 50s timer
+  if (session.betPlacedThisCycle) return;
+
   const risk = checkRiskLimits(session);
   // Silently skip — no log entry spam when limits are hit
   if (!risk.ok) return;
@@ -641,6 +647,7 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   try {
     await session.client.sendMessage(targetId, { message: `${direction}${amount}` });
     session.lastBetAt = Date.now();
+    session.betPlacedThisCycle = true;
     betLog.unshift({
       id: String(Date.now()),
       groupId: targetId,
@@ -675,6 +682,8 @@ function scheduleAutoNextBet(session: TgSession): void {
   if (!session.cfg.autoBet || !session.watchGroupId) return;
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
+    // Open the next cycle — exactly ONE bet is now allowed
+    session.betPlacedThisCycle = false;
     void autoPlaceBet(session);
   }, 50 * 1000);
 }
@@ -772,6 +781,9 @@ function startWatching(session: TgSession) {
     // Never bet while a previous bet is still awaiting a result
     if (betLog.some((b) => b.status === "sent")) return;
 
+    // One bet per cycle — guard against multiple signal messages per period
+    if (session.betPlacedThisCycle) return;
+
     // Per-period dedup: only bet once per lottery period
     const triggerPeriod = parsePeriodFromMessage(text);
     if (triggerPeriod && triggerPeriod === session.lastBetPeriod) return;
@@ -812,6 +824,7 @@ function startWatching(session: TgSession) {
           message: `${plannedContent}${plannedAmount}`,
         });
         session.lastBetAt = Date.now();
+        session.betPlacedThisCycle = true;
         if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
         betLog.unshift({
           id: String(Date.now()),
@@ -888,6 +901,7 @@ router.post("/tg/send-code", async (req, res) => {
       lastBetAt: 0,
       currentLevel: 0,
       algIndex: 0,
+      betPlacedThisCycle: false,
       recentResults: [],
       balance: 1000000,
       todayPnl: 0,
@@ -1187,9 +1201,10 @@ router.post("/tg/config", (req, res) => {
     }
   }
 
-  // When autoBet is turned ON — immediately fire first bet (no signal needed)
+  // When autoBet is turned ON — reset cycle lock and immediately fire first bet
   const wasOff = !prev.autoBet;
   if (body.autoBet === true && wasOff && tgSession.watchGroupId) {
+    tgSession.betPlacedThisCycle = false;
     void autoPlaceBet(tgSession);
   }
 
