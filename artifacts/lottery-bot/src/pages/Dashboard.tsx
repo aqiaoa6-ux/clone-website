@@ -7,6 +7,7 @@ import GroupSetupModal from '@/components/GroupSetupModal';
 import BetConfigModal, { type BetConfig } from '@/components/BetConfigModal';
 import TrendModal from '@/components/TrendModal';
 import type { LotteryTerm as TrendTerm } from '@/components/TrendModal';
+import BetSetupPanel, { type BetSetupConfig } from '@/components/BetSetupPanel';
 
 interface LotteryTerm {
   term: number;
@@ -70,6 +71,8 @@ export default function Dashboard() {
   const [watchGroup, setWatchGroup] = useState<GroupInfo | null>(null);
   const [betConfig, setBetConfig] = useState<Partial<BetConfig>>({ betAmount: 100, autoBet: false, strategy: 'normal' });
   const [trendOpen, setTrendOpen] = useState(false);
+  const [betSetupOpen, setBetSetupOpen] = useState(false);
+  const [betSetupConfig, setBetSetupConfig] = useState<Partial<BetSetupConfig>>({});
   const [allItems, setAllItems] = useState<TrendTerm[]>([]);
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -382,6 +385,7 @@ export default function Dashboard() {
           onDisconnect={handleDisconnect}
           onOpenConfig={() => { setDrawerOpen(false); setTimeout(() => setConfigOpen(true), 200); }}
           onOpenTrend={() => { setDrawerOpen(false); setTimeout(() => setTrendOpen(true), 200); }}
+          onOpenBetSetup={() => { setDrawerOpen(false); setTimeout(() => setBetSetupOpen(true), 200); }}
         />
         <TelegramLoginModal isOpen={loginOpen} onClose={() => setLoginOpen(false)} onConnected={handleConnected} />
         <GroupSetupModal isOpen={groupOpen} onClose={() => setGroupOpen(false)} onGroupSet={setWatchGroup} currentGroupId={watchGroup?.id} />
@@ -395,6 +399,19 @@ export default function Dashboard() {
           isOpen={trendOpen}
           onClose={() => setTrendOpen(false)}
           initialItems={allItems}
+        />
+        <BetSetupPanel
+          isOpen={betSetupOpen}
+          onClose={() => setBetSetupOpen(false)}
+          onSave={(cfg) => {
+            setBetSetupConfig(cfg);
+            if (cfg.groupId && cfg.groupTitle) {
+              setWatchGroup({ id: cfg.groupId, title: cfg.groupTitle, type: 'group' });
+            }
+          }}
+          initialConfig={betSetupConfig}
+          tgConnected={!!tgMe}
+          currentGroupId={watchGroup?.id}
         />
       </div>
     </div>

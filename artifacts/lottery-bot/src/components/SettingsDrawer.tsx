@@ -28,9 +28,10 @@ interface Props {
   onDisconnect?: () => void;
   onOpenConfig?: () => void;
   onOpenTrend?: () => void;
+  onOpenBetSetup?: () => void;
 }
 
-export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onConnectTg, onSetGroup, onDisconnect, onOpenConfig, onOpenTrend }: Props) {
+export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onConnectTg, onSetGroup, onDisconnect, onOpenConfig, onOpenTrend, onOpenBetSetup }: Props) {
   const [normalPlay, setNormalPlay] = useState(true);
   const [followPlay, setFollowPlay] = useState(true);
 
@@ -83,8 +84,12 @@ export default function SettingsDrawer({ isOpen, onClose, tgMe, watchGroup, onCo
               <div className="text-xs text-muted-foreground mb-4">策略配置</div>
 
               <div className="space-y-3">
-                <Button className="w-full bg-[#3b5de7] hover:bg-blue-600 text-white border-0" onClick={() => { onOpenConfig?.(); }}>
-                  投注配置
+                <Button className="w-full bg-gradient-to-r from-[#3b5de7] to-[#7c3aed] hover:opacity-90 text-white border-0 font-semibold" onClick={() => { onOpenBetSetup?.(); }}>
+                  ⚡ 智能投注设置
+                </Button>
+
+                <Button className="w-full bg-[#1e2538] hover:bg-[#2d3654] text-white border border-white/10" onClick={() => { onOpenConfig?.(); }}>
+                  高级投注配置
                 </Button>
 
                 <div className="flex items-center justify-between py-2 px-1">

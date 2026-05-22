@@ -23,6 +23,8 @@ type BetType =
   | "big-even"
   | "small-odd"
   | "small-even";
+type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
+type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random";
 
 interface BetCfg {
   autoBet: boolean;
@@ -34,6 +36,11 @@ interface BetCfg {
   targetProfit: number;
   cooldownSeconds: number;
   betType: BetType;
+  // advanced
+  amountLevels: number[];
+  stepBackOnWin: boolean;
+  betOptions: BetOption[];
+  algorithms: AlgorithmId[];
 }
 
 interface TgSession {
@@ -50,6 +57,10 @@ interface TgSession {
   sessionPnl: number;
   currentBet: number;
   lastBetAt: number;
+  // advanced state
+  currentLevel: number;
+  algIndex: number;
+  recentResults: string[];
 }
 
 interface GroupInfo {
@@ -81,6 +92,10 @@ const DEFAULT_CFG: BetCfg = {
   targetProfit: 3000,
   cooldownSeconds: 0,
   betType: "follow",
+  amountLevels: [100, 200, 300, 500, 1000],
+  stepBackOnWin: true,
+  betOptions: ["big", "small"],
+  algorithms: ["signal_follow"],
 };
 
 const BET_TYPE_TEXT: Record<BetType, string> = {
@@ -129,16 +144,81 @@ function parseBetFromMessage(text: string): string | null {
   return null;
 }
 
+const BET_OPTION_LABELS: Record<BetOption, string> = {
+  big: "大", small: "小", odd: "单", even: "双",
+  "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
+};
+
+function decideAlgorithm(session: TgSession, msgText: string): string | null {
+  const opts = session.cfg.betOptions;
+  const algos = session.cfg.algorithms;
+  if (!opts.length || !algos.length) return null;
+
+  const enabledLabels = opts.map((o) => BET_OPTION_LABELS[o]);
+  const algoId = algos[session.algIndex % algos.length];
+  session.algIndex += 1;
+
+  if (algoId === "signal_follow") {
+    const parsed = parseBetFromMessage(msgText);
+    if (!parsed) return null;
+    return enabledLabels.includes(parsed) ? parsed : (enabledLabels[0] ?? null);
+  }
+
+  if (algoId === "signal_reverse") {
+    const parsed = parseBetFromMessage(msgText);
+    if (!parsed) return null;
+    const opposite: Record<string, string> = {
+      大: "小", 小: "大", 单: "双", 双: "单",
+      大单: "小双", 大双: "小单", 小单: "大双", 小双: "大单",
+    };
+    const rev = opposite[parsed];
+    if (rev && enabledLabels.includes(rev)) return rev;
+    return enabledLabels[0] ?? null;
+  }
+
+  if (algoId === "streak_follow") {
+    const recent = session.recentResults.slice(-10);
+    if (!recent.length) return enabledLabels[0] ?? null;
+    const freq: Record<string, number> = {};
+    for (const r of recent) freq[r] = (freq[r] ?? 0) + 1;
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+    return sorted.find(([k]) => enabledLabels.includes(k))?.[0] ?? enabledLabels[0] ?? null;
+  }
+
+  if (algoId === "cold_pick") {
+    const recent = session.recentResults.slice(-10);
+    const freq: Record<string, number> = {};
+    for (const lbl of enabledLabels) freq[lbl] = 0;
+    for (const r of recent) if (freq[r] !== undefined) freq[r]++;
+    const sorted = Object.entries(freq).sort((a, b) => a[1] - b[1]);
+    return sorted[0]?.[0] ?? enabledLabels[0] ?? null;
+  }
+
+  // random
+  return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
+}
+
 function computeNextBet(session: TgSession, won: boolean): number {
-  const { strategy, betAmount, betMultiplier } = session.cfg;
+  const { amountLevels, stepBackOnWin, betAmount, strategy, betMultiplier } = session.cfg;
+
+  // Advanced: amountLevels-based progression
+  if (amountLevels.length > 1) {
+    let level = session.currentLevel;
+    if (won) {
+      if (stepBackOnWin) level = Math.max(0, level - 1);
+    } else {
+      level = Math.min(amountLevels.length - 1, level + 1);
+    }
+    session.currentLevel = level;
+    return amountLevels[level]!;
+  }
+
+  // Fallback legacy strategy
   if (strategy === "normal") return betAmount;
   if (strategy === "martingale") {
     return won ? betAmount : Math.round(session.currentBet * betMultiplier);
   }
-  // anti-martingale: multiply on win, reset on loss
-  return won
-    ? Math.round(session.currentBet * betMultiplier)
-    : betAmount;
+  return won ? Math.round(session.currentBet * betMultiplier) : betAmount;
 }
 
 /** Returns { ok, reason } — if !ok, do not send bet */
@@ -199,9 +279,13 @@ function startWatching(session: TgSession) {
 
     const text = msg.message ?? "";
 
-    // Determine what to bet
+    // Determine what to bet via algorithm or legacy betType
     let betContent: string;
-    if (session.cfg.betType === "follow") {
+    if (session.cfg.algorithms.length > 0 && session.cfg.betOptions.length > 0) {
+      const decided = decideAlgorithm(session, text);
+      if (!decided) return;
+      betContent = decided;
+    } else if (session.cfg.betType === "follow") {
       const parsed = parseBetFromMessage(text);
       if (!parsed) return;
       betContent = parsed;
@@ -315,6 +399,9 @@ router.post("/tg/send-code", async (req, res) => {
       sessionPnl: 0,
       currentBet: DEFAULT_CFG.betAmount,
       lastBetAt: 0,
+      currentLevel: 0,
+      algIndex: 0,
+      recentResults: [],
     };
 
     req.log.info({ phone }, "TG code sent");
@@ -482,39 +569,43 @@ router.get("/tg/config", (_req, res) => {
 });
 
 router.post("/tg/config", (req, res) => {
-  const body = req.body as Partial<BetCfg>;
+  const body = req.body as Partial<BetCfg> & { startLevel?: number };
 
   if (!tgSession) {
-    // No session yet — just acknowledge (config will apply when session is created)
     res.json({ ok: true, note: "no active session" });
     return;
   }
 
-  // Merge in new config fields
   const prev = tgSession.cfg;
   tgSession.cfg = {
     autoBet: body.autoBet ?? prev.autoBet,
     betAmount: body.betAmount ?? prev.betAmount,
     strategy: body.strategy ?? prev.strategy,
     betMultiplier: body.betMultiplier ?? prev.betMultiplier,
-    maxConsecutiveLosses:
-      body.maxConsecutiveLosses ?? prev.maxConsecutiveLosses,
+    maxConsecutiveLosses: body.maxConsecutiveLosses ?? prev.maxConsecutiveLosses,
     stopLoss: body.stopLoss ?? prev.stopLoss,
     targetProfit: body.targetProfit ?? prev.targetProfit,
     cooldownSeconds: body.cooldownSeconds ?? prev.cooldownSeconds,
     betType: body.betType ?? prev.betType,
+    amountLevels: body.amountLevels ?? prev.amountLevels,
+    stepBackOnWin: body.stepBackOnWin ?? prev.stepBackOnWin,
+    betOptions: body.betOptions ?? prev.betOptions,
+    algorithms: body.algorithms ?? prev.algorithms,
   };
 
-  // Reset current bet if base amount changed or strategy changed
-  if (
-    body.betAmount !== undefined ||
-    body.strategy !== undefined
-  ) {
-    tgSession.currentBet = tgSession.cfg.betAmount;
+  // Reset level / bet when amounts or level changes
+  if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
+    const startLvl = body.startLevel ?? 0;
+    tgSession.currentLevel = Math.min(startLvl, tgSession.cfg.amountLevels.length - 1);
+    tgSession.currentBet = tgSession.cfg.amountLevels[tgSession.currentLevel] ?? tgSession.cfg.betAmount;
     tgSession.consecutiveLosses = 0;
   }
 
-  // Restart watcher to pick up new group/autoBet state
+  // Reset algorithm rotation when algorithms change
+  if (body.algorithms !== undefined) {
+    tgSession.algIndex = 0;
+  }
+
   if (tgSession.watchGroupId) startWatching(tgSession);
 
   req.log.info({ cfg: tgSession.cfg }, "bet config updated");
@@ -523,13 +614,19 @@ router.post("/tg/config", (req, res) => {
 
 // ─── Report bet result (win/loss) to update martingale state ─────────────────
 router.post("/tg/bet-result", (req, res) => {
-  const { won, pnl } = req.body as { won?: boolean; pnl?: number };
+  const { won, pnl, result } = req.body as { won?: boolean; pnl?: number; result?: string };
   if (!tgSession) {
     res.status(401).json({ error: "未登录" });
     return;
   }
 
   if (pnl !== undefined) tgSession.sessionPnl += pnl;
+
+  // Record recent result for algorithm 3 & 4
+  if (result) {
+    tgSession.recentResults.push(result);
+    if (tgSession.recentResults.length > 30) tgSession.recentResults.shift();
+  }
 
   if (won !== undefined) {
     if (won) {
@@ -545,6 +642,7 @@ router.post("/tg/bet-result", (req, res) => {
     consecutiveLosses: tgSession.consecutiveLosses,
     sessionPnl: tgSession.sessionPnl,
     currentBet: tgSession.currentBet,
+    currentLevel: tgSession.currentLevel,
   });
 });
 
