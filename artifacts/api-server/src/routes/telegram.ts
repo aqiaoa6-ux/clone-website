@@ -76,6 +76,8 @@ interface TgSession {
   // watchdog timers
   watchdogTimer?: ReturnType<typeof setInterval>;
   saveTimer?: ReturnType<typeof setInterval>;
+  // 30-second post-result auto-bet timer
+  autoNextBetTimer?: ReturnType<typeof setTimeout>;
 }
 
 // ─── Session persistence ──────────────────────────────────────────────────────
@@ -204,6 +206,7 @@ function saveSession(): void {
 function stopWatchdog(session: TgSession): void {
   if (session.watchdogTimer) { clearInterval(session.watchdogTimer); session.watchdogTimer = undefined; }
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
+  if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
 }
 
 function startConnectionWatchdog(session: TgSession): void {
@@ -278,6 +281,8 @@ async function restoreSession(): Promise<void> {
     };
 
     const restored = tgSession;
+    // Re-establish the group message listener so group binding survives server restart
+    if (restored.watchGroupId) startWatching(restored);
     startKkpayWatcher(restored).catch(() => { /* ignore */ });
     startConnectionWatchdog(restored);
   } catch {
@@ -471,6 +476,9 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
             betId: sentBet.id,
           });
 
+          // Schedule next auto-bet 30 seconds after result
+          scheduleAutoNextBet(session);
+
           // Update absolute balance if kkpay includes it in the result message
           const absBal = parseBalanceFromKkpay(text);
           if (absBal !== null) {
@@ -543,6 +551,112 @@ function decideAlgorithm(session: TgSession, msgText: string): string | null {
 
   // random
   return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
+}
+
+// ─── Stat-based direction (no signal text required) ──────────────────────────
+// Used for the 30-second post-result auto-bet and the immediate start bet.
+// signal_follow → streak_follow logic; signal_reverse → cold_pick logic.
+function decideAlgorithmAuto(session: TgSession): string | null {
+  const { betOptions, algorithms } = session.cfg;
+  if (!betOptions.length || !algorithms.length) return null;
+
+  const enabledLabels = betOptions.map((o) => BET_OPTION_LABELS[o]);
+  const algoId = algorithms[session.algIndex % algorithms.length];
+  session.algIndex += 1;
+
+  // signal_follow → pick the most frequent recent result
+  if (algoId === "signal_follow" || algoId === "streak_follow") {
+    const recent = session.recentResults.slice(-10);
+    if (!recent.length) return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
+    const freq: Record<string, number> = {};
+    for (const r of recent) freq[r] = (freq[r] ?? 0) + 1;
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+    return sorted.find(([k]) => enabledLabels.includes(k))?.[0] ?? enabledLabels[0] ?? null;
+  }
+
+  // signal_reverse → pick the least frequent recent result
+  if (algoId === "signal_reverse" || algoId === "cold_pick") {
+    const recent = session.recentResults.slice(-10);
+    const freq: Record<string, number> = {};
+    for (const lbl of enabledLabels) freq[lbl] = 0;
+    for (const r of recent) if (freq[r] !== undefined) freq[r]++;
+    const sorted = Object.entries(freq).sort((a, b) => a[1] - b[1]);
+    return sorted[0]?.[0] ?? enabledLabels[0] ?? null;
+  }
+
+  // random
+  return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
+}
+
+// ─── Auto-place a bet immediately (no signal required) ────────────────────────
+async function autoPlaceBet(session: TgSession): Promise<void> {
+  if (!session.cfg.autoBet) return;
+  const targetId = session.watchGroupId;
+  if (!targetId) return;
+
+  const risk = checkRiskLimits(session);
+  if (!risk.ok) {
+    betLog.unshift({
+      id: String(Date.now()),
+      groupId: targetId,
+      groupTitle: session.groups.find((g) => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId,
+      messageText: "[自动投注]",
+      betContent: "",
+      amount: session.currentBet,
+      timestamp: Date.now(),
+      status: "paused",
+      pauseReason: risk.reason,
+    });
+    if (betLog.length > 200) betLog.pop();
+    pushEvent("bet:new", { bet: betLog[0] });
+    return;
+  }
+
+  const direction = decideAlgorithmAuto(session);
+  if (!direction) return;
+
+  const amount = session.currentBet;
+  const groupTitle = session.groups.find((g) => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
+
+  try {
+    await session.client.sendMessage(targetId, { message: `${direction}${amount}` });
+    session.lastBetAt = Date.now();
+    betLog.unshift({
+      id: String(Date.now()),
+      groupId: targetId,
+      groupTitle,
+      messageText: "[自动投注]",
+      betContent: direction,
+      amount,
+      timestamp: Date.now(),
+      status: "sent",
+    });
+    if (betLog.length > 200) betLog.pop();
+    pushEvent("bet:new", { bet: betLog[0] });
+  } catch {
+    betLog.unshift({
+      id: String(Date.now()),
+      groupId: targetId,
+      groupTitle,
+      messageText: "[自动投注]",
+      betContent: direction,
+      amount,
+      timestamp: Date.now(),
+      status: "failed",
+    });
+    if (betLog.length > 200) betLog.pop();
+    pushEvent("bet:new", { bet: betLog[0] });
+  }
+}
+
+// ─── Schedule 30-second auto-bet after a result ───────────────────────────────
+function scheduleAutoNextBet(session: TgSession): void {
+  if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
+  if (!session.cfg.autoBet || !session.watchGroupId) return;
+  session.autoNextBetTimer = setTimeout(() => {
+    session.autoNextBetTimer = undefined;
+    void autoPlaceBet(session);
+  }, 30 * 1000);
 }
 
 function computeNextBet(session: TgSession, won: boolean): number {
@@ -679,6 +793,9 @@ function startWatching(session: TgSession) {
       pushEvent("bet:new", { bet: betLog[0] });
       return;
     }
+
+    // Cancel any pending 30-second auto-bet (signal takes priority)
+    if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
 
     // Bet immediately
     void (async () => {
@@ -1048,6 +1165,12 @@ router.post("/tg/config", (req, res) => {
   }
 
   if (tgSession.watchGroupId) startWatching(tgSession);
+
+  // When autoBet is turned ON, immediately fire first bet (no signal needed)
+  const wasOff = !prev.autoBet;
+  if (body.autoBet === true && wasOff && tgSession.watchGroupId) {
+    void autoPlaceBet(tgSession);
+  }
 
   req.log.info({ cfg: tgSession.cfg }, "bet config updated");
   res.json({ ok: true, cfg: tgSession.cfg });
