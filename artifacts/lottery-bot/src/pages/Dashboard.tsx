@@ -90,6 +90,12 @@ export default function Dashboard() {
   const [winRate, setWinRate] = useState('0.00');
   const [searchPeriod, setSearchPeriod] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const [balanceSource, setBalanceSource] = useState<'manual' | 'kkpay'>('manual');
+  const [balanceUpdatedAt, setBalanceUpdatedAt] = useState(0);
+  const [kkpayLinked, setKkpayLinked] = useState(false);
+  const [kkpayUsername, setKkpayUsername] = useState('kkpay');
+  const [showKkpayInput, setShowKkpayInput] = useState(false);
+  const [kkpayInput, setKkpayInput] = useState('');
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -149,6 +155,8 @@ export default function Dashboard() {
           targetProfit?: number; cooldownSeconds?: number; betType?: BetConfig['betType'];
           balance?: number; todayPnl?: number; sessionPnl?: number;
           totalBets?: number; wins?: number; maxStreak?: number; winRate?: string;
+          balanceSource?: 'manual' | 'kkpay'; balanceUpdatedAt?: number;
+          kkpayUsername?: string; kkpayEntityId?: string;
         };
         if (sd.connected && sd.me) setTgMe(sd.me);
         setBetConfig({
@@ -170,6 +178,10 @@ export default function Dashboard() {
         if (sd.wins !== undefined) setWins(sd.wins);
         if (sd.maxStreak !== undefined) setMaxStreak(sd.maxStreak);
         if (sd.winRate !== undefined) setWinRate(sd.winRate);
+        if (sd.balanceSource) setBalanceSource(sd.balanceSource);
+        if (sd.balanceUpdatedAt !== undefined) setBalanceUpdatedAt(sd.balanceUpdatedAt);
+        if (sd.kkpayUsername) setKkpayUsername(sd.kkpayUsername);
+        setKkpayLinked(!!sd.kkpayEntityId);
       }
     } catch { /* ignore */ }
   }, []);
@@ -349,7 +361,61 @@ export default function Dashboard() {
 
           {/* Balance */}
           <div className="bg-card border border-border rounded-lg p-4 mb-4">
-            <div className="text-muted-foreground text-sm mb-1">当前余额:</div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-muted-foreground text-sm">当前余额:</span>
+              <div className="flex items-center gap-2">
+                {balanceSource === 'kkpay' ? (
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+                    <span className="text-[10px] text-green-400 font-medium">@{kkpayUsername} 实时</span>
+                    {balanceUpdatedAt > 0 && (
+                      <span className="text-[10px] text-muted-foreground">
+                        {new Date(balanceUpdatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </span>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    className="text-[10px] text-[#4CA2FF] hover:text-blue-400 transition-colors"
+                    onClick={() => { setShowKkpayInput(v => !v); setKkpayInput(kkpayUsername); }}
+                  >
+                    {kkpayLinked ? `@${kkpayUsername} 未连接` : '+ 接入kkpay'}
+                  </button>
+                )}
+                <button
+                  className="text-[10px] text-muted-foreground hover:text-white transition-colors"
+                  onClick={() => { setShowKkpayInput(v => !v); setKkpayInput(kkpayUsername); }}
+                  title="配置kkpay钱包"
+                >⚙</button>
+              </div>
+            </div>
+            {showKkpayInput && (
+              <div className="flex gap-2 mb-2">
+                <input
+                  value={kkpayInput}
+                  onChange={e => setKkpayInput(e.target.value)}
+                  placeholder="输入机器人用户名，如 kkpay"
+                  className="flex-1 bg-[#2d3654] border border-border rounded px-2 py-1 text-xs text-white placeholder-muted-foreground outline-none focus:border-[#3b5de7]"
+                  onKeyDown={async e => {
+                    if (e.key === 'Enter') {
+                      await fetch('/api/tg/kkpay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: kkpayInput }) });
+                      setKkpayUsername(kkpayInput.replace(/^@/, ''));
+                      setShowKkpayInput(false);
+                      setTimeout(fetchBetsAndStats, 2000);
+                    }
+                  }}
+                />
+                <button
+                  className="bg-[#3b5de7] hover:bg-blue-600 text-white text-xs px-3 py-1 rounded transition-colors"
+                  onClick={async () => {
+                    await fetch('/api/tg/kkpay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: kkpayInput }) });
+                    setKkpayUsername(kkpayInput.replace(/^@/, ''));
+                    setShowKkpayInput(false);
+                    setTimeout(fetchBetsAndStats, 2000);
+                  }}
+                >绑定</button>
+              </div>
+            )}
             <div className="text-[#00e676] text-3xl font-bold font-mono tracking-tight" data-testid="text-balance">
               {balance.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
             </div>

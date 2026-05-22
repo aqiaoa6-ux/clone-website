@@ -71,6 +71,11 @@ interface TgSession {
   balance: number;
   todayPnl: number;
   todayResetAt: number;
+  // kkpay integration
+  kkpayUsername: string;
+  kkpayEntityId?: string;
+  balanceSource: "manual" | "kkpay";
+  balanceUpdatedAt: number;
 }
 
 interface GroupInfo {
@@ -144,6 +149,7 @@ const BET_TYPE_TEXT: Record<BetType, string> = {
 let tgSession: TgSession | null = null;
 const betLog: BetRecord[] = [];
 let messageHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
+let kkpayHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
 
 async function fetchGroups(client: TelegramClient): Promise<GroupInfo[]> {
   try {
@@ -179,6 +185,67 @@ const BET_OPTION_LABELS: Record<BetOption, string> = {
   big: "大", small: "小", odd: "单", even: "双",
   "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
 };
+
+// ─── KKPay balance parsing ────────────────────────────────────────────────────
+function parseBalanceFromKkpay(text: string): number | null {
+  const patterns = [
+    /当前余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
+    /(?:可用|账[户号])?余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
+    /balance[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
+    /剩余[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
+    /💰\s*[¥￥]?\s*([\d,]+\.?\d*)/,
+    /总资产[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
+    /钱包余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) {
+      const val = parseFloat(m[1].replace(/,/g, ""));
+      if (!isNaN(val) && val >= 0) return val;
+    }
+  }
+  return null;
+}
+
+async function startKkpayWatcher(session: TgSession): Promise<void> {
+  // Remove previous handler
+  if (kkpayHandler) {
+    try { session.client.removeEventHandler(kkpayHandler, new NewMessage({})); } catch { /* ok */ }
+    kkpayHandler = null;
+  }
+
+  // Resolve entity ID for the configured kkpay username
+  const uname = session.kkpayUsername.replace(/^@/, "");
+  try {
+    const entity = await session.client.getEntity(uname);
+    session.kkpayEntityId = String((entity as unknown as { id: bigint | number }).id);
+  } catch {
+    // entity not found; handler will not match until resolved
+  }
+
+  kkpayHandler = async (event: NewMessageEvent) => {
+    const msg = event.message;
+    const text = msg.message ?? "";
+    if (!text) return;
+
+    const chatId = String(msg.chatId ?? "");
+    const senderId = String(msg.senderId ?? "");
+
+    // Must come from the resolved kkpay entity
+    if (!session.kkpayEntityId) return;
+    const eid = session.kkpayEntityId;
+    if (chatId !== eid && senderId !== eid && `-100${chatId}` !== eid) return;
+
+    const bal = parseBalanceFromKkpay(text);
+    if (bal !== null) {
+      session.balance = bal;
+      session.balanceSource = "kkpay";
+      session.balanceUpdatedAt = Date.now();
+    }
+  };
+
+  session.client.addEventHandler(kkpayHandler, new NewMessage({}));
+}
 
 function decideAlgorithm(session: TgSession, msgText: string): string | null {
   const { playMode, betOptions, doubleGroupA, doubleGroupB, killOption, algorithms } = session.cfg;
@@ -463,6 +530,10 @@ router.post("/tg/send-code", async (req, res) => {
       balance: 1000000,
       todayPnl: 0,
       todayResetAt: todayMidnight(),
+      kkpayUsername: "kkpay",
+      kkpayEntityId: undefined,
+      balanceSource: "manual",
+      balanceUpdatedAt: 0,
     };
 
     req.log.info({ phone }, "TG code sent");
@@ -506,6 +577,7 @@ router.post("/tg/verify-code", async (req, res) => {
     const me = (result as Api.auth.Authorization).user as Api.User;
     tgSession.me = me;
     tgSession.groups = await fetchGroups(tgSession.client);
+    startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
 
     req.log.info({ username: me.username }, "TG sign-in success");
     res.json({
@@ -568,6 +640,7 @@ router.post("/tg/verify-password", async (req, res) => {
     const me = (await tgSession.client.getMe()) as Api.User;
     tgSession.me = me;
     tgSession.groups = await fetchGroups(tgSession.client);
+    startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
 
     req.log.info({ username: me.username }, "TG 2FA success");
     res.json({
@@ -637,6 +710,45 @@ router.get("/tg/status", (req, res) => {
     wins: winsCount,
     maxStreak,
     winRate,
+    balanceSource: tgSession.balanceSource,
+    balanceUpdatedAt: tgSession.balanceUpdatedAt,
+    kkpayUsername: tgSession.kkpayUsername,
+    kkpayEntityId: tgSession.kkpayEntityId,
+  });
+});
+
+// ─── KKPay wallet config ──────────────────────────────────────────────────────
+router.get("/tg/kkpay", (_req, res) => {
+  if (!tgSession) {
+    res.status(401).json({ error: "未登录" });
+    return;
+  }
+  res.json({
+    kkpayUsername: tgSession.kkpayUsername,
+    kkpayEntityId: tgSession.kkpayEntityId,
+    balanceSource: tgSession.balanceSource,
+    balanceUpdatedAt: tgSession.balanceUpdatedAt,
+    balance: tgSession.balance,
+  });
+});
+
+router.post("/tg/kkpay", async (req, res) => {
+  const { username } = req.body as { username?: string };
+  if (!tgSession) {
+    res.status(401).json({ error: "未登录" });
+    return;
+  }
+  if (username !== undefined) {
+    tgSession.kkpayUsername = username.replace(/^@/, "");
+    tgSession.kkpayEntityId = undefined;
+    tgSession.balanceSource = "manual";
+    await startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
+  }
+  res.json({
+    ok: true,
+    kkpayUsername: tgSession.kkpayUsername,
+    kkpayEntityId: tgSession.kkpayEntityId,
+    linked: !!tgSession.kkpayEntityId,
   });
 });
 
