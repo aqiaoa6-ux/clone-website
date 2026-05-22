@@ -173,8 +173,13 @@ const BET_TYPE_TEXT: Record<BetType, string> = {
 
 let tgSession: TgSession | null = null;
 const betLog: BetRecord[] = [];
+// Store handler + the exact builder instance used at registration.
+// GramJS removeEventHandler matches by object reference — creating a new
+// NewMessage({}) for removal will NOT match the one used at addEventHandler.
 let messageHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
+let messageHandlerBuilder: NewMessage | null = null;
 let kkpayHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
+let kkpayHandlerBuilder: NewMessage | null = null;
 
 // ─── TG client options (shared) ───────────────────────────────────────────────
 function makeClientOptions() {
@@ -231,14 +236,14 @@ function startConnectionWatchdog(session: TgSession): void {
     void (async () => {
       try {
         await session.client.connect();
-        // Re-attach handlers after reconnect
-        if (messageHandler) {
-          try { session.client.removeEventHandler(messageHandler, new NewMessage({})); } catch { /* ok */ }
-          session.client.addEventHandler(messageHandler, new NewMessage({}));
+        // Re-attach handlers after reconnect (use stored builder instances)
+        if (messageHandler && messageHandlerBuilder) {
+          try { session.client.removeEventHandler(messageHandler, messageHandlerBuilder); } catch { /* ok */ }
+          session.client.addEventHandler(messageHandler, messageHandlerBuilder);
         }
-        if (kkpayHandler) {
-          try { session.client.removeEventHandler(kkpayHandler, new NewMessage({})); } catch { /* ok */ }
-          session.client.addEventHandler(kkpayHandler, new NewMessage({}));
+        if (kkpayHandler && kkpayHandlerBuilder) {
+          try { session.client.removeEventHandler(kkpayHandler, kkpayHandlerBuilder); } catch { /* ok */ }
+          session.client.addEventHandler(kkpayHandler, kkpayHandlerBuilder);
         }
         saveSession();
         pushEvent("session:reconnected", { at: Date.now() });
@@ -379,10 +384,11 @@ function queryBalanceInGroup(session: TgSession, delayMs = 0): void {
 }
 
 async function startKkpayWatcher(session: TgSession): Promise<void> {
-  // Remove previous handler
-  if (kkpayHandler) {
-    try { session.client.removeEventHandler(kkpayHandler, new NewMessage({})); } catch { /* ok */ }
+  // Remove previous handler using the stored builder instance
+  if (kkpayHandler && kkpayHandlerBuilder) {
+    try { session.client.removeEventHandler(kkpayHandler, kkpayHandlerBuilder); } catch { /* ok */ }
     kkpayHandler = null;
+    kkpayHandlerBuilder = null;
   }
 
   // Resolve entity ID for the configured kkpay username
@@ -425,7 +431,8 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
     }
   };
 
-  session.client.addEventHandler(kkpayHandler, new NewMessage({}));
+  kkpayHandlerBuilder = new NewMessage({});
+  session.client.addEventHandler(kkpayHandler, kkpayHandlerBuilder);
 }
 
 function decideAlgorithm(session: TgSession, msgText: string): string | null {
@@ -566,10 +573,12 @@ function checkRiskLimits(session: TgSession): { ok: boolean; reason?: string } {
 function startWatching(session: TgSession) {
   if (!session.watchGroupId) return;
 
-  if (messageHandler) {
+  if (messageHandler && messageHandlerBuilder) {
     try {
-      session.client.removeEventHandler(messageHandler, new NewMessage({}));
+      session.client.removeEventHandler(messageHandler, messageHandlerBuilder);
     } catch { /* ok */ }
+    messageHandler = null;
+    messageHandlerBuilder = null;
   }
 
   const targetId = session.watchGroupId;
@@ -685,7 +694,8 @@ function startWatching(session: TgSession) {
     }, 60 * 1000);
   };
 
-  session.client.addEventHandler(messageHandler, new NewMessage({}));
+  messageHandlerBuilder = new NewMessage({});
+  session.client.addEventHandler(messageHandler, messageHandlerBuilder);
 }
 
 // ─── Send verification code ───────────────────────────────────────────────────
