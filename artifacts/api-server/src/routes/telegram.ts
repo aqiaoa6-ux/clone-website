@@ -207,6 +207,18 @@ function parseBalanceFromKkpay(text: string): number | null {
   return null;
 }
 
+function queryKkpayBalance(session: TgSession, delayMs = 0): void {
+  if (!session.kkpayEntityId && !session.kkpayUsername) return;
+  const fire = async () => {
+    try {
+      const target = session.kkpayEntityId ?? session.kkpayUsername;
+      await session.client.sendMessage(target, { message: "/balance" });
+    } catch { /* ignore */ }
+  };
+  if (delayMs > 0) setTimeout(() => { void fire(); }, delayMs);
+  else void fire();
+}
+
 async function startKkpayWatcher(session: TgSession): Promise<void> {
   // Remove previous handler
   if (kkpayHandler) {
@@ -459,8 +471,8 @@ function startWatching(session: TgSession) {
         period: parsePeriodFromMessage(text),
       });
       if (betLog.length > 200) betLog.pop();
-      // Update next bet (assume won until result arrives — will be corrected)
-      // We don't know win/loss until result, so keep current for now
+      // Query kkpay balance 2 s after bet is placed
+      queryKkpayBalance(session, 2000);
     } catch {
       betLog.unshift({
         id: String(Date.now()),
@@ -752,6 +764,16 @@ router.post("/tg/kkpay", async (req, res) => {
   });
 });
 
+// ─── Manual balance refresh (sends /balance to kkpay) ─────────────────────────
+router.post("/tg/kkpay/refresh", (_req, res) => {
+  if (!tgSession) {
+    res.status(401).json({ error: "未登录" });
+    return;
+  }
+  queryKkpayBalance(tgSession, 0);
+  res.json({ ok: true, querying: true });
+});
+
 // ─── Get / Set bet config ─────────────────────────────────────────────────────
 router.get("/tg/config", (_req, res) => {
   if (!tgSession) {
@@ -860,6 +882,8 @@ router.post("/tg/bet-result", (req, res) => {
       tgSession.consecutiveLosses += 1;
     }
     tgSession.currentBet = computeNextBet(tgSession, won);
+    // Query kkpay balance 1 s after result arrives
+    queryKkpayBalance(tgSession, 1000);
   }
 
   res.json({

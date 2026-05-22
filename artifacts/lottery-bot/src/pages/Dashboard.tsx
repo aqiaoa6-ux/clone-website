@@ -382,6 +382,16 @@ export default function Dashboard() {
                     {kkpayLinked ? `@${kkpayUsername} 未连接` : '+ 接入kkpay'}
                   </button>
                 )}
+                {balanceSource === 'kkpay' && (
+                  <button
+                    className="text-[10px] text-muted-foreground hover:text-[#00e676] transition-colors"
+                    title="立即查询余额"
+                    onClick={async () => {
+                      await fetch('/api/tg/kkpay/refresh', { method: 'POST' });
+                      setTimeout(fetchBetsAndStats, 2500);
+                    }}
+                  >↻</button>
+                )}
                 <button
                   className="text-[10px] text-muted-foreground hover:text-white transition-colors"
                   onClick={() => { setShowKkpayInput(v => !v); setKkpayInput(kkpayUsername); }}
