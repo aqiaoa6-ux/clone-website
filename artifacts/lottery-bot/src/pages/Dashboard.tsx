@@ -36,6 +36,22 @@ interface GroupInfo {
   type: string;
 }
 
+interface BetRecord {
+  id: string;
+  betContent: string;
+  amount: number;
+  timestamp: number;
+  status: 'sent' | 'failed' | 'paused' | 'won' | 'lost';
+  pauseReason?: string;
+  period?: number;
+  lotteryResult?: string;
+  pnl?: number;
+  won?: boolean;
+}
+
+const STATUS_LABEL: Record<string, string> = { sent: '挂', won: '中', lost: '未中', paused: '停', failed: '失败' };
+const STATUS_COLOR: Record<string, string> = { sent: '#f44336', won: '#00e676', lost: '#f44336', paused: '#c8a520', failed: '#888' };
+
 function getSumColor(result: number): string {
   const blue = [0, 1, 3, 4, 9, 10, 14, 15, 20];
   const green = [6, 11, 16, 17, 21, 22];
@@ -43,17 +59,6 @@ function getSumColor(result: number): string {
   if (green.includes(result)) return '#10b981';
   return '#f44336';
 }
-
-const mockRecords = [
-  { period: 3433396, content: '27', result: '20', pnl: -5000.0, amount: 5000.0, status: '挂' },
-  { period: 3433396, content: '单', result: '双', pnl: -800000.0, amount: 800000.0, status: '挂' },
-  { period: 3433395, content: '27', result: '11', pnl: -5000.0, amount: 5000.0, status: '挂' },
-  { period: 3433395, content: '双', result: '单', pnl: -400000.0, amount: 400000.0, status: '挂' },
-  { period: 3433394, content: '27', result: '11', pnl: -5000.0, amount: 5000.0, status: '挂' },
-  { period: 3433394, content: '双', result: '单', pnl: -200000.0, amount: 200000.0, status: '挂' },
-  { period: 3433393, content: '27', result: '11', pnl: -5000.0, amount: 5000.0, status: '挂' },
-  { period: 3433393, content: '双', result: '单', pnl: -39200.0, amount: 400000.0, status: '挂' },
-];
 
 export default function Dashboard() {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -74,6 +79,17 @@ export default function Dashboard() {
   const [betSetupOpen, setBetSetupOpen] = useState(false);
   const [betSetupConfig, setBetSetupConfig] = useState<Partial<BetSetupConfig>>({});
   const [allItems, setAllItems] = useState<TrendTerm[]>([]);
+  // live data
+  const [records, setRecords] = useState<BetRecord[]>([]);
+  const [balance, setBalance] = useState(1000000);
+  const [todayPnl, setTodayPnl] = useState(0);
+  const [totalPnl, setTotalPnl] = useState(0);
+  const [totalBets, setTotalBets] = useState(0);
+  const [wins, setWins] = useState(0);
+  const [maxStreak, setMaxStreak] = useState(0);
+  const [winRate, setWinRate] = useState('0.00');
+  const [searchPeriod, setSearchPeriod] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -115,26 +131,54 @@ export default function Dashboard() {
     return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
   }, [fetchLotteryData]);
 
-  useEffect(() => {
-    fetch('/api/tg/status')
-      .then(r => r.json())
-      .then((d: { connected?: boolean; me?: MeInfo; watchGroupId?: string; autoBet?: boolean; betAmount?: number; strategy?: BetConfig['strategy']; betMultiplier?: number; maxConsecutiveLosses?: number; stopLoss?: number; targetProfit?: number; cooldownSeconds?: number; betType?: BetConfig['betType'] }) => {
-        if (d.connected && d.me) setTgMe(d.me);
+  const fetchBetsAndStats = useCallback(async () => {
+    try {
+      const [betsRes, statusRes] = await Promise.all([
+        fetch('/api/tg/bets'),
+        fetch('/api/tg/status'),
+      ]);
+      if (betsRes.ok) {
+        const d = await betsRes.json() as { bets?: BetRecord[] };
+        setRecords(d.bets ?? []);
+      }
+      if (statusRes.ok) {
+        const sd = await statusRes.json() as {
+          connected?: boolean; me?: MeInfo; watchGroupId?: string;
+          autoBet?: boolean; betAmount?: number; strategy?: BetConfig['strategy'];
+          betMultiplier?: number; maxConsecutiveLosses?: number; stopLoss?: number;
+          targetProfit?: number; cooldownSeconds?: number; betType?: BetConfig['betType'];
+          balance?: number; todayPnl?: number; sessionPnl?: number;
+          totalBets?: number; wins?: number; maxStreak?: number; winRate?: string;
+        };
+        if (sd.connected && sd.me) setTgMe(sd.me);
         setBetConfig({
-          autoBet: d.autoBet ?? false,
-          betAmount: d.betAmount ?? 100,
-          strategy: d.strategy ?? 'normal',
-          betMultiplier: d.betMultiplier ?? 2,
-          maxConsecutiveLosses: d.maxConsecutiveLosses ?? 5,
-          stopLoss: d.stopLoss ?? 5000,
-          targetProfit: d.targetProfit ?? 3000,
-          cooldownSeconds: d.cooldownSeconds ?? 0,
-          betType: d.betType ?? 'follow',
+          autoBet: sd.autoBet ?? false,
+          betAmount: sd.betAmount ?? 100,
+          strategy: sd.strategy ?? 'normal',
+          betMultiplier: sd.betMultiplier ?? 2,
+          maxConsecutiveLosses: sd.maxConsecutiveLosses ?? 5,
+          stopLoss: sd.stopLoss ?? 5000,
+          targetProfit: sd.targetProfit ?? 3000,
+          cooldownSeconds: sd.cooldownSeconds ?? 0,
+          betType: sd.betType ?? 'follow',
         });
-        if (d.autoBet) setIsRunning(true);
-      })
-      .catch(() => { /* ignore */ });
+        if (sd.autoBet) setIsRunning(true);
+        if (sd.balance !== undefined) setBalance(sd.balance);
+        if (sd.todayPnl !== undefined) setTodayPnl(sd.todayPnl);
+        if (sd.sessionPnl !== undefined) setTotalPnl(sd.sessionPnl);
+        if (sd.totalBets !== undefined) setTotalBets(sd.totalBets);
+        if (sd.wins !== undefined) setWins(sd.wins);
+        if (sd.maxStreak !== undefined) setMaxStreak(sd.maxStreak);
+        if (sd.winRate !== undefined) setWinRate(sd.winRate);
+      }
+    } catch { /* ignore */ }
   }, []);
+
+  useEffect(() => {
+    fetchBetsAndStats();
+    const poll = setInterval(fetchBetsAndStats, 15000);
+    return () => clearInterval(poll);
+  }, [fetchBetsAndStats]);
 
   function handleConnected(me: MeInfo) {
     setTgMe(me);
@@ -306,24 +350,30 @@ export default function Dashboard() {
           {/* Balance */}
           <div className="bg-card border border-border rounded-lg p-4 mb-4">
             <div className="text-muted-foreground text-sm mb-1">当前余额:</div>
-            <div className="text-[#00e676] text-3xl font-bold font-mono tracking-tight" data-testid="text-balance">1198306.57</div>
+            <div className="text-[#00e676] text-3xl font-bold font-mono tracking-tight" data-testid="text-balance">
+              {balance.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
           </div>
 
           {/* Stats Cards */}
           <div className="grid grid-cols-2 gap-3 mb-4">
             <div className="bg-card border border-border rounded-lg p-3">
               <div className="text-muted-foreground text-xs mb-1">今日盈亏</div>
-              <div className="text-[#00e676] font-bold">+0.00</div>
+              <div className={`font-bold ${todayPnl >= 0 ? 'text-[#00e676]' : 'text-[#f44336]'}`}>
+                {todayPnl >= 0 ? '+' : ''}{todayPnl.toFixed(2)}
+              </div>
             </div>
             <div className="bg-card border border-border rounded-lg p-3">
               <div className="text-muted-foreground text-xs mb-1">总盈亏</div>
-              <div className="text-[#f44336] font-bold">-919000.00</div>
+              <div className={`font-bold ${totalPnl >= 0 ? 'text-[#00e676]' : 'text-[#f44336]'}`}>
+                {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)}
+              </div>
             </div>
           </div>
 
           {/* Stats Row */}
           <div className="bg-card border border-border rounded-lg p-3 grid grid-cols-4 gap-2 mb-6 divide-x divide-border">
-            {[['总投注', '17次'], ['中奖', '8次'], ['最大连中', '4'], ['胜率', '47.06%']].map(([label, val]) => (
+            {([['总投注', `${totalBets}次`], ['中奖', `${wins}次`], ['最大连中', String(maxStreak)], ['胜率', `${winRate}%`]] as [string, string][]).map(([label, val]) => (
               <div key={label} className="text-center">
                 <div className="text-muted-foreground text-[10px] mb-1">{label}</div>
                 <div className="text-sm font-medium">{val}</div>
@@ -333,14 +383,39 @@ export default function Dashboard() {
 
           {/* Betting Records */}
           <div>
-            <div className="flex justify-between items-center mb-3">
+            <div className="flex justify-between items-center mb-2">
               <h3 className="text-sm font-medium flex items-center gap-1.5"><span>📋</span> 投注记录</h3>
-              <div className="flex gap-2">
-                <Button size="sm" className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2">期号搜索</Button>
-                <Button size="sm" className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2">重置</Button>
-                <Button size="sm" className="bg-transparent border border-[#f44336] text-[#f44336] hover:bg-[#f44336]/10 h-7 text-xs px-2">🚫 清空投注</Button>
+              <div className="flex gap-1.5">
+                <Button
+                  size="sm"
+                  className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2"
+                  onClick={() => setShowSearch(s => !s)}
+                >期号搜索</Button>
+                <Button
+                  size="sm"
+                  className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2"
+                  onClick={() => { setSearchPeriod(''); setShowSearch(false); }}
+                >重置</Button>
+                <Button
+                  size="sm"
+                  className="bg-transparent border border-[#f44336] text-[#f44336] hover:bg-[#f44336]/10 h-7 text-xs px-2"
+                  onClick={async () => {
+                    await fetch('/api/tg/bets', { method: 'DELETE' });
+                    setRecords([]);
+                  }}
+                >🚫 清空投注</Button>
               </div>
             </div>
+            {showSearch && (
+              <div className="mb-2">
+                <input
+                  value={searchPeriod}
+                  onChange={e => setSearchPeriod(e.target.value)}
+                  placeholder="输入期号筛选..."
+                  className="w-full bg-[#2d3654] border border-border rounded px-3 py-1.5 text-xs text-white placeholder-muted-foreground outline-none focus:border-[#3b5de7]"
+                />
+              </div>
+            )}
             <div className="rounded-md border border-border overflow-hidden text-xs">
               <table className="w-full text-center">
                 <thead className="bg-[#2d3654]/50 border-b border-border">
@@ -351,16 +426,30 @@ export default function Dashboard() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
-                  {mockRecords.map((record, i) => (
-                    <tr key={i} className="hover:bg-muted/50" data-testid={`row-record-${i}`}>
-                      <td className="py-2.5 px-1">{record.period}</td>
-                      <td className="py-2.5 px-1">{record.content}</td>
-                      <td className="py-2.5 px-1">{record.result}</td>
-                      <td className="py-2.5 px-1 text-[#f44336]">{record.pnl.toFixed(2)}</td>
-                      <td className="py-2.5 px-1 text-muted-foreground">{record.amount.toFixed(2)}</td>
-                      <td className="py-2.5 px-1 text-[#f44336]">{record.status}</td>
+                  {records
+                    .filter(r => !searchPeriod || String(r.period ?? '').includes(searchPeriod))
+                    .map((record, i) => {
+                      const statusLabel = STATUS_LABEL[record.status] ?? record.status;
+                      const statusColor = STATUS_COLOR[record.status] ?? '#888';
+                      const pnl = record.pnl;
+                      return (
+                        <tr key={record.id ?? i} className="hover:bg-muted/50" data-testid={`row-record-${i}`}>
+                          <td className="py-2.5 px-1">{record.period ?? '-'}</td>
+                          <td className="py-2.5 px-1">{record.betContent}</td>
+                          <td className="py-2.5 px-1">{record.lotteryResult ?? '-'}</td>
+                          <td className={`py-2.5 px-1 ${pnl !== undefined ? (pnl >= 0 ? 'text-[#00e676]' : 'text-[#f44336]') : 'text-muted-foreground'}`}>
+                            {pnl !== undefined ? (pnl >= 0 ? `+${pnl.toFixed(2)}` : pnl.toFixed(2)) : '-'}
+                          </td>
+                          <td className="py-2.5 px-1 text-muted-foreground">{record.amount.toFixed(2)}</td>
+                          <td className="py-2.5 px-1 font-medium" style={{ color: statusColor }}>{statusLabel}</td>
+                        </tr>
+                      );
+                    })}
+                  {records.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-muted-foreground">暂无投注记录</td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
             </div>

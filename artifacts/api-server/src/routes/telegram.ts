@@ -67,6 +67,10 @@ interface TgSession {
   currentLevel: number;
   algIndex: number;
   recentResults: string[];
+  // balance tracking
+  balance: number;
+  todayPnl: number;
+  todayResetAt: number;
 }
 
 interface GroupInfo {
@@ -84,8 +88,12 @@ interface BetRecord {
   betContent: string;
   amount: number;
   timestamp: number;
-  status: "sent" | "failed" | "paused";
+  status: "sent" | "failed" | "paused" | "won" | "lost";
   pauseReason?: string;
+  period?: number;
+  lotteryResult?: string;
+  pnl?: number;
+  won?: boolean;
 }
 
 const DEFAULT_CFG: BetCfg = {
@@ -109,6 +117,17 @@ const DEFAULT_CFG: BetCfg = {
 };
 
 const QUADRANT_OPTIONS: BetOption[] = ["big-odd", "big-even", "small-odd", "small-even"];
+
+function todayMidnight(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function parsePeriodFromMessage(text: string): number | undefined {
+  const m = text.match(/第?(\d{6,10})期/);
+  return m ? parseInt(m[1]) : undefined;
+}
 
 const BET_TYPE_TEXT: Record<BetType, string> = {
   follow: "", // determined from message
@@ -346,6 +365,7 @@ function startWatching(session: TgSession) {
         timestamp: Date.now(),
         status: "paused",
         pauseReason: risk.reason,
+        period: parsePeriodFromMessage(text),
       });
       if (betLog.length > 200) betLog.pop();
       return;
@@ -369,6 +389,7 @@ function startWatching(session: TgSession) {
         amount: session.currentBet,
         timestamp: Date.now(),
         status: "sent",
+        period: parsePeriodFromMessage(text),
       });
       if (betLog.length > 200) betLog.pop();
       // Update next bet (assume won until result arrives — will be corrected)
@@ -439,6 +460,9 @@ router.post("/tg/send-code", async (req, res) => {
       currentLevel: 0,
       algIndex: 0,
       recentResults: [],
+      balance: 1000000,
+      todayPnl: 0,
+      todayResetAt: todayMidnight(),
     };
 
     req.log.info({ phone }, "TG code sent");
@@ -573,6 +597,25 @@ router.get("/tg/status", (req, res) => {
     res.json({ connected: false });
     return;
   }
+
+  // Reset todayPnl if a new day has started
+  const midnight = todayMidnight();
+  if (tgSession.todayResetAt < midnight) {
+    tgSession.todayPnl = 0;
+    tgSession.todayResetAt = midnight;
+  }
+
+  // Compute stats from betLog
+  const settled = betLog.filter(b => b.won !== undefined);
+  const totalBets = betLog.filter(b => b.status !== "failed").length;
+  const winsCount = settled.filter(b => b.won === true).length;
+  let maxStreak = 0, cur = 0;
+  for (const b of [...betLog].reverse()) {
+    if (b.won === true) { cur++; if (cur > maxStreak) maxStreak = cur; }
+    else if (b.won === false) cur = 0;
+  }
+  const winRate = totalBets > 0 ? ((winsCount / totalBets) * 100).toFixed(2) : "0.00";
+
   const me = tgSession.me;
   res.json({
     connected: true,
@@ -588,6 +631,12 @@ router.get("/tg/status", (req, res) => {
     consecutiveLosses: tgSession.consecutiveLosses,
     sessionPnl: tgSession.sessionPnl,
     currentBet: tgSession.currentBet,
+    balance: tgSession.balance,
+    todayPnl: tgSession.todayPnl,
+    totalBets,
+    wins: winsCount,
+    maxStreak,
+    winRate,
   });
 });
 
@@ -655,13 +704,36 @@ router.post("/tg/config", (req, res) => {
 
 // ─── Report bet result (win/loss) to update martingale state ─────────────────
 router.post("/tg/bet-result", (req, res) => {
-  const { won, pnl, result } = req.body as { won?: boolean; pnl?: number; result?: string };
+  const { won, pnl, result, betId } = req.body as { won?: boolean; pnl?: number; result?: string; betId?: string };
   if (!tgSession) {
     res.status(401).json({ error: "未登录" });
     return;
   }
 
-  if (pnl !== undefined) tgSession.sessionPnl += pnl;
+  if (pnl !== undefined) {
+    tgSession.sessionPnl += pnl;
+    // Update balance and todayPnl
+    tgSession.balance += pnl;
+    const midnight = todayMidnight();
+    if (tgSession.todayResetAt < midnight) {
+      tgSession.todayPnl = 0;
+      tgSession.todayResetAt = midnight;
+    }
+    tgSession.todayPnl += pnl;
+  }
+
+  // Update the matching bet record
+  const record = betId
+    ? betLog.find(b => b.id === betId)
+    : betLog.find(b => b.status === "sent");
+  if (record) {
+    if (won !== undefined) {
+      record.won = won;
+      record.status = won ? "won" : "lost";
+    }
+    if (pnl !== undefined) record.pnl = pnl;
+    if (result) record.lotteryResult = result;
+  }
 
   // Record recent result for algorithm 3 & 4
   if (result) {
@@ -684,7 +756,15 @@ router.post("/tg/bet-result", (req, res) => {
     sessionPnl: tgSession.sessionPnl,
     currentBet: tgSession.currentBet,
     currentLevel: tgSession.currentLevel,
+    balance: tgSession.balance,
+    todayPnl: tgSession.todayPnl,
   });
+});
+
+// ─── Clear all bet records ────────────────────────────────────────────────────
+router.delete("/tg/bets", (_req, res) => {
+  betLog.length = 0;
+  res.json({ ok: true });
 });
 
 // ─── Groups ───────────────────────────────────────────────────────────────────
