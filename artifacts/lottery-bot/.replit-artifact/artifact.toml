@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "彩票机器人管理平台"
+version = "1.0.0"
+id = "artifacts/lottery-bot"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19579
+
+[services.development]
+run = "pnpm --filter @workspace/lottery-bot run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/lottery-bot", "run", "build" ]
+publicDir = "artifacts/lottery-bot/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19579"
+BASE_PATH = "/"
