@@ -68,14 +68,10 @@ interface TgSession {
   todayResetAt: number;
   // per-period dedup
   lastBetPeriod?: number;
-  // pending delayed bet (1-min after signal)
-  pendingBetTimer?: ReturnType<typeof setTimeout>;
   // kkpay integration
   kkpayUsername: string;
   kkpayEntityId?: string;
   balanceSource: "manual" | "kkpay";
-  // only accept balance updates within 60 s of our own query / bet
-  lastBalanceQueryAt: number;
   balanceUpdatedAt: number;
   // watchdog timers
   watchdogTimer?: ReturnType<typeof setInterval>;
@@ -208,7 +204,6 @@ function saveSession(): void {
 function stopWatchdog(session: TgSession): void {
   if (session.watchdogTimer) { clearInterval(session.watchdogTimer); session.watchdogTimer = undefined; }
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
-  if (session.pendingBetTimer) { clearTimeout(session.pendingBetTimer); session.pendingBetTimer = undefined; }
 }
 
 function startConnectionWatchdog(session: TgSession): void {
@@ -220,27 +215,25 @@ function startConnectionWatchdog(session: TgSession): void {
     saveSession();
   }, 5 * 60 * 1000);
 
-  // Connection health check — every 30 s
+  // Connection health check — every 15 s via real getMe() ping
   session.watchdogTimer = setInterval(() => {
     if (tgSession !== session) { clearInterval(session.watchdogTimer); return; }
-    if (session.client.connected) return;
     void (async () => {
       try {
-        await session.client.connect();
-        // Re-attach handlers after reconnect (use stored builder instances)
-        if (messageHandler && messageHandlerBuilder) {
-          try { session.client.removeEventHandler(messageHandler, messageHandlerBuilder); } catch { /* ok */ }
-          session.client.addEventHandler(messageHandler, messageHandlerBuilder);
-        }
-        if (kkpayHandler && kkpayHandlerBuilder) {
-          try { session.client.removeEventHandler(kkpayHandler, kkpayHandlerBuilder); } catch { /* ok */ }
-          session.client.addEventHandler(kkpayHandler, kkpayHandlerBuilder);
-        }
-        saveSession();
-        pushEvent("session:reconnected", { at: Date.now() });
-      } catch { /* will retry next cycle */ }
+        await session.client.getMe(); // real round-trip ping
+      } catch {
+        // Ping failed — force a full reconnect cycle
+        try {
+          await session.client.connect();
+          // Re-attach handlers after reconnect
+          if (session.watchGroupId) startWatching(session);
+          await startKkpayWatcher(session);
+          saveSession();
+          pushEvent("session:reconnected", { at: Date.now() });
+        } catch { /* will retry next cycle */ }
+      }
     })();
-  }, 30 * 1000);
+  }, 15 * 1000);
 }
 
 async function restoreSession(): Promise<void> {
@@ -280,13 +273,13 @@ async function restoreSession(): Promise<void> {
       kkpayEntityId: undefined,
       balanceSource: data.balanceSource ?? "manual",
       balanceUpdatedAt: 0,
-      lastBalanceQueryAt: 0,
       me,
       watchGroupId: data.watchGroupId,
     };
 
-    startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
-    startConnectionWatchdog(tgSession);
+    const restored = tgSession;
+    startKkpayWatcher(restored).catch(() => { /* ignore */ });
+    startConnectionWatchdog(restored);
   } catch {
     // Session expired — remove stale file so user can login fresh
     try { fs.unlinkSync(SESSION_FILE); } catch { /* ok */ }
@@ -363,18 +356,6 @@ function parseBalanceFromKkpay(text: string): number | null {
   return null;
 }
 
-// Send "ye" to the bet group — kkpay bot in the group responds with balance
-function queryBalanceInGroup(session: TgSession, delayMs = 0): void {
-  if (!session.watchGroupId) return;
-  const fire = async () => {
-    try {
-      session.lastBalanceQueryAt = Date.now(); // mark we expect a balance reply
-      await session.client.sendMessage(session.watchGroupId!, { message: "ye" });
-    } catch { /* ignore */ }
-  };
-  if (delayMs > 0) setTimeout(() => { void fire(); }, delayMs);
-  else void fire();
-}
 
 // ─── Settle a bet result (shared by kkpayHandler auto-detect & /tg/bet-result) ─
 function settleBet(
@@ -460,25 +441,9 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
 
     if (!isFromKkpay && !inWatchGroup) return;
 
-    // ── Balance update — only from our own queries (within 60 s window) ──────
-    // Ignores other group members' kkpay replies so we never show someone
-    // else's balance as our own.
-    const bal = parseBalanceFromKkpay(text);
-    if (bal !== null) {
-      const ownQuery = (Date.now() - session.lastBalanceQueryAt) < 60_000;
-      if (ownQuery) {
-        session.balance = bal;
-        session.balanceSource = "kkpay";
-        session.balanceUpdatedAt = Date.now();
-        session.lastBalanceQueryAt = 0; // reset so next reply needs a fresh query
-        pushEvent("balance:update", {
-          balance: session.balance,
-          balanceSource: session.balanceSource,
-          balanceUpdatedAt: session.balanceUpdatedAt,
-        });
-        saveSession();
-      }
-    }
+    // ── Balance update — only from win/loss results for OUR sent bet ─────────
+    // We never send "ye", so balance only comes from kkpay win/loss messages.
+    // We update only when we have a "sent" bet (i.e. the result is ours).
 
     // ── Win / loss auto-settle (only from kkpay bot's own messages) ──────────
     if (isFromKkpay && tgSession === session) {
@@ -505,6 +470,20 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
             result: rMatch?.[0],
             betId: sentBet.id,
           });
+
+          // Update absolute balance if kkpay includes it in the result message
+          const absBal = parseBalanceFromKkpay(text);
+          if (absBal !== null) {
+            session.balance = absBal;
+            session.balanceSource = "kkpay";
+            session.balanceUpdatedAt = Date.now();
+            pushEvent("balance:update", {
+              balance: session.balance,
+              balanceSource: session.balanceSource,
+              balanceUpdatedAt: session.balanceUpdatedAt,
+            });
+            saveSession();
+          }
         }
       }
     }
@@ -681,19 +660,35 @@ function startWatching(session: TgSession) {
       (g) => g.id === targetId || `-100${g.id}` === targetId,
     );
 
-    // Cancel any existing pending bet, then schedule 1 minute after signal
-    if (session.pendingBetTimer) {
-      clearTimeout(session.pendingBetTimer);
-      session.pendingBetTimer = undefined;
+    // Check risk limits before betting
+    const risk = checkRiskLimits(session);
+    if (!risk.ok) {
+      betLog.unshift({
+        id: String(Date.now()),
+        groupId: targetId,
+        groupTitle: group?.title ?? targetId,
+        messageText: text.slice(0, 80),
+        betContent: plannedContent,
+        amount: plannedAmount,
+        timestamp: Date.now(),
+        status: "paused",
+        pauseReason: risk.reason,
+        period: triggerPeriod,
+      });
+      if (betLog.length > 200) betLog.pop();
+      pushEvent("bet:new", { bet: betLog[0] });
+      return;
     }
 
-    session.pendingBetTimer = setTimeout(() => {
-      session.pendingBetTimer = undefined;
-      if (!session.cfg.autoBet) return;
-
-      // Re-check risk limits at execution time
-      const risk = checkRiskLimits(session);
-      if (!risk.ok) {
+    // Bet immediately
+    void (async () => {
+      try {
+        // Format: 大100 / 小100 / 小单100 / 大单100
+        await session.client.sendMessage(targetId, {
+          message: `${plannedContent}${plannedAmount}`,
+        });
+        session.lastBetAt = Date.now();
+        if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
         betLog.unshift({
           id: String(Date.now()),
           groupId: targetId,
@@ -702,51 +697,25 @@ function startWatching(session: TgSession) {
           betContent: plannedContent,
           amount: plannedAmount,
           timestamp: Date.now(),
-          status: "paused",
-          pauseReason: risk.reason,
+          status: "sent",
           period: triggerPeriod,
         });
         if (betLog.length > 200) betLog.pop();
         pushEvent("bet:new", { bet: betLog[0] });
-        return;
+      } catch {
+        betLog.unshift({
+          id: String(Date.now()),
+          groupId: targetId,
+          groupTitle: group?.title ?? targetId,
+          messageText: text.slice(0, 80),
+          betContent: plannedContent,
+          amount: plannedAmount,
+          timestamp: Date.now(),
+          status: "failed",
+        });
+        if (betLog.length > 200) betLog.pop();
       }
-
-      void (async () => {
-        try {
-          // Format: 大100 / 小100 / 小单100 / 大单100
-          await session.client.sendMessage(targetId, {
-            message: `${plannedContent}${plannedAmount}`,
-          });
-          session.lastBetAt = Date.now();
-          if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
-          betLog.unshift({
-            id: String(Date.now()),
-            groupId: targetId,
-            groupTitle: group?.title ?? targetId,
-            messageText: text.slice(0, 80),
-            betContent: plannedContent,
-            amount: plannedAmount,
-            timestamp: Date.now(),
-            status: "sent",
-            period: triggerPeriod,
-          });
-          if (betLog.length > 200) betLog.pop();
-          pushEvent("bet:new", { bet: betLog[0] });
-        } catch {
-          betLog.unshift({
-            id: String(Date.now()),
-            groupId: targetId,
-            groupTitle: group?.title ?? targetId,
-            messageText: text.slice(0, 80),
-            betContent: plannedContent,
-            amount: plannedAmount,
-            timestamp: Date.now(),
-            status: "failed",
-          });
-          if (betLog.length > 200) betLog.pop();
-        }
-      })();
-    }, 60 * 1000);
+    })();
   };
 
   messageHandlerBuilder = new NewMessage({});
@@ -803,7 +772,6 @@ router.post("/tg/send-code", async (req, res) => {
       kkpayEntityId: undefined,
       balanceSource: "manual",
       balanceUpdatedAt: 0,
-      lastBalanceQueryAt: 0,
     };
 
     req.log.info({ phone }, "TG code sent");
@@ -1026,15 +994,6 @@ router.post("/tg/kkpay", async (req, res) => {
   });
 });
 
-// ─── Manual balance refresh (sends "ye" to the bet group) ────────────────────
-router.post("/tg/kkpay/refresh", (_req, res) => {
-  if (!tgSession) {
-    res.status(401).json({ error: "未登录" });
-    return;
-  }
-  queryBalanceInGroup(tgSession, 0);
-  res.json({ ok: true, querying: true });
-});
 
 // ─── Get / Set bet config ─────────────────────────────────────────────────────
 router.get("/tg/config", (_req, res) => {
