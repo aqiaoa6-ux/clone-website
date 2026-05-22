@@ -335,6 +335,7 @@ function parseBetFromMessage(text: string): string | null {
   return null;
 }
 
+
 const BET_OPTION_LABELS: Record<BetOption, string> = {
   big: "大", small: "小", odd: "单", even: "双",
   "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
@@ -365,9 +366,9 @@ function parseBalanceFromKkpay(text: string): number | null {
 // ─── Settle a bet result (shared by kkpayHandler auto-detect & /tg/bet-result) ─
 function settleBet(
   session: TgSession,
-  opts: { won: boolean; pnl?: number; result?: string; betId?: string },
+  opts: { won: boolean; pnl?: number; result?: string; betId?: string; period?: number },
 ): void {
-  const { won, pnl, result, betId } = opts;
+  const { won, pnl, result, betId, period } = opts;
 
   if (pnl !== undefined) {
     session.sessionPnl += pnl;
@@ -388,6 +389,8 @@ function settleBet(
     record.status = won ? "won" : "lost";
     if (pnl !== undefined) record.pnl = pnl;
     if (result) record.lotteryResult = result;
+    // Backfill period onto the bet record if it wasn't set at bet time
+    if (period && !record.period) record.period = period;
   }
 
   if (result) {
@@ -450,31 +453,53 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
     if (!isFromKkpay && !inWatchGroup) return;
 
     // ── Win / loss auto-settle ────────────────────────────────────────────────
-    // Settle from: the resolved kkpay entity, OR any message in the watch group
-    // that contains KKCOIN (kkpay result messages always include KKCOIN amounts).
+    // Support two kkpay result formats:
+    //   Format A (KKCOIN):  "中奖 +700000 KKCOIN" / "挂逼 -100000 KKCOIN"
+    //   Format B (单金额):  "3435823期: 4+1+8=13 小单 单金额 -39200 金额 400000"
+
     const hasWin  = /中奖|✅/.test(text);
     const hasLoss = /挂逼|未中|未赢|❌/.test(text);
-    const isKkpayResult = isFromKkpay || (inWatchGroup && /KKCOIN/i.test(text));
 
-    if (isKkpayResult && (hasWin || hasLoss) && tgSession === session) {
+    // Format B: detect win/loss from sign of 单金额
+    let danjineWon: boolean | undefined;
+    const danjineMatch = text.match(/单金额\s*([+-]?\d[\d,]*(?:\.\d+)?)/);
+    if (danjineMatch && !hasWin && !hasLoss) {
+      const val = parseFloat(danjineMatch[1].replace(/,/g, ""));
+      danjineWon = val >= 0;
+    }
+
+    const isWin  = hasWin  || danjineWon === true;
+    const isLoss = hasLoss || danjineWon === false;
+
+    // Trigger settlement if: from kkpay entity, OR in watch group and looks like a result
+    const isKkpayResult =
+      isFromKkpay ||
+      (inWatchGroup && (hasWin || hasLoss || danjineMatch !== null || /KKCOIN/i.test(text)));
+
+    if (isKkpayResult && (isWin || isLoss) && tgSession === session) {
       const sentBet = betLog.find(b => b.status === "sent");
       if (sentBet) {
-        // Extract signed P&L, e.g. "+700000 KKCOIN" or "KKCOIN -100000"
+        // P&L — try KKCOIN format first, then 单金额 format
         const pnlMatch =
           text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ??
-          text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i);
+          text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i) ??
+          (danjineMatch ? danjineMatch : null);
         const pnl = pnlMatch
           ? parseFloat(pnlMatch[1].replace(/,/g, ""))
           : undefined;
 
-        // Extract lottery result keyword (大单/小双/大/小/单/双)
+        // Lottery result label (大单/小双/大/小/单/双)
         const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
 
+        // Period from result message (e.g. "3435823期")
+        const periodFromMsg = parsePeriodFromMessage(text);
+
         settleBet(session, {
-          won: hasWin && !hasLoss,
+          won: isWin,
           pnl,
           result: rMatch?.[0],
           betId: sentBet.id,
+          period: periodFromMsg,
         });
 
         // Schedule next auto-bet 50 seconds after result
