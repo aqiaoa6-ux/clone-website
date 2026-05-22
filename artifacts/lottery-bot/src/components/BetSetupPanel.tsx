@@ -6,6 +6,10 @@ import {
 } from 'lucide-react';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
+export type PlayMode = 'normal' | 'double' | 'kill';
+export type BetOption = 'big' | 'small' | 'odd' | 'even' | 'big-odd' | 'big-even' | 'small-odd' | 'small-even';
+export type AlgorithmId = 'signal_follow' | 'signal_reverse' | 'streak_follow' | 'cold_pick' | 'random';
+
 export interface BetSetupConfig {
   // group
   groupId?: string;
@@ -14,16 +18,18 @@ export interface BetSetupConfig {
   amountLevels: number[];
   stepBackOnWin: boolean;
   startLevel: number;
-  // bet options
+  // play mode
+  playMode: PlayMode;
+  doubleGroupA: BetOption;
+  doubleGroupB: BetOption;
+  killOption: BetOption;
+  // bet options (normal mode)
   betOptions: BetOption[];
   // algorithms
   algorithms: AlgorithmId[];
   // general
   autoBet: boolean;
 }
-
-export type BetOption = 'big' | 'small' | 'odd' | 'even' | 'big-odd' | 'big-even' | 'small-odd' | 'small-even';
-export type AlgorithmId = 'signal_follow' | 'signal_reverse' | 'streak_follow' | 'cold_pick' | 'random';
 
 interface GroupInfo { id: string; title: string; type: string; }
 
@@ -41,10 +47,29 @@ const DEFAULT_CONFIG: BetSetupConfig = {
   amountLevels: [100, 200, 300, 500, 1000],
   stepBackOnWin: true,
   startLevel: 0,
+  playMode: 'normal',
+  doubleGroupA: 'big-odd',
+  doubleGroupB: 'small-even',
+  killOption: 'big-odd',
   betOptions: ['big', 'small'],
   algorithms: ['signal_follow'],
   autoBet: false,
 };
+
+const QUADRANT_OPTIONS: BetOption[] = ['big-odd', 'big-even', 'small-odd', 'small-even'];
+
+const QUICK_PAIRS: Array<{ a: BetOption; b: BetOption; label: string }> = [
+  { a: 'big-odd',   b: 'small-even', label: '大单 + 小双' },
+  { a: 'small-odd', b: 'big-even',   label: '小单 + 大双' },
+  { a: 'big',       b: 'small',      label: '大 + 小' },
+  { a: 'odd',       b: 'even',       label: '单 + 双' },
+];
+
+function getEffectiveBetOptions(cfg: BetSetupConfig): BetOption[] {
+  if (cfg.playMode === 'double') return [cfg.doubleGroupA, cfg.doubleGroupB];
+  if (cfg.playMode === 'kill')   return QUADRANT_OPTIONS.filter(o => o !== cfg.killOption);
+  return cfg.betOptions;
+}
 
 const BET_OPTION_META: { id: BetOption; label: string; color: string }[] = [
   { id: 'big',        label: '大',   color: '#f44336' },
@@ -217,8 +242,12 @@ export default function BetSetupPanel({ isOpen, onClose, onSave, initialConfig, 
           amountLevels: cfg.amountLevels,
           stepBackOnWin: cfg.stepBackOnWin,
           startLevel: cfg.startLevel,
-          betOptions: cfg.betOptions,
+          betOptions: getEffectiveBetOptions(cfg),
           algorithms: cfg.algorithms,
+          playMode: cfg.playMode,
+          doubleGroupA: cfg.doubleGroupA,
+          doubleGroupB: cfg.doubleGroupB,
+          killOption: cfg.killOption,
         }),
       });
       onSave(cfg);
@@ -537,60 +566,211 @@ export default function BetSetupPanel({ isOpen, onClose, onSave, initialConfig, 
 
                 {/* ── OPTIONS TAB ── */}
                 {tab === 'options' && (
-                  <motion.div key="options" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} className="p-4 space-y-4">
-                    <div className="bg-[#1a2035] border border-white/8 rounded-xl p-4">
-                      <div className="text-xs text-muted-foreground mb-1 uppercase tracking-wide">投注选项</div>
-                      <div className="text-[10px] text-muted-foreground mb-3">选择机器人可以下注的方向（至少1个，可多选）</div>
-                      <div className="grid grid-cols-2 gap-2">
-                        {BET_OPTION_META.map(opt => {
-                          const active = cfg.betOptions.includes(opt.id);
-                          return (
-                            <button
-                              key={opt.id}
-                              onClick={() => toggleBetOption(opt.id)}
-                              className={`relative flex items-center gap-3 p-3 rounded-xl border transition-all ${
-                                active
-                                  ? 'border-opacity-50 ring-1'
-                                  : 'bg-[#1e2538] border-white/5'
-                              }`}
-                              style={active ? {
-                                background: opt.color + '15',
-                                borderColor: opt.color + '55',
-                                boxShadow: `0 0 0 1px ${opt.color}33`,
-                              } : {}}
-                            >
-                              <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold flex-shrink-0"
-                                style={{ background: opt.color + '22', color: opt.color }}>
-                                {opt.label}
-                              </div>
-                              <span className="text-xs font-medium" style={{ color: active ? opt.color : '#888' }}>
-                                {opt.label}
-                              </span>
-                              {active && (
-                                <div className="absolute top-2 right-2 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] font-bold"
-                                  style={{ background: opt.color, color: '#000' }}>✓</div>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <div className="mt-3 text-[10px] text-muted-foreground text-center">
-                        已选 {cfg.betOptions.length} / {BET_OPTION_META.length} 个选项
-                      </div>
+                  <motion.div key="options" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0 }} className="p-4 space-y-3">
+
+                    {/* Play mode selector */}
+                    <div className="flex bg-[#1e2538] rounded-xl p-1 gap-1">
+                      {([
+                        { id: 'normal' as PlayMode, label: '常规', desc: '自由选项' },
+                        { id: 'double' as PlayMode, label: '双组', desc: '同押两项' },
+                        { id: 'kill'   as PlayMode, label: '杀组', desc: '排一押三' },
+                      ] as const).map(m => (
+                        <button key={m.id} onClick={() => setCfg(p => ({ ...p, playMode: m.id }))}
+                          className={`flex-1 py-2 rounded-lg transition-colors flex flex-col items-center gap-0.5 ${
+                            cfg.playMode === m.id ? 'bg-[#3b5de7] text-white' : 'text-muted-foreground hover:text-white'
+                          }`}
+                        >
+                          <span className="text-xs font-semibold">{m.label}</span>
+                          <span className="text-[9px] opacity-70">{m.desc}</span>
+                        </button>
+                      ))}
                     </div>
 
-                    {/* Current selection summary */}
-                    <div className="p-3 rounded-xl bg-[#1e2538] border border-white/8">
-                      <div className="text-[10px] text-muted-foreground mb-2">当前已启用投注方向</div>
+                    {/* ── NORMAL MODE ── */}
+                    {cfg.playMode === 'normal' && (
+                      <div className="bg-[#1a2035] border border-white/8 rounded-xl p-4">
+                        <div className="text-xs text-muted-foreground mb-3">选择机器人可以下注的方向（至少1个，可多选）</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          {BET_OPTION_META.map(opt => {
+                            const active = cfg.betOptions.includes(opt.id);
+                            return (
+                              <button key={opt.id} onClick={() => toggleBetOption(opt.id)}
+                                className={`relative flex items-center gap-3 p-3 rounded-xl border transition-all ${active ? '' : 'bg-[#1e2538] border-white/5'}`}
+                                style={active ? { background: opt.color + '15', borderColor: opt.color + '55', boxShadow: `0 0 0 1px ${opt.color}30` } : {}}
+                              >
+                                <div className="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold flex-shrink-0"
+                                  style={{ background: opt.color + '22', color: opt.color }}>
+                                  {opt.label}
+                                </div>
+                                <span className="text-xs font-medium" style={{ color: active ? opt.color : '#888' }}>{opt.label}</span>
+                                {active && (
+                                  <div className="absolute top-2 right-2 w-3.5 h-3.5 rounded-full flex items-center justify-center text-[9px] font-bold"
+                                    style={{ background: opt.color, color: '#000' }}>✓</div>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-2 text-[10px] text-muted-foreground text-center">已选 {cfg.betOptions.length} / {BET_OPTION_META.length} 个选项</div>
+                      </div>
+                    )}
+
+                    {/* ── DOUBLE GROUP MODE ── */}
+                    {cfg.playMode === 'double' && (
+                      <div className="space-y-3">
+                        <div className="bg-[#1a2035] border border-white/8 rounded-xl p-4">
+                          <div className="text-xs text-white font-medium mb-1">双组投注</div>
+                          <div className="text-[10px] text-muted-foreground mb-3">每期同时押注两个方向，分散风险</div>
+
+                          {/* Quick pairs */}
+                          <div className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide">快捷组合</div>
+                          <div className="grid grid-cols-2 gap-2 mb-4">
+                            {QUICK_PAIRS.map(pair => {
+                              const isActive = cfg.doubleGroupA === pair.a && cfg.doubleGroupB === pair.b;
+                              const metaA = BET_OPTION_META.find(m => m.id === pair.a)!;
+                              const metaB = BET_OPTION_META.find(m => m.id === pair.b)!;
+                              return (
+                                <button key={pair.label}
+                                  onClick={() => setCfg(p => ({ ...p, doubleGroupA: pair.a, doubleGroupB: pair.b }))}
+                                  className={`p-3 rounded-xl border text-left transition-all ${isActive ? 'bg-[#3b5de7]/20 border-[#3b5de7]/50' : 'bg-[#1e2538] border-white/5 hover:border-white/20'}`}
+                                >
+                                  <div className="flex items-center gap-1.5 mb-1">
+                                    <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{ background: metaA.color + '25', color: metaA.color }}>{metaA.label}</span>
+                                    <span className="text-muted-foreground text-[10px]">+</span>
+                                    <span className="text-xs font-bold px-1.5 py-0.5 rounded" style={{ background: metaB.color + '25', color: metaB.color }}>{metaB.label}</span>
+                                  </div>
+                                  <div className="text-[10px] text-muted-foreground">{pair.label}</div>
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {/* Custom picker */}
+                          <div className="text-[10px] text-muted-foreground mb-2 uppercase tracking-wide">自定义组合（点选任意两项）</div>
+                          <div className="grid grid-cols-4 gap-1.5">
+                            {BET_OPTION_META.map(opt => {
+                              const isA = cfg.doubleGroupA === opt.id;
+                              const isB = cfg.doubleGroupB === opt.id;
+                              const role = isA ? 'A' : isB ? 'B' : null;
+                              return (
+                                <button key={opt.id}
+                                  onClick={() => {
+                                    if (isA) return;
+                                    if (isB) { setCfg(p => ({ ...p, doubleGroupB: p.doubleGroupA, doubleGroupA: opt.id })); return; }
+                                    setCfg(p => ({ ...p, doubleGroupB: opt.id }));
+                                  }}
+                                  className={`relative py-2 rounded-lg border text-center text-xs font-bold transition-all ${role ? '' : 'bg-[#1e2538] border-white/5 hover:border-white/20 text-muted-foreground'}`}
+                                  style={role ? { background: opt.color + '20', borderColor: opt.color + '60', color: opt.color } : {}}
+                                >
+                                  {opt.label}
+                                  {role && (
+                                    <div className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full text-[9px] font-bold flex items-center justify-center text-black"
+                                      style={{ background: opt.color }}>
+                                      {role}
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Preview */}
+                        <div className="p-3 rounded-xl bg-[#1e2538] border border-white/8">
+                          <div className="text-[10px] text-muted-foreground mb-2">当前双组配置 · 投注格式预览</div>
+                          <div className="flex items-center gap-2">
+                            {(() => {
+                              const a = BET_OPTION_META.find(m => m.id === cfg.doubleGroupA)!;
+                              const b = BET_OPTION_META.find(m => m.id === cfg.doubleGroupB)!;
+                              return (
+                                <>
+                                  <span className="text-sm font-bold px-2 py-1 rounded-lg" style={{ background: a.color + '20', color: a.color }}>{a.label}</span>
+                                  <span className="text-white font-bold">+</span>
+                                  <span className="text-sm font-bold px-2 py-1 rounded-lg" style={{ background: b.color + '20', color: b.color }}>{b.label}</span>
+                                  <span className="text-muted-foreground text-xs ml-1">→ 投注：{a.label}+{b.label}</span>
+                                </>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── KILL GROUP MODE ── */}
+                    {cfg.playMode === 'kill' && (
+                      <div className="space-y-3">
+                        <div className="bg-[#1a2035] border border-white/8 rounded-xl p-4">
+                          <div className="text-xs text-white font-medium mb-1">杀组投注</div>
+                          <div className="text-[10px] text-muted-foreground mb-4">选择要杀掉的方向，机器人将押注其余三项</div>
+
+                          {/* 4-quadrant kill selector */}
+                          <div className="grid grid-cols-2 gap-2">
+                            {QUADRANT_OPTIONS.map(optId => {
+                              const opt = BET_OPTION_META.find(m => m.id === optId)!;
+                              const isKilled = cfg.killOption === optId;
+                              const isActive = !isKilled;
+                              return (
+                                <button key={optId}
+                                  onClick={() => setCfg(p => ({ ...p, killOption: optId }))}
+                                  className={`relative p-4 rounded-xl border text-center transition-all ${
+                                    isKilled
+                                      ? 'bg-[#f44336]/10 border-[#f44336]/50'
+                                      : 'bg-[#10b981]/10 border-[#10b981]/30'
+                                  }`}
+                                >
+                                  <div className="text-lg font-bold mb-1" style={{ color: isKilled ? '#f44336' : opt.color }}>
+                                    {opt.label}
+                                  </div>
+                                  {isKilled ? (
+                                    <div className="text-[10px] text-[#f44336] font-bold">✕ 已杀</div>
+                                  ) : (
+                                    <div className="text-[10px] text-[#10b981]">✓ 投注</div>
+                                  )}
+                                  {isKilled && (
+                                    <div className="absolute inset-0 rounded-xl flex items-center justify-center pointer-events-none">
+                                      <div className="w-full h-0.5 bg-[#f44336]/40 absolute" style={{ transform: 'rotate(-12deg)' }} />
+                                    </div>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Kill group preview */}
+                        <div className="p-3 rounded-xl bg-[#1e2538] border border-white/8">
+                          <div className="text-[10px] text-muted-foreground mb-2">杀组预览 · 实际下注方向</div>
+                          <div className="flex flex-wrap gap-2 items-center">
+                            {QUADRANT_OPTIONS.filter(o => o !== cfg.killOption).map(optId => {
+                              const opt = BET_OPTION_META.find(m => m.id === optId)!;
+                              return (
+                                <span key={optId} className="text-sm font-bold px-2.5 py-1 rounded-lg"
+                                  style={{ background: opt.color + '20', color: opt.color, border: `1px solid ${opt.color}40` }}>
+                                  {opt.label}
+                                </span>
+                              );
+                            })}
+                            <span className="text-[10px] text-muted-foreground">
+                              → 投注：{QUADRANT_OPTIONS.filter(o => o !== cfg.killOption).map(o => BET_OPTION_META.find(m => m.id === o)!.label).join('+')}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-[10px] text-[#c8a520]">
+                            杀 <span className="font-bold text-[#f44336]">{BET_OPTION_META.find(m => m.id === cfg.killOption)?.label}</span>，共押注 3 项
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Bottom summary */}
+                    <div className="p-3 rounded-xl bg-[#0d1117] border border-white/5">
+                      <div className="text-[10px] text-muted-foreground mb-1.5">实际生效的投注方向</div>
                       <div className="flex flex-wrap gap-1.5">
-                        {cfg.betOptions.length === 0 ? (
-                          <span className="text-xs text-[#f44336]">请至少选择一个选项</span>
-                        ) : cfg.betOptions.map(opt => {
-                          const meta = BET_OPTION_META.find(m => m.id === opt)!;
+                        {getEffectiveBetOptions(cfg).map(optId => {
+                          const opt = BET_OPTION_META.find(m => m.id === optId)!;
                           return (
-                            <span key={opt} className="text-xs px-2 py-0.5 rounded-full font-medium"
-                              style={{ background: meta.color + '20', color: meta.color, border: `1px solid ${meta.color}40` }}>
-                              {meta.label}
+                            <span key={optId} className="text-xs font-medium px-2 py-0.5 rounded-full"
+                              style={{ background: opt.color + '20', color: opt.color, border: `1px solid ${opt.color}40` }}>
+                              {opt.label}
                             </span>
                           );
                         })}
