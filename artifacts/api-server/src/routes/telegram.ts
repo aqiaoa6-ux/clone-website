@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { Api } from "telegram";
@@ -151,6 +151,17 @@ const betLog: BetRecord[] = [];
 let messageHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
 let kkpayHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
 
+// ─── SSE client registry ──────────────────────────────────────────────────────
+const sseClients = new Set<Response>();
+
+function pushEvent(type: string, payload: Record<string, unknown>): void {
+  if (sseClients.size === 0) return;
+  const data = JSON.stringify({ type, ...payload });
+  for (const res of sseClients) {
+    try { res.write(`data: ${data}\n\n`); } catch { sseClients.delete(res); }
+  }
+}
+
 async function fetchGroups(client: TelegramClient): Promise<GroupInfo[]> {
   try {
     const dialogs = await client.getDialogs({ limit: 100 });
@@ -253,6 +264,11 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
       session.balance = bal;
       session.balanceSource = "kkpay";
       session.balanceUpdatedAt = Date.now();
+      pushEvent("balance:update", {
+        balance: session.balance,
+        balanceSource: session.balanceSource,
+        balanceUpdatedAt: session.balanceUpdatedAt,
+      });
     }
   };
 
@@ -471,6 +487,8 @@ function startWatching(session: TgSession) {
         period: parsePeriodFromMessage(text),
       });
       if (betLog.length > 200) betLog.pop();
+      // Push real-time event to SSE clients
+      pushEvent("bet:new", { bet: betLog[0] });
       // Query kkpay balance 2 s after bet is placed
       queryKkpayBalance(session, 2000);
     } catch {
@@ -886,6 +904,19 @@ router.post("/tg/bet-result", (req, res) => {
     queryKkpayBalance(tgSession, 1000);
   }
 
+  // Push real-time event: updated record + latest stats
+  if (record) {
+    pushEvent("bet:result", {
+      bet: record,
+      balance: tgSession.balance,
+      todayPnl: tgSession.todayPnl,
+      sessionPnl: tgSession.sessionPnl,
+      totalBets: betLog.filter(b => b.status === "won" || b.status === "lost").length +
+                 betLog.filter(b => b.status === "sent").length,
+      wins: betLog.filter(b => b.status === "won").length,
+    });
+  }
+
   res.json({
     ok: true,
     consecutiveLosses: tgSession.consecutiveLosses,
@@ -977,6 +1008,26 @@ router.post("/tg/set-group", (req, res) => {
 // ─── Bet log ──────────────────────────────────────────────────────────────────
 router.get("/tg/bets", (_req, res) => {
   res.json({ bets: betLog.slice(0, 50) });
+});
+
+// ─── SSE event stream ─────────────────────────────────────────────────────────
+router.get("/tg/events", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write(": connected\n\n");
+  sseClients.add(res);
+
+  const heartbeat = setInterval(() => {
+    try { res.write(": ping\n\n"); } catch { /* ignore */ }
+  }, 20000);
+
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    sseClients.delete(res);
+  });
 });
 
 // ─── Disconnect ───────────────────────────────────────────────────────────────

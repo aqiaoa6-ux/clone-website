@@ -188,8 +188,53 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchBetsAndStats();
-    const poll = setInterval(fetchBetsAndStats, 15000);
-    return () => clearInterval(poll);
+    const poll = setInterval(fetchBetsAndStats, 5000);
+
+    // SSE real-time updates
+    const es = new EventSource('/api/tg/events');
+    es.onmessage = (e: MessageEvent<string>) => {
+      try {
+        const ev = JSON.parse(e.data) as {
+          type: string;
+          bet?: BetRecord;
+          balance?: number;
+          balanceSource?: 'manual' | 'kkpay';
+          balanceUpdatedAt?: number;
+          todayPnl?: number;
+          sessionPnl?: number;
+          totalBets?: number;
+          wins?: number;
+        };
+        if (ev.type === 'bet:new' && ev.bet) {
+          setRecords(prev => {
+            const exists = prev.some(r => r.id === ev.bet!.id);
+            return exists ? prev : [ev.bet!, ...prev.slice(0, 49)];
+          });
+          if (ev.balance !== undefined) setBalance(ev.balance);
+        } else if (ev.type === 'bet:result' && ev.bet) {
+          setRecords(prev => prev.map(r => r.id === ev.bet!.id ? ev.bet! : r));
+          if (ev.balance !== undefined) setBalance(ev.balance);
+          if (ev.todayPnl !== undefined) setTodayPnl(ev.todayPnl);
+          if (ev.sessionPnl !== undefined) setTotalPnl(ev.sessionPnl);
+          if (ev.totalBets !== undefined) setTotalBets(ev.totalBets);
+          if (ev.wins !== undefined) {
+            setWins(ev.wins);
+            if (ev.totalBets && ev.totalBets > 0) {
+              setWinRate(((ev.wins / ev.totalBets) * 100).toFixed(2));
+            }
+          }
+        } else if (ev.type === 'balance:update') {
+          if (ev.balance !== undefined) setBalance(ev.balance);
+          if (ev.balanceSource) setBalanceSource(ev.balanceSource);
+          if (ev.balanceUpdatedAt !== undefined) setBalanceUpdatedAt(ev.balanceUpdatedAt);
+        }
+      } catch { /* ignore */ }
+    };
+
+    return () => {
+      clearInterval(poll);
+      es.close();
+    };
   }, [fetchBetsAndStats]);
 
   function handleConnected(me: MeInfo) {
