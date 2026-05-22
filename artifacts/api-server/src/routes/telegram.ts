@@ -73,6 +73,8 @@ interface TgSession {
   balance: number;
   todayPnl: number;
   todayResetAt: number;
+  // per-period dedup
+  lastBetPeriod?: number;
   // kkpay integration
   kkpayUsername: string;
   kkpayEntityId?: string;
@@ -361,12 +363,12 @@ function parseBalanceFromKkpay(text: string): number | null {
   return null;
 }
 
-function queryKkpayBalance(session: TgSession, delayMs = 0): void {
-  if (!session.kkpayEntityId && !session.kkpayUsername) return;
+// Send "ye" to the bet group — kkpay bot in the group responds with balance
+function queryBalanceInGroup(session: TgSession, delayMs = 0): void {
+  if (!session.watchGroupId) return;
   const fire = async () => {
     try {
-      const target = session.kkpayEntityId ?? session.kkpayUsername;
-      await session.client.sendMessage(target, { message: "/balance" });
+      await session.client.sendMessage(session.watchGroupId!, { message: "ye" });
     } catch { /* ignore */ }
   };
   if (delayMs > 0) setTimeout(() => { void fire(); }, delayMs);
@@ -568,10 +570,21 @@ function startWatching(session: TgSession) {
     if (!session.cfg.autoBet) return;
 
     const msg = event.message;
+    // Never react to our own outgoing messages — prevents bet loops
+    if (msg.out) return;
+
     const chatId = String(msg.chatId);
     if (chatId !== targetId && `-100${chatId}` !== targetId) return;
 
+    const senderId = String(msg.senderId ?? "");
+    // Skip messages from the kkpay bot — those are balance replies, not signals
+    if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
+
     const text = msg.message ?? "";
+
+    // Per-period dedup: only bet once per lottery period
+    const triggerPeriod = parsePeriodFromMessage(text);
+    if (triggerPeriod && triggerPeriod === session.lastBetPeriod) return;
 
     // Determine what to bet via algorithm or legacy betType
     let betContent: string;
@@ -603,7 +616,7 @@ function startWatching(session: TgSession) {
         timestamp: Date.now(),
         status: "paused",
         pauseReason: risk.reason,
-        period: parsePeriodFromMessage(text),
+        period: triggerPeriod,
       });
       if (betLog.length > 200) betLog.pop();
       return;
@@ -614,10 +627,12 @@ function startWatching(session: TgSession) {
     );
 
     try {
+      // Format: 大100 / 小100 / 小单100 / 大单100
       await session.client.sendMessage(targetId, {
-        message: `投注：${betContent}  金额：${session.currentBet}`,
+        message: `${betContent}${session.currentBet}`,
       });
       session.lastBetAt = Date.now();
+      if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
       betLog.unshift({
         id: String(Date.now()),
         groupId: targetId,
@@ -627,13 +642,13 @@ function startWatching(session: TgSession) {
         amount: session.currentBet,
         timestamp: Date.now(),
         status: "sent",
-        period: parsePeriodFromMessage(text),
+        period: triggerPeriod,
       });
       if (betLog.length > 200) betLog.pop();
       // Push real-time event to SSE clients
       pushEvent("bet:new", { bet: betLog[0] });
-      // Query kkpay balance 2 s after bet is placed
-      queryKkpayBalance(session, 2000);
+      // Send "ye" to the group to get updated balance from kkpay bot
+      queryBalanceInGroup(session, 2000);
     } catch {
       betLog.unshift({
         id: String(Date.now()),
@@ -924,13 +939,13 @@ router.post("/tg/kkpay", async (req, res) => {
   });
 });
 
-// ─── Manual balance refresh (sends /balance to kkpay) ─────────────────────────
+// ─── Manual balance refresh (sends "ye" to the bet group) ────────────────────
 router.post("/tg/kkpay/refresh", (_req, res) => {
   if (!tgSession) {
     res.status(401).json({ error: "未登录" });
     return;
   }
-  queryKkpayBalance(tgSession, 0);
+  queryBalanceInGroup(tgSession, 0);
   res.json({ ok: true, querying: true });
 });
 
@@ -1042,8 +1057,8 @@ router.post("/tg/bet-result", (req, res) => {
       tgSession.consecutiveLosses += 1;
     }
     tgSession.currentBet = computeNextBet(tgSession, won);
-    // Query kkpay balance 1 s after result arrives
-    queryKkpayBalance(tgSession, 1000);
+    // Send "ye" to group to get updated balance from kkpay bot
+    queryBalanceInGroup(tgSession, 1000);
   }
 
   // Push real-time event: updated record + latest stats
