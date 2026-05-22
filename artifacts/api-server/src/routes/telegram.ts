@@ -383,6 +383,56 @@ function queryBalanceInGroup(session: TgSession, delayMs = 0): void {
   else void fire();
 }
 
+// ─── Settle a bet result (shared by kkpayHandler auto-detect & /tg/bet-result) ─
+function settleBet(
+  session: TgSession,
+  opts: { won: boolean; pnl?: number; result?: string; betId?: string },
+): void {
+  const { won, pnl, result, betId } = opts;
+
+  if (pnl !== undefined) {
+    session.sessionPnl += pnl;
+    session.balance += pnl;
+    const midnight = todayMidnight();
+    if (session.todayResetAt < midnight) {
+      session.todayPnl = 0;
+      session.todayResetAt = midnight;
+    }
+    session.todayPnl += pnl;
+  }
+
+  const record = betId
+    ? betLog.find(b => b.id === betId)
+    : betLog.find(b => b.status === "sent");
+  if (record) {
+    record.won = won;
+    record.status = won ? "won" : "lost";
+    if (pnl !== undefined) record.pnl = pnl;
+    if (result) record.lotteryResult = result;
+  }
+
+  if (result) {
+    session.recentResults.push(result);
+    if (session.recentResults.length > 30) session.recentResults.shift();
+  }
+
+  session.consecutiveLosses = won ? 0 : session.consecutiveLosses + 1;
+  session.currentBet = computeNextBet(session, won);
+
+  if (record) {
+    pushEvent("bet:result", {
+      bet: record,
+      balance: session.balance,
+      todayPnl: session.todayPnl,
+      sessionPnl: session.sessionPnl,
+      totalBets:
+        betLog.filter(b => b.status === "won" || b.status === "lost").length +
+        betLog.filter(b => b.status === "sent").length,
+      wins: betLog.filter(b => b.status === "won").length,
+    });
+  }
+}
+
 async function startKkpayWatcher(session: TgSession): Promise<void> {
   // Remove previous handler using the stored builder instance
   if (kkpayHandler && kkpayHandlerBuilder) {
@@ -417,6 +467,7 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
 
     if (!isFromKkpay && !inWatchGroup) return;
 
+    // ── Balance update (any kkpay message in the group) ──────────────────────
     const bal = parseBalanceFromKkpay(text);
     if (bal !== null) {
       session.balance = bal;
@@ -428,6 +479,36 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
         balanceUpdatedAt: session.balanceUpdatedAt,
       });
       saveSession();
+    }
+
+    // ── Win / loss auto-settle (only from kkpay bot's own messages) ──────────
+    if (isFromKkpay && tgSession === session) {
+      const hasWin  = /中奖|✅/.test(text);
+      const hasLoss = /挂逼|未中|未赢|❌/.test(text);
+
+      if (hasWin || hasLoss) {
+        const sentBet = betLog.find(b => b.status === "sent");
+        if (sentBet) {
+          // Extract signed P&L, e.g. "+700000 KKCOIN" or "KKCOIN -100000"
+          const pnlMatch =
+            text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ??
+            text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i);
+          const pnl = pnlMatch
+            ? parseFloat(pnlMatch[1].replace(/,/g, ""))
+            : undefined;
+
+          // Extract lottery result keyword (大单/小双/大/小/单/双)
+          const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
+
+          settleBet(session, {
+            won: hasWin && !hasLoss,
+            pnl,
+            result: rMatch?.[0],
+            betId: sentBet.id,
+          });
+          queryBalanceInGroup(session, 1000);
+        }
+      }
     }
   };
 
@@ -1050,59 +1131,9 @@ router.post("/tg/bet-result", (req, res) => {
     return;
   }
 
-  if (pnl !== undefined) {
-    tgSession.sessionPnl += pnl;
-    // Update balance and todayPnl
-    tgSession.balance += pnl;
-    const midnight = todayMidnight();
-    if (tgSession.todayResetAt < midnight) {
-      tgSession.todayPnl = 0;
-      tgSession.todayResetAt = midnight;
-    }
-    tgSession.todayPnl += pnl;
-  }
-
-  // Update the matching bet record
-  const record = betId
-    ? betLog.find(b => b.id === betId)
-    : betLog.find(b => b.status === "sent");
-  if (record) {
-    if (won !== undefined) {
-      record.won = won;
-      record.status = won ? "won" : "lost";
-    }
-    if (pnl !== undefined) record.pnl = pnl;
-    if (result) record.lotteryResult = result;
-  }
-
-  // Record recent result for algorithm 3 & 4
-  if (result) {
-    tgSession.recentResults.push(result);
-    if (tgSession.recentResults.length > 30) tgSession.recentResults.shift();
-  }
-
   if (won !== undefined) {
-    if (won) {
-      tgSession.consecutiveLosses = 0;
-    } else {
-      tgSession.consecutiveLosses += 1;
-    }
-    tgSession.currentBet = computeNextBet(tgSession, won);
-    // Send "ye" to group to get updated balance from kkpay bot
+    settleBet(tgSession, { won, pnl, result, betId });
     queryBalanceInGroup(tgSession, 1000);
-  }
-
-  // Push real-time event: updated record + latest stats
-  if (record) {
-    pushEvent("bet:result", {
-      bet: record,
-      balance: tgSession.balance,
-      todayPnl: tgSession.todayPnl,
-      sessionPnl: tgSession.sessionPnl,
-      totalBets: betLog.filter(b => b.status === "won" || b.status === "lost").length +
-                 betLog.filter(b => b.status === "sent").length,
-      wins: betLog.filter(b => b.status === "won").length,
-    });
   }
 
   res.json({

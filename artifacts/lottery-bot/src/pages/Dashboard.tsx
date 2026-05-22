@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button';
 import { Menu, Moon, RefreshCw, Users, SlidersHorizontal } from 'lucide-react';
 import SettingsDrawer from '@/components/SettingsDrawer';
 import TelegramLoginModal from '@/components/TelegramLoginModal';
-import GroupSetupModal from '@/components/GroupSetupModal';
 import BetConfigModal, { type BetConfig } from '@/components/BetConfigModal';
 import TrendModal from '@/components/TrendModal';
 import type { LotteryTerm as TrendTerm } from '@/components/TrendModal';
@@ -49,8 +48,8 @@ interface BetRecord {
   won?: boolean;
 }
 
-const STATUS_LABEL: Record<string, string> = { sent: '挂', won: '中', lost: '未中', paused: '停', failed: '失败' };
-const STATUS_COLOR: Record<string, string> = { sent: '#f44336', won: '#00e676', lost: '#f44336', paused: '#c8a520', failed: '#888' };
+const STATUS_LABEL: Record<string, string> = { sent: '待开奖', won: '中奖', lost: '挂逼', paused: '停', failed: '失败' };
+const STATUS_COLOR: Record<string, string> = { sent: '#c8a520', won: '#00e676', lost: '#f44336', paused: '#888', failed: '#555' };
 
 function getSumColor(result: number): string {
   const blue = [0, 1, 3, 4, 9, 10, 14, 15, 20];
@@ -63,7 +62,6 @@ function getSumColor(result: number): string {
 export default function Dashboard() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
-  const [groupOpen, setGroupOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [countdown, setCountdown] = useState(0);
   const [currentPeriod, setCurrentPeriod] = useState(0);
@@ -270,7 +268,7 @@ export default function Dashboard() {
   function handleConnected(me: MeInfo) {
     setTgMe(me);
     setLoginOpen(false);
-    setTimeout(() => setGroupOpen(true), 400);
+    setTimeout(() => setBetSetupOpen(true), 400);
   }
 
   async function handleDisconnect() {
@@ -322,7 +320,7 @@ export default function Dashboard() {
             )}
             <Button
               size="sm"
-              onClick={() => tgMe ? setGroupOpen(true) : setLoginOpen(true)}
+              onClick={() => tgMe ? setBetSetupOpen(true) : setLoginOpen(true)}
               className={`${tgMe ? 'bg-green-600 hover:bg-green-700' : 'bg-[#3b5de7] hover:bg-blue-600'} text-white h-8 text-xs px-3`}
               data-testid="button-connect-tg"
             >
@@ -376,7 +374,7 @@ export default function Dashboard() {
             </div>
             <div className="flex items-center gap-3">
               <button
-                onClick={() => setGroupOpen(true)}
+                onClick={() => setBetSetupOpen(true)}
                 className="flex items-center gap-1 text-xs text-[#4CA2FF] hover:text-blue-400 transition-colors"
                 data-testid="button-set-group"
               >
@@ -627,14 +625,13 @@ export default function Dashboard() {
           tgMe={tgMe}
           watchGroup={watchGroup}
           onConnectTg={() => { setDrawerOpen(false); setTimeout(() => setLoginOpen(true), 200); }}
-          onSetGroup={() => { setDrawerOpen(false); setTimeout(() => setGroupOpen(true), 200); }}
+          onSetGroup={() => { setDrawerOpen(false); setTimeout(() => setBetSetupOpen(true), 200); }}
           onDisconnect={handleDisconnect}
           onOpenConfig={() => { setDrawerOpen(false); setTimeout(() => setConfigOpen(true), 200); }}
           onOpenTrend={() => { setDrawerOpen(false); setTimeout(() => setTrendOpen(true), 200); }}
           onOpenBetSetup={() => { setDrawerOpen(false); setTimeout(() => setBetSetupOpen(true), 200); }}
         />
         <TelegramLoginModal isOpen={loginOpen} onClose={() => setLoginOpen(false)} onConnected={handleConnected} />
-        <GroupSetupModal isOpen={groupOpen} onClose={() => setGroupOpen(false)} onGroupSet={setWatchGroup} currentGroupId={watchGroup?.id} />
         <BetConfigModal
           isOpen={configOpen}
           onClose={() => setConfigOpen(false)}
