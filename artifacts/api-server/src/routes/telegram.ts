@@ -431,6 +431,9 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
 
   kkpayHandler = async (event: NewMessageEvent) => {
     const msg = event.message;
+    // Skip our own outgoing messages
+    if (msg.out) return;
+
     const text = msg.message ?? "";
     if (!text) return;
 
@@ -441,57 +444,54 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
     const eid = session.kkpayEntityId;
 
     // Match: (a) message from kkpay entity anywhere, OR (b) any message in the watch group
-    const isFromKkpay = eid && (senderId === eid || chatId === eid || `-100${chatId}` === eid);
-    const inWatchGroup = wgid && (chatId === wgid || `-100${chatId}` === wgid);
+    const isFromKkpay = eid ? (senderId === eid || chatId === eid || `-100${chatId}` === eid) : false;
+    const inWatchGroup = wgid ? (chatId === wgid || `-100${chatId}` === wgid) : false;
 
     if (!isFromKkpay && !inWatchGroup) return;
 
-    // ── Balance update — only from win/loss results for OUR sent bet ─────────
-    // We never send "ye", so balance only comes from kkpay win/loss messages.
-    // We update only when we have a "sent" bet (i.e. the result is ours).
+    // ── Win / loss auto-settle ────────────────────────────────────────────────
+    // Settle from: the resolved kkpay entity, OR any message in the watch group
+    // that contains KKCOIN (kkpay result messages always include KKCOIN amounts).
+    const hasWin  = /中奖|✅/.test(text);
+    const hasLoss = /挂逼|未中|未赢|❌/.test(text);
+    const isKkpayResult = isFromKkpay || (inWatchGroup && /KKCOIN/i.test(text));
 
-    // ── Win / loss auto-settle (only from kkpay bot's own messages) ──────────
-    if (isFromKkpay && tgSession === session) {
-      const hasWin  = /中奖|✅/.test(text);
-      const hasLoss = /挂逼|未中|未赢|❌/.test(text);
+    if (isKkpayResult && (hasWin || hasLoss) && tgSession === session) {
+      const sentBet = betLog.find(b => b.status === "sent");
+      if (sentBet) {
+        // Extract signed P&L, e.g. "+700000 KKCOIN" or "KKCOIN -100000"
+        const pnlMatch =
+          text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ??
+          text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i);
+        const pnl = pnlMatch
+          ? parseFloat(pnlMatch[1].replace(/,/g, ""))
+          : undefined;
 
-      if (hasWin || hasLoss) {
-        const sentBet = betLog.find(b => b.status === "sent");
-        if (sentBet) {
-          // Extract signed P&L, e.g. "+700000 KKCOIN" or "KKCOIN -100000"
-          const pnlMatch =
-            text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ??
-            text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i);
-          const pnl = pnlMatch
-            ? parseFloat(pnlMatch[1].replace(/,/g, ""))
-            : undefined;
+        // Extract lottery result keyword (大单/小双/大/小/单/双)
+        const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
 
-          // Extract lottery result keyword (大单/小双/大/小/单/双)
-          const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
+        settleBet(session, {
+          won: hasWin && !hasLoss,
+          pnl,
+          result: rMatch?.[0],
+          betId: sentBet.id,
+        });
 
-          settleBet(session, {
-            won: hasWin && !hasLoss,
-            pnl,
-            result: rMatch?.[0],
-            betId: sentBet.id,
+        // Schedule next auto-bet 50 seconds after result
+        scheduleAutoNextBet(session);
+
+        // Update absolute balance if kkpay includes it in the result message
+        const absBal = parseBalanceFromKkpay(text);
+        if (absBal !== null) {
+          session.balance = absBal;
+          session.balanceSource = "kkpay";
+          session.balanceUpdatedAt = Date.now();
+          pushEvent("balance:update", {
+            balance: session.balance,
+            balanceSource: session.balanceSource,
+            balanceUpdatedAt: session.balanceUpdatedAt,
           });
-
-          // Schedule next auto-bet 30 seconds after result
-          scheduleAutoNextBet(session);
-
-          // Update absolute balance if kkpay includes it in the result message
-          const absBal = parseBalanceFromKkpay(text);
-          if (absBal !== null) {
-            session.balance = absBal;
-            session.balanceSource = "kkpay";
-            session.balanceUpdatedAt = Date.now();
-            pushEvent("balance:update", {
-              balance: session.balance,
-              balanceSource: session.balanceSource,
-              balanceUpdatedAt: session.balanceUpdatedAt,
-            });
-            saveSession();
-          }
+          saveSession();
         }
       }
     }
