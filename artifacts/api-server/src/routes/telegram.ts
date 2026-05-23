@@ -496,6 +496,29 @@ function buildHistory(session: TgSession): string[] {
     : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
 }
 
+/**
+ * 顺势而为：只看最近 3 期结果，多数方向即为投注方向。
+ * 平局（大小各半等）时跟最新一期，不受 10 期整体频率干扰。
+ */
+function streakFollow(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return null;
+  const history = buildHistory(session);
+  const mapped = history.slice(-3)
+    .map(r => mapR3ToEnabled(r, labels))
+    .filter((x): x is string => x !== null);
+  if (!mapped.length) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  // Majority vote
+  const freq: Record<string, number> = {};
+  for (const l of labels) freq[l] = 0;
+  for (const r of mapped) freq[r] = (freq[r] ?? 0) + 1;
+  const maxCount = Math.max(...Object.values(freq));
+  const winners = Object.entries(freq).filter(([, c]) => c === maxCount).map(([l]) => l);
+  // Tie → follow the most recent result
+  if (winners.length > 1) return mapped[mapped.length - 1] ?? null;
+  return winners[0] ?? null;
+}
+
 function dragonRide(session: TgSession): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   if (!labels.length) return null;
@@ -586,7 +609,7 @@ function decideBet(session: TgSession, signalText: string): string | null {
     const rev = opp[p];
     return (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
   }
-  if (algoId === "streak_follow") return freqPick(history, labels, false);
+  if (algoId === "streak_follow") return streakFollow(session);
   if (algoId === "cold_pick") return freqPick(history, labels, true);
   return freqPick(history, labels, true);
 }
@@ -602,6 +625,7 @@ function decideBetAuto(session: TgSession): string | null {
   if (algoId === "dragon_break") return dragonBreak(session);
   if (algoId === "momentum") return momentum(session);
   if (algoId === "anti_streak") return antiStreak(session);
+  if (algoId === "streak_follow") return streakFollow(session);
   const history = buildHistory(session);
   return freqPick(history, labels, algoId === "cold_pick");
 }
