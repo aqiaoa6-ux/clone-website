@@ -582,6 +582,8 @@ async function runAutoBet(session: TgSession): Promise<void> {
   const direction = decideBetAuto(session);
   if (!direction) return;
   await placeBet(session, direction);
+  // Query balance after bet — kkpay reply shows actual deducted balance
+  void sendYeForBalance(session);
 }
 
 function scheduleNextBet(session: TgSession, closeTimeMs: number, cycleMs: number): void {
