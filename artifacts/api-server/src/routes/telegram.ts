@@ -82,6 +82,7 @@ interface TgSession {
   lastBetAt: number;
   currentLevel: number;
   algIndex: number;
+  lastAlgoUsed?: AlgorithmId;
   recentResults: string[];
   betPlacedThisCycle: boolean;
   lastBetPeriod?: number;
@@ -586,48 +587,63 @@ function decideBet(session: TgSession, signalText: string): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   if (!labels.length || !session.cfg.algorithms.length) return null;
   const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
-  session.algIndex++;
 
-  if (algoId === "ai_trend") return decideAI(session);
-  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
-  if (algoId === "dragon_ride") return dragonRide(session);
-  if (algoId === "dragon_break") return dragonBreak(session);
-  if (algoId === "momentum") return momentum(session);
-  if (algoId === "anti_streak") return antiStreak(session);
-
-  const history = buildHistory(session);
-
-  if (algoId === "signal_follow") {
-    const p = parseBetLabel(signalText);
-    if (!p) return null;
-    return labels.includes(p) ? p : (labels[0] ?? null);
+  let direction: string | null = null;
+  if (algoId === "ai_trend") direction = decideAI(session);
+  else if (algoId === "random") direction = labels[Math.floor(Math.random() * labels.length)] ?? null;
+  else if (algoId === "dragon_ride") direction = dragonRide(session);
+  else if (algoId === "dragon_break") direction = dragonBreak(session);
+  else if (algoId === "momentum") direction = momentum(session);
+  else if (algoId === "anti_streak") direction = antiStreak(session);
+  else if (algoId === "streak_follow") direction = streakFollow(session);
+  else {
+    const history = buildHistory(session);
+    if (algoId === "signal_follow") {
+      const p = parseBetLabel(signalText);
+      direction = p ? (labels.includes(p) ? p : (labels[0] ?? null)) : null;
+    } else if (algoId === "signal_reverse") {
+      const p = parseBetLabel(signalText);
+      if (p) {
+        const opp: Record<string, string> = { 大:"小", 小:"大", 单:"双", 双:"单", 大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单" };
+        const rev = opp[p];
+        direction = (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
+      }
+    } else if (algoId === "cold_pick") direction = freqPick(history, labels, true);
+    else direction = freqPick(history, labels, true);
   }
-  if (algoId === "signal_reverse") {
-    const p = parseBetLabel(signalText);
-    if (!p) return null;
-    const opp: Record<string, string> = { 大:"小", 小:"大", 单:"双", 双:"单", 大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单" };
-    const rev = opp[p];
-    return (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
+
+  // Only advance index and record algo when we actually produced a direction
+  if (direction !== null) {
+    session.algIndex++;
+    session.lastAlgoUsed = algoId;
   }
-  if (algoId === "streak_follow") return streakFollow(session);
-  if (algoId === "cold_pick") return freqPick(history, labels, true);
-  return freqPick(history, labels, true);
+  return direction;
 }
 
 function decideBetAuto(session: TgSession): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   if (!labels.length || !session.cfg.algorithms.length) return null;
   const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
-  session.algIndex++;
-  if (algoId === "ai_trend") return decideAI(session);
-  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
-  if (algoId === "dragon_ride") return dragonRide(session);
-  if (algoId === "dragon_break") return dragonBreak(session);
-  if (algoId === "momentum") return momentum(session);
-  if (algoId === "anti_streak") return antiStreak(session);
-  if (algoId === "streak_follow") return streakFollow(session);
-  const history = buildHistory(session);
-  return freqPick(history, labels, algoId === "cold_pick");
+
+  let direction: string | null = null;
+  if (algoId === "ai_trend") direction = decideAI(session);
+  else if (algoId === "random") direction = labels[Math.floor(Math.random() * labels.length)] ?? null;
+  else if (algoId === "dragon_ride") direction = dragonRide(session);
+  else if (algoId === "dragon_break") direction = dragonBreak(session);
+  else if (algoId === "momentum") direction = momentum(session);
+  else if (algoId === "anti_streak") direction = antiStreak(session);
+  else if (algoId === "streak_follow") direction = streakFollow(session);
+  else {
+    const history = buildHistory(session);
+    direction = freqPick(history, labels, algoId === "cold_pick");
+  }
+
+  // Only advance index and record algo when we actually produced a direction
+  if (direction !== null) {
+    session.algIndex++;
+    session.lastAlgoUsed = algoId;
+  }
+  return direction;
 }
 
 function decideAI(session: TgSession): string | null {
@@ -1118,6 +1134,7 @@ router.get("/tg/status", requireCard, (req, res) => {
     kkpayEntityId: session.kkpayEntityId,
     riskBlocked: !checkRisk(session).ok,
     riskReason: checkRisk(session).reason,
+    lastAlgoUsed: session.lastAlgoUsed,
     ...stats,
   });
 });

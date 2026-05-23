@@ -157,6 +157,7 @@ export interface TgStatus {
   kkpayEntityId?: string;
   riskBlocked?: boolean;
   riskReason?: string;
+  lastAlgoUsed?: string;
   totalBets?: number;
   settled?: number;
   wins?: number;

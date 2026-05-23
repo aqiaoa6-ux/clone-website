@@ -805,7 +805,7 @@ export default function Dashboard() {
                   <div className="text-white font-semibold">自动投注</div>
                   <div className="text-slate-500 text-xs mt-0.5">
                     {status.autoBet
-                      ? `运行中 · ${ALGO_LABELS[status.algorithms?.[0] ?? ""] ?? "未知算法"} · ${BET_OPT_LABELS[status.betOptions?.[0] ?? ""] ?? "?"}`
+                      ? `运行中 · ${ALGO_LABELS[status.lastAlgoUsed ?? status.algorithms?.[0] ?? ""] ?? "未知算法"} · ${BET_OPT_LABELS[status.betOptions?.[0] ?? ""] ?? "?"}`
                       : "已停止"}
                   </div>
                 </div>
