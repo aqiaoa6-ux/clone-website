@@ -638,45 +638,60 @@ function decideAI(session: TgSession): string | null {
 
 // ─── Auto-bet engine ──────────────────────────────────────────────────────────
 
-async function placeChaseNumberBets(session: TgSession): Promise<void> {
-  if (!session.cfg.enableChase || !session.cfg.chaseNumbers.length || !session.watchGroupId) return;
-  const targetId = session.watchGroupId;
-  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
-  for (const { num, amount } of session.cfg.chaseNumbers) {
-    if (amount <= 0) continue;
-    const msg = `${num} ${amount}`;
-    try {
-      await session.client.sendMessage(targetId, { message: msg });
-      const rec: BetRecord = { id: `chase-${num}-${Date.now()}`, groupId: targetId, groupTitle, messageText: "[追号]", betContent: String(num), amount, timestamp: Date.now(), status: "sent", isChase: true };
-      session.betLog.unshift(rec);
-      if (session.betLog.length > 200) session.betLog.pop();
-      pushEvent(session, "bet:new", { bet: rec });
-    } catch {
-      const rec: BetRecord = { id: `chase-${num}-${Date.now()}`, groupId: targetId, groupTitle, messageText: "[追号]", betContent: String(num), amount, timestamp: Date.now(), status: "failed", isChase: true };
-      session.betLog.unshift(rec);
-      if (session.betLog.length > 200) session.betLog.pop();
-      pushEvent(session, "bet:new", { bet: rec });
-    }
-  }
-}
-
-async function placeBet(session: TgSession, direction: string): Promise<void> {
+/**
+ * 将主注 + 所有追号合并为一条消息发出。
+ * 格式示例: "0/100  27/100  大 100"
+ * 各部分仍作为独立 BetRecord 入库，以便分别结算。
+ */
+async function placeAllBets(session: TgSession, direction: string): Promise<void> {
   const { betLog } = session;
   const targetId = session.watchGroupId!;
-  const amount = session.currentBet;
+  const mainAmount = session.currentBet;
   const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
   session.betPlacedThisCycle = true;
+
+  // Build active chase entries
+  const chaseEntries = (session.cfg.enableChase ? session.cfg.chaseNumbers : [])
+    .filter(c => c.amount > 0);
+
+  // Compose single message: "0/100  27/100  大 100"
+  const parts: string[] = [
+    ...chaseEntries.map(c => `${c.num}/${c.amount}`),
+    `${direction} ${mainAmount}`,
+  ];
+  const message = parts.join("  ");
+
+  const now = Date.now();
+  let succeeded = false;
   try {
-    await session.client.sendMessage(targetId, { message: `${direction}${amount}` });
-    session.lastBetAt = Date.now();
-    betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: "[自动投注]", betContent: direction, amount, timestamp: Date.now(), status: "sent" });
-    if (betLog.length > 200) betLog.pop();
-    pushEvent(session, "bet:new", { bet: betLog[0] });
-  } catch {
-    betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: "[自动投注]", betContent: direction, amount, timestamp: Date.now(), status: "failed" });
-    if (betLog.length > 200) betLog.pop();
-    pushEvent(session, "bet:new", { bet: betLog[0] });
+    await session.client.sendMessage(targetId, { message });
+    session.lastBetAt = now;
+    succeeded = true;
+  } catch { /* fall through — log as failed */ }
+
+  const status = succeeded ? "sent" : "failed";
+
+  // Log main bet record
+  const mainRec: BetRecord = {
+    id: `main-${now}`, groupId: targetId, groupTitle,
+    messageText: message, betContent: direction, amount: mainAmount,
+    timestamp: now, status,
+  };
+  betLog.unshift(mainRec);
+  pushEvent(session, "bet:new", { bet: mainRec });
+
+  // Log individual chase records (same message text, each with its own betContent = num)
+  for (const { num, amount } of chaseEntries) {
+    const rec: BetRecord = {
+      id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
+      messageText: message, betContent: String(num), amount,
+      timestamp: now, status, isChase: true,
+    };
+    betLog.unshift(rec);
+    pushEvent(session, "bet:new", { bet: rec });
   }
+
+  if (betLog.length > 200) betLog.length = 200;
 }
 
 async function runAutoBet(session: TgSession): Promise<void> {
@@ -699,8 +714,7 @@ async function runAutoBet(session: TgSession): Promise<void> {
   if (!risk.ok) return;
   const direction = decideBetAuto(session);
   if (!direction) return;
-  await placeBet(session, direction);
-  await placeChaseNumberBets(session);
+  await placeAllBets(session, direction);
 }
 
 function scheduleNextBet(session: TgSession, closeTimeMs: number, cycleMs: number): void {
