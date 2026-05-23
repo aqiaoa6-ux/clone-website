@@ -73,6 +73,7 @@ interface TgSession {
   betPlacedThisCycle: boolean;
   lastBetPeriod?: number;
   currentCloseTimeMs: number;
+  yeMessageId?: number;
   // balance
   balance: number;
   todayPnl: number;
@@ -324,12 +325,14 @@ function parseBalance(text: string): number | null {
   return null;
 }
 
-// Send "ye" to the watch group to trigger kkpay balance reply
+// Send "ye" to the watch group to trigger kkpay balance reply.
+// Records the sent message ID so we only parse kkpay's reply to THIS message.
 async function sendYeForBalance(session: TgSession): Promise<void> {
   if (!session.watchGroupId) return;
   try {
-    await session.client.sendMessage(session.watchGroupId, { message: "ye" });
-    logger.info("[balance] sent 'ye' to watch group for balance query");
+    const sent = await session.client.sendMessage(session.watchGroupId, { message: "ye" });
+    session.yeMessageId = sent.id;
+    logger.info({ msgId: sent.id }, "[balance] sent 'ye', waiting for kkpay reply");
   } catch (err) {
     logger.warn({ err }, "[balance] failed to send 'ye'");
   }
@@ -761,9 +764,19 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     const inWatchGroup = wgid ? (chatId === wgid || `-100${chatId}` === wgid) : false;
     if (!isFromKkpay && !inWatchGroup) return;
 
-    // Update balance from any KKCOIN message in watch group or from kkpay entity
-    if (isFromKkpay || (inWatchGroup && /KKCOIN/i.test(text))) {
+    // Update balance only when:
+    // 1. kkpay replies directly to our "ye" message (identified by replyToMsgId)
+    // 2. OR message comes from kkpay entity directly (private message)
+    if (isFromKkpay && /KKCOIN/i.test(text)) {
+      // Direct message from kkpay entity — always accept
       updateBalance(session, text);
+    } else if (inWatchGroup && /KKCOIN/i.test(text) && session.yeMessageId) {
+      // Group message: only accept if it's kkpay's reply to our exact "ye" message
+      const replyToId = (msg.replyTo as Record<string, unknown> | undefined)?.replyToMsgId as number | undefined;
+      if (replyToId === session.yeMessageId) {
+        updateBalance(session, text);
+        session.yeMessageId = undefined; // consume — only parse once
+      }
     }
 
     // Win/loss settlement
