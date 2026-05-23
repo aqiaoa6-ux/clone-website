@@ -17,7 +17,6 @@
     "stopLoss": 0,
     "targetProfit": 0,
     "cooldownSeconds": 0,
-    "betType": "follow",
     "amountLevels": [
       200,
       300,
@@ -31,6 +30,7 @@
     ],
     "algorithms": [
       "signal_follow"
-    ]
+    ],
+    "betType": "follow"
   }
 }

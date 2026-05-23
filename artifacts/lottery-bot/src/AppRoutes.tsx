@@ -23,7 +23,8 @@ function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: 
 
   if (!user) return <Redirect to="/login" />;
   if (requireAdmin && !user.isAdmin) return <Redirect to="/" />;
-  if (requireCard && !card?.active) return <Redirect to="/card-key" />;
+  // Admins bypass card requirement — they need to access /admin to generate keys
+  if (requireCard && !card?.active && !user.isAdmin) return <Redirect to="/card-key" />;
 
   return <>{children}</>;
 }
@@ -40,6 +41,8 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (user) {
+    // Admins go straight to dashboard (they don't need a card)
+    if (user.isAdmin) return <Redirect to="/" />;
     if (!card?.active) return <Redirect to="/card-key" />;
     return <Redirect to="/" />;
   }

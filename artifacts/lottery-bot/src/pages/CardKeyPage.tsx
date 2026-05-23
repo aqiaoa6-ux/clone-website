@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
 
@@ -10,6 +11,7 @@ const CARD_TYPES = [
 
 export default function CardKeyPage() {
   const { user, logout, refreshCard } = useAuth();
+  const [, setLocation] = useLocation();
   const [key, setKey] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -99,9 +101,18 @@ export default function CardKeyPage() {
               </div>
             </div>
 
-            <p className="text-center text-slate-600 text-xs">
-              请联系管理员获取卡密
-            </p>
+            {user?.isAdmin ? (
+              <button
+                onClick={() => setLocation("/admin")}
+                className="w-full bg-[#161929] border border-[#252a3d] hover:border-blue-500/50 text-blue-400 text-sm font-semibold rounded-xl py-3 transition"
+              >
+                🔑 去后台生成卡密
+              </button>
+            ) : (
+              <p className="text-center text-slate-600 text-xs">
+                请联系管理员获取卡密
+              </p>
+            )}
           </>
         )}
       </div>
