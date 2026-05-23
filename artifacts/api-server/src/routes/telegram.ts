@@ -507,6 +507,22 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
       isFromKkpay ||
       (inWatchGroup && hasPeriodRef && (hasWin || hasLoss || danjineMatch !== null || /KKCOIN/i.test(text)));
 
+    // Always try to parse and update the absolute balance from any kkpay message —
+    // even when there is no pending bet (autoSettle may have already settled it).
+    if (isKkpayResult || isFromKkpay) {
+      const absBalEarly = parseBalanceFromKkpay(text);
+      if (absBalEarly !== null) {
+        session.balance = absBalEarly;
+        session.balanceSource = "kkpay";
+        session.balanceUpdatedAt = Date.now();
+        pushEvent("balance:update", {
+          balance: session.balance,
+          balanceSource: session.balanceSource,
+          balanceUpdatedAt: session.balanceUpdatedAt,
+        });
+      }
+    }
+
     if (isKkpayResult && (isWin || isLoss) && tgSession === session) {
       const sentBet = betLog.find(b => b.status === "sent");
       if (sentBet) {
@@ -542,7 +558,7 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
         });
         // kkpay handles P&L settlement only — draw timing is driven by the lottery poller
 
-        // Update absolute balance if kkpay includes it in the result message
+        // Update absolute balance again after settle (may differ from the early parse above)
         const absBal = parseBalanceFromKkpay(text);
         if (absBal !== null) {
           session.balance = absBal;
@@ -948,8 +964,16 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
 
       session.lastSeenLotteryPeriod = latest.term;
 
-      // 2. Push real-time draw info to the frontend (include closeTime so the
-      //    frontend countdown aligns precisely with the server's bet timer)
+      // Compute timing constants used both for the SSE event and the bet scheduler.
+      // items[0] is the LAST COMPLETED period — closeTime is in the past.
+      // The CURRENT open period ends one cycle later (closeTime + cycleDuration).
+      const closeTimeMs = latest.closeTime ?? 0;
+      const openTimeMs  = latest.openTime  ?? 0;
+      const cycleDurationMs = (closeTimeMs > openTimeMs && closeTimeMs - openTimeMs < 600000)
+        ? (closeTimeMs - openTimeMs)   // measured from real API data (~201 000 ms)
+        : DRAW_CYCLE_MS;               // fallback if fields are missing
+
+      // 2. Push real-time draw info to the frontend.
       pushEvent("draw:new", {
         term: latest.term,
         r3: latest.r3 ?? "",
@@ -957,8 +981,9 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
         sum2: latest.sum2,
         sum3: latest.sum3,
         result: latest.result,
-        closeTime: latest.closeTime,
-        openTime: latest.openTime,
+        closeTime: closeTimeMs,
+        openTime: openTimeMs,
+        nextCloseTime: closeTimeMs + cycleDurationMs,
       });
 
       // 3. Open the new cycle and schedule next bet at 120s before next draw.
@@ -966,14 +991,7 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
       // shared correctly between the message handler and the countdown timer.
       session.betPlacedThisCycle = false;
       if (session.cfg.autoBet && session.watchGroupId) {
-        // openTime/closeTime from pc20.net are already in Unix-milliseconds.
-        // Use them to compute the actual cycle duration for this draw.
-        const closeTimeMs = latest.closeTime ?? 0;
-        const openTimeMs  = latest.openTime  ?? 0;
-        const cycleDurationMs = (closeTimeMs > openTimeMs)
-          ? (closeTimeMs - openTimeMs)   // measured from real API data (~202 000 ms)
-          : DRAW_CYCLE_MS;               // fallback if fields are missing
-        // closeTimeMs is the end of the CURRENT period; next period ends one cycle later.
+        // closeTimeMs is the end of the LAST period; next period ends one cycle later.
         const refClose = closeTimeMs > 0 ? closeTimeMs : Date.now() + cycleDurationMs;
         scheduleAutoNextBet(session, refClose, cycleDurationMs);
       }

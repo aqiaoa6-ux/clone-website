@@ -103,8 +103,10 @@ export default function Dashboard() {
   const [riskBlockReason, setRiskBlockReason] = useState<string | null>(null);
   const nextOpenTimeRef = useRef<number>(0);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fetchScheduledRef = useRef<boolean>(false);
 
   const fetchLotteryData = useCallback(async () => {
+    fetchScheduledRef.current = false;
     try {
       const res = await fetch('/api/lottery/fengpan');
       if (!res.ok) throw new Error('API error');
@@ -114,10 +116,15 @@ export default function Dashboard() {
         const latest = items[0];
         setLatestTerm(latest);
         setAllItems(items as TrendTerm[]);
-        // Use the real closeTime from the API (exact period end) as the countdown target.
-        // closeTime is already in ms. Fall back to the legacy estimate if it's missing or stale.
-        const ct = (latest.closeTime ?? 0);
-        nextOpenTimeRef.current = ct > Date.now() ? ct : latest.openTime + 210000;
+        // items[0] is the LAST COMPLETED period — its closeTime is in the past.
+        // The CURRENT open period ends at closeTime + cycleDuration.
+        const closedAt = latest.closeTime ?? 0;
+        const openedAt = latest.openTime ?? 0;
+        const cycle = (closedAt > openedAt && closedAt - openedAt < 600000)
+          ? closedAt - openedAt
+          : 201000;
+        const nextCloseTime = closedAt + cycle;
+        nextOpenTimeRef.current = nextCloseTime > Date.now() ? nextCloseTime : Date.now() + cycle;
         setCurrentPeriod(latest.term + 1);
         setFetchError(false);
         setLastFetched(new Date());
@@ -142,7 +149,10 @@ export default function Dashboard() {
       setNowMs(now);
       const diff = Math.max(0, Math.floor((nextOpenTimeRef.current - now) / 1000));
       setCountdown(diff);
-      if (diff === 0) setTimeout(fetchLotteryData, 3000);
+      if (diff === 0 && !fetchScheduledRef.current) {
+        fetchScheduledRef.current = true;
+        setTimeout(fetchLotteryData, 3000);
+      }
     }, 1000);
     return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
   }, [fetchLotteryData]);
@@ -247,6 +257,7 @@ export default function Dashboard() {
           result?: number;
           closeTime?: number;
           openTime?: number;
+          nextCloseTime?: number;
           // timer:scheduled fields
           fireAt?: number;
           delaySec?: number;
@@ -278,9 +289,13 @@ export default function Dashboard() {
               sum3: ev.sum3 as number | undefined,
               result: ev.result as number | undefined,
             });
-            // Use real API closeTime for the countdown so it matches the server timer precisely
-            if (ev.closeTime && ev.closeTime > Date.now()) {
-              nextOpenTimeRef.current = ev.closeTime;
+            // nextCloseTime = when the CURRENT open period ends (closeTime + cycle).
+            // closeTime alone is in the past (items[0] = last completed period).
+            if (ev.nextCloseTime) {
+              nextOpenTimeRef.current = ev.nextCloseTime as number;
+            } else if (ev.closeTime && ev.openTime) {
+              const cyc = (ev.closeTime as number) - (ev.openTime as number);
+              nextOpenTimeRef.current = (ev.closeTime as number) + (cyc > 0 ? cyc : 201000);
             }
           }
         } else if (ev.type === 'timer:scheduled') {

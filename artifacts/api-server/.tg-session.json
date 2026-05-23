@@ -19,9 +19,10 @@
     "cooldownSeconds": 0,
     "betType": "follow",
     "amountLevels": [
-      10000,
-      20000,
-      40000
+      200,
+      300,
+      500,
+      1000
     ],
     "stepBackOnWin": true,
     "betOptions": [
@@ -29,7 +30,7 @@
       "small"
     ],
     "algorithms": [
-      "streak_follow"
+      "signal_follow"
     ]
   }
 }
