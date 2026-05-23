@@ -83,6 +83,7 @@ interface TgSession {
   currentLevel: number;
   algIndex: number;
   lastAlgoUsed?: AlgorithmId;
+  currentPattern?: MarketPattern;
   recentResults: string[];
   betPlacedThisCycle: boolean;
   lastBetPeriod?: number;
@@ -497,6 +498,68 @@ function buildHistory(session: TgSession): string[] {
     : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
 }
 
+// ─── Pattern detection & adaptive algorithm selection ─────────────────────────
+
+type MarketPattern = "streak" | "oscillating" | "neutral";
+
+/** 长龙形态适用算法 */
+const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "ai_trend"];
+/** 震荡形态适用算法 */
+const OSCILLATING_ALGOS: AlgorithmId[] = ["anti_streak", "dragon_break", "signal_reverse"];
+/** 中性算法（兜底） */
+const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick"];
+
+/**
+ * 检测最近 8 期走势形态：
+ * - 交替占比 ≥ 65% → 震荡局
+ * - 交替占比 ≤ 35% → 长龙局
+ * - 其他 → 中性
+ */
+function detectPattern(session: TgSession): MarketPattern {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return "neutral";
+  const history = buildHistory(session);
+  const mapped = history.slice(-8)
+    .map(r => mapR3ToEnabled(r, labels))
+    .filter((x): x is string => x !== null);
+  if (mapped.length < 4) return "neutral";
+
+  let alternations = 0;
+  for (let i = 1; i < mapped.length; i++) {
+    if (mapped[i] !== mapped[i - 1]) alternations++;
+  }
+  const ratio = alternations / (mapped.length - 1);
+  if (ratio >= 0.65) return "oscillating";
+  if (ratio <= 0.35) return "streak";
+  return "neutral";
+}
+
+/**
+ * 从用户已选算法中，根据当前形态挑选最合适的那个。
+ * - 形态匹配 → 从匹配集合中按 algIndex 轮换（多个同类算法时均衡使用）
+ * - 无匹配 → 用中性算法；仍无 → 用第一个已选算法
+ */
+function selectAlgoByPattern(session: TgSession): AlgorithmId {
+  const algos = session.cfg.algorithms;
+  if (!algos.length) return "random";
+  if (algos.length === 1) return algos[0]!;
+
+  const pattern = detectPattern(session);
+  session.currentPattern = pattern;
+
+  let candidates: AlgorithmId[];
+  if (pattern === "streak") {
+    candidates = algos.filter(a => STREAK_ALGOS.includes(a));
+  } else if (pattern === "oscillating") {
+    candidates = algos.filter(a => OSCILLATING_ALGOS.includes(a));
+  } else {
+    candidates = algos.filter(a => NEUTRAL_ALGOS.includes(a));
+  }
+
+  if (!candidates.length) candidates = algos; // 兜底：全部已选算法
+  return candidates[session.algIndex % candidates.length]!;
+}
+
 /**
  * 顺势而为：只看最近 3 期结果，多数方向即为投注方向。
  * 平局（大小各半等）时跟最新一期，不受 10 期整体频率干扰。
@@ -583,66 +646,44 @@ function parseBetLabel(text: string): string | null {
   return null;
 }
 
+function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
+  if (algoId === "ai_trend") return decideAI(session);
+  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  if (algoId === "dragon_ride") return dragonRide(session);
+  if (algoId === "dragon_break") return dragonBreak(session);
+  if (algoId === "momentum") return momentum(session);
+  if (algoId === "anti_streak") return antiStreak(session);
+  if (algoId === "streak_follow") return streakFollow(session);
+  if (algoId === "signal_follow") {
+    const p = parseBetLabel(signalText);
+    return p ? (labels.includes(p) ? p : (labels[0] ?? null)) : null;
+  }
+  if (algoId === "signal_reverse") {
+    const p = parseBetLabel(signalText);
+    if (!p) return null;
+    const opp: Record<string, string> = { 大:"小", 小:"大", 单:"双", 双:"单", 大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单" };
+    const rev = opp[p];
+    return (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
+  }
+  const history = buildHistory(session);
+  return freqPick(history, labels, algoId === "cold_pick");
+}
+
 function decideBet(session: TgSession, signalText: string): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   if (!labels.length || !session.cfg.algorithms.length) return null;
-  const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
-
-  let direction: string | null = null;
-  if (algoId === "ai_trend") direction = decideAI(session);
-  else if (algoId === "random") direction = labels[Math.floor(Math.random() * labels.length)] ?? null;
-  else if (algoId === "dragon_ride") direction = dragonRide(session);
-  else if (algoId === "dragon_break") direction = dragonBreak(session);
-  else if (algoId === "momentum") direction = momentum(session);
-  else if (algoId === "anti_streak") direction = antiStreak(session);
-  else if (algoId === "streak_follow") direction = streakFollow(session);
-  else {
-    const history = buildHistory(session);
-    if (algoId === "signal_follow") {
-      const p = parseBetLabel(signalText);
-      direction = p ? (labels.includes(p) ? p : (labels[0] ?? null)) : null;
-    } else if (algoId === "signal_reverse") {
-      const p = parseBetLabel(signalText);
-      if (p) {
-        const opp: Record<string, string> = { 大:"小", 小:"大", 单:"双", 双:"单", 大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单" };
-        const rev = opp[p];
-        direction = (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
-      }
-    } else if (algoId === "cold_pick") direction = freqPick(history, labels, true);
-    else direction = freqPick(history, labels, true);
-  }
-
-  // Only advance index and record algo when we actually produced a direction
-  if (direction !== null) {
-    session.algIndex++;
-    session.lastAlgoUsed = algoId;
-  }
+  const algoId = selectAlgoByPattern(session);
+  const direction = runAlgo(session, algoId, labels, signalText);
+  if (direction !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
   return direction;
 }
 
 function decideBetAuto(session: TgSession): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   if (!labels.length || !session.cfg.algorithms.length) return null;
-  const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
-
-  let direction: string | null = null;
-  if (algoId === "ai_trend") direction = decideAI(session);
-  else if (algoId === "random") direction = labels[Math.floor(Math.random() * labels.length)] ?? null;
-  else if (algoId === "dragon_ride") direction = dragonRide(session);
-  else if (algoId === "dragon_break") direction = dragonBreak(session);
-  else if (algoId === "momentum") direction = momentum(session);
-  else if (algoId === "anti_streak") direction = antiStreak(session);
-  else if (algoId === "streak_follow") direction = streakFollow(session);
-  else {
-    const history = buildHistory(session);
-    direction = freqPick(history, labels, algoId === "cold_pick");
-  }
-
-  // Only advance index and record algo when we actually produced a direction
-  if (direction !== null) {
-    session.algIndex++;
-    session.lastAlgoUsed = algoId;
-  }
+  const algoId = selectAlgoByPattern(session);
+  const direction = runAlgo(session, algoId, labels);
+  if (direction !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
   return direction;
 }
 
@@ -1135,6 +1176,7 @@ router.get("/tg/status", requireCard, (req, res) => {
     riskBlocked: !checkRisk(session).ok,
     riskReason: checkRisk(session).reason,
     lastAlgoUsed: session.lastAlgoUsed,
+    currentPattern: session.currentPattern,
     ...stats,
   });
 });

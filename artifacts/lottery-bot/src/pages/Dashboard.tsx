@@ -804,9 +804,11 @@ export default function Dashboard() {
                 <div>
                   <div className="text-white font-semibold">自动投注</div>
                   <div className="text-slate-500 text-xs mt-0.5">
-                    {status.autoBet
-                      ? `运行中 · ${ALGO_LABELS[status.lastAlgoUsed ?? status.algorithms?.[0] ?? ""] ?? "未知算法"} · ${BET_OPT_LABELS[status.betOptions?.[0] ?? ""] ?? "?"}`
-                      : "已停止"}
+                    {status.autoBet ? (() => {
+                      const patternLabel = status.currentPattern === "streak" ? "📈长龙局" : status.currentPattern === "oscillating" ? "🔄震荡局" : null;
+                      const algoLabel = ALGO_LABELS[status.lastAlgoUsed ?? status.algorithms?.[0] ?? ""] ?? "未知算法";
+                      return `运行中 · ${patternLabel ? patternLabel + " · " : ""}${algoLabel}`;
+                    })() : "已停止"}
                   </div>
                 </div>
                 <button

@@ -158,6 +158,7 @@ export interface TgStatus {
   riskBlocked?: boolean;
   riskReason?: string;
   lastAlgoUsed?: string;
+  currentPattern?: "streak" | "oscillating" | "neutral";
   totalBets?: number;
   settled?: number;
   wins?: number;
