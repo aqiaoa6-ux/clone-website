@@ -686,10 +686,11 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   const amount = session.currentBet;
   const groupTitle = session.groups.find((g) => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
 
+  // Lock BEFORE the await to prevent a second concurrent call from passing the guard
+  session.betPlacedThisCycle = true;
   try {
     await session.client.sendMessage(targetId, { message: `${direction}${amount}` });
     session.lastBetAt = Date.now();
-    session.betPlacedThisCycle = true;
     betLog.unshift({
       id: String(Date.now()),
       groupId: targetId,
@@ -724,21 +725,21 @@ const DRAW_CYCLE_MS = 210_000;
 // BET_BEFORE_DRAW_MS: place the bet when this many ms remain on the countdown
 const BET_BEFORE_DRAW_MS = 120_000;
 
-function scheduleAutoNextBet(session: TgSession, openTimeMs: number): void {
+// openTimeMs and closeTimeMs are already in Unix-milliseconds (as returned by pc20.net API).
+// cycleDurationMs is derived from closeTime - openTime of the same draw.
+function scheduleAutoNextBet(session: TgSession, closeTimeMs: number, cycleDurationMs: number): void {
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (!session.cfg.autoBet || !session.watchGroupId) return;
 
-  // Target: bet fires exactly BET_BEFORE_DRAW_MS before the next draw
-  // nextDraw = openTimeMs + DRAW_CYCLE_MS
+  // Target: bet fires exactly BET_BEFORE_DRAW_MS before the next draw.
+  // nextDraw ≈ closeTimeMs + cycleDurationMs  (next period ends one cycle after this one)
   // betAt    = nextDraw - BET_BEFORE_DRAW_MS
-  const nextDraw = openTimeMs + DRAW_CYCLE_MS;
+  const nextDraw = closeTimeMs + cycleDurationMs;
   const betAt = nextDraw - BET_BEFORE_DRAW_MS;
   const delay = Math.max(5_000, betAt - Date.now());
 
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
-    // betPlacedThisCycle was already cleared when the new draw was detected —
-    // do NOT reset it here to avoid overriding a bet the message handler already placed.
     void autoPlaceBet(session);
   }, delay);
 }
@@ -863,8 +864,9 @@ function autoSettleByLotteryResult(
 }
 
 // ─── Lottery draw poller — triggers betting 120 s before the next draw ────────
-// openTime is the Unix-second timestamp of when the draw was published
-type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number; openTime?: number };
+// openTime/closeTime are Unix-millisecond timestamps from the pc20.net API.
+// closeTime marks the end of the period; the next period ends at closeTime + cycleDuration.
+type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number; openTime?: number; closeTime?: number };
 
 async function pollLotteryDraw(session: TgSession): Promise<void> {
   try {
@@ -902,15 +904,21 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
         result: latest.result,
       });
 
-      // 3. Open the new cycle and schedule next bet at 120s before next draw
+      // 3. Open the new cycle and schedule next bet at 120s before next draw.
       // betPlacedThisCycle is reset HERE (not inside the timer) so the flag is
       // shared correctly between the message handler and the countdown timer.
       session.betPlacedThisCycle = false;
       if (session.cfg.autoBet && session.watchGroupId) {
-        // openTime is Unix seconds from the API; convert to ms for the scheduler.
-        // Fall back to Date.now() if the field is missing (old API response shape).
-        const openTimeMs = latest.openTime ? latest.openTime * 1000 : Date.now();
-        scheduleAutoNextBet(session, openTimeMs);
+        // openTime/closeTime from pc20.net are already in Unix-milliseconds.
+        // Use them to compute the actual cycle duration for this draw.
+        const closeTimeMs = latest.closeTime ?? 0;
+        const openTimeMs  = latest.openTime  ?? 0;
+        const cycleDurationMs = (closeTimeMs > openTimeMs)
+          ? (closeTimeMs - openTimeMs)   // measured from real API data (~202 000 ms)
+          : DRAW_CYCLE_MS;               // fallback if fields are missing
+        // closeTimeMs is the end of the CURRENT period; next period ends one cycle later.
+        const refClose = closeTimeMs > 0 ? closeTimeMs : Date.now() + cycleDurationMs;
+        scheduleAutoNextBet(session, refClose, cycleDurationMs);
       }
     }
   } catch { /* network errors are silently ignored */ }
@@ -1052,8 +1060,12 @@ function startWatching(session: TgSession) {
     const risk = checkRiskLimits(session);
     if (!risk.ok) return;
 
-    // Cancel any pending 30-second auto-bet (signal takes priority)
+    // Cancel any pending countdown auto-bet (signal takes priority)
     if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
+
+    // Lock BEFORE the await to prevent concurrent calls from passing the guard
+    session.betPlacedThisCycle = true;
+    if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
 
     // Bet immediately
     void (async () => {
@@ -1063,8 +1075,6 @@ function startWatching(session: TgSession) {
           message: `${plannedContent}${plannedAmount}`,
         });
         session.lastBetAt = Date.now();
-        session.betPlacedThisCycle = true;
-        if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
         betLog.unshift({
           id: String(Date.now()),
           groupId: targetId,
