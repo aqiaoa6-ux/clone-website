@@ -5,6 +5,7 @@ import { Api } from "telegram";
 import { NewMessage, NewMessageEvent } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -725,18 +726,32 @@ const DRAW_CYCLE_MS = 210_000;
 // BET_BEFORE_DRAW_MS: place the bet when this many ms remain on the countdown
 const BET_BEFORE_DRAW_MS = 120_000;
 
-// openTimeMs and closeTimeMs are already in Unix-milliseconds (as returned by pc20.net API).
-// cycleDurationMs is derived from closeTime - openTime of the same draw.
+// closeTimeMs: end of the CURRENT open period (Unix-ms, direct from pc20.net API — no *1000).
+// cycleDurationMs: closeTime - openTime of the same draw item (~202 000 ms).
 function scheduleAutoNextBet(session: TgSession, closeTimeMs: number, cycleDurationMs: number): void {
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (!session.cfg.autoBet || !session.watchGroupId) return;
 
-  // Target: bet fires exactly BET_BEFORE_DRAW_MS before the next draw.
-  // nextDraw ≈ closeTimeMs + cycleDurationMs  (next period ends one cycle after this one)
-  // betAt    = nextDraw - BET_BEFORE_DRAW_MS
-  const nextDraw = closeTimeMs + cycleDurationMs;
-  const betAt = nextDraw - BET_BEFORE_DRAW_MS;
-  const delay = Math.max(5_000, betAt - Date.now());
+  // Two-case scheduling:
+  //   Case A — enough time left in the current period:
+  //     betAt = closeTimeMs - BET_BEFORE_DRAW_MS   (fires when countdown hits 120s)
+  //   Case B — already past the 120s mark:
+  //     betAt = closeTimeMs + cycleDurationMs - BET_BEFORE_DRAW_MS  (next period)
+  const timeToClose = closeTimeMs - Date.now();
+  let delay: number;
+  if (timeToClose >= BET_BEFORE_DRAW_MS + 5_000) {
+    // Still ≥ 125s before period closes — bet in the CURRENT period
+    delay = timeToClose - BET_BEFORE_DRAW_MS;
+  } else {
+    // Already past the 120s window — wait for the NEXT period
+    delay = timeToClose + cycleDurationMs - BET_BEFORE_DRAW_MS;
+  }
+  delay = Math.max(5_000, delay);
+
+  logger.info(
+    { closeTimeMs, cycleDurationMs, timeToCloseSec: Math.round(timeToClose / 1000), delaySec: Math.round(delay / 1000) },
+    `[bet-timer] scheduled in ${Math.round(delay / 1000)}s (fires when 120s remain on countdown)`
+  );
 
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
