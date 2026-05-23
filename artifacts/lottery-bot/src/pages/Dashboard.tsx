@@ -462,7 +462,6 @@ export default function Dashboard() {
   const [showGroupSetup, setShowGroupSetup] = useState(false);
   const [groups, setGroups] = useState<TgGroup[]>([]);
   const [tgStep, setTgStep] = useState<"checking" | "login" | "group" | "ready">("checking");
-  const [betAmountInput, setBetAmountInput] = useState("100");
   const [toggleLoading, setToggleLoading] = useState(false);
   const [clearLoading, setClearLoading] = useState(false);
 
@@ -493,7 +492,6 @@ export default function Dashboard() {
     try {
       const s = await api.tg.status();
       setStatus(s);
-      setBetAmountInput(String(s.betAmount ?? 100));
       if (!s.connected) { setTgStep("login"); return; }
       if (!s.watchGroupId) {
         const { groups: g } = await api.tg.groups();
@@ -787,16 +785,6 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              <div>
-                <label className="text-xs text-slate-500 mb-1 block">当前注额</label>
-                <input
-                  type="number" value={betAmountInput}
-                  onChange={e => setBetAmountInput(e.target.value)}
-                  onBlur={() => void api.tg.config({ betAmount: Number(betAmountInput) }).then(() => void fetchStatus())}
-                  className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                  min="1"
-                />
-              </div>
 
               <div className="mt-3 flex gap-2">
                 <button onClick={() => setShowSettings(true)}

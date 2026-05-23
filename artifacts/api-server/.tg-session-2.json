@@ -4,7 +4,7 @@
   "balance": 523388.57,
   "todayPnl": 29760,
   "todayResetAt": 1779494400000,
-  "sessionPnl": 29760,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003858203119",
@@ -35,6 +35,7 @@
       "streak_follow",
       "dragon_ride"
     ],
-    "odds": 1.998
+    "odds": 1.998,
+    "chaseNumbers": []
   }
 }
