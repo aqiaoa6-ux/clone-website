@@ -1449,12 +1449,14 @@ router.post("/tg/config", (req, res) => {
     stopLotteryPoller(tgSession);
   }
 
-  // When autoBet is turned ON — start lottery poller, reset lock, fire first bet immediately
+  // When autoBet is turned ON — start lottery poller and do one immediate poll so the
+  // countdown scheduler is set up without waiting up to 20s for the next interval tick.
+  // Do NOT call autoPlaceBet() directly here — the scheduler will fire at the correct time.
   const wasOff = !prev.autoBet;
   if (body.autoBet === true && wasOff && tgSession.watchGroupId) {
     tgSession.betPlacedThisCycle = false;
     startLotteryPoller(tgSession);
-    void autoPlaceBet(tgSession);
+    void pollLotteryDraw(tgSession);
   }
 
   req.log.info({ cfg: tgSession.cfg }, "bet config updated");
