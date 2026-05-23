@@ -104,7 +104,7 @@ interface PersistedData {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const DRAW_CYCLE_MS = 210_000;
-const BET_BEFORE_DRAW_MS = 120_000;
+const BET_BEFORE_DRAW_MS = 80_000;
 const SESSION_FILE = path.join(process.cwd(), ".tg-session.json");
 
 const DEFAULT_CFG: BetCfg = {

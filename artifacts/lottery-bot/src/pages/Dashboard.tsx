@@ -610,34 +610,34 @@ export default function Dashboard() {
               {/* Countdown display */}
               <div className="text-center py-2">
                 <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${
-                  countdown <= 120 && countdown > 0 ? "text-yellow-400" : "text-white"
+                  countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"
                 }`}>
                   {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
                 </div>
                 <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
               </div>
 
-              {/* Progress bar showing 120s bet zone */}
+              {/* Progress bar showing 80s bet zone */}
               {draw && (() => {
                 const cycleSec = 210;
                 const pct = Math.min(100, Math.max(0, (countdown / cycleSec) * 100));
-                const betZonePct = Math.min(100, (120 / cycleSec) * 100); // ~57%
+                const betZonePct = Math.min(100, (80 / cycleSec) * 100);
                 return (
                   <div className="mt-1 mb-2">
                     <div className="relative h-2 bg-[#0f1220] rounded-full overflow-hidden">
-                      {/* bet zone highlight (last 120s) */}
+                      {/* bet zone highlight (last 80s) */}
                       <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
                       {/* time remaining bar */}
                       <div
                         className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${
-                          countdown <= 120 ? "bg-yellow-400" : "bg-blue-500"
+                          countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"
                         }`}
                         style={{ width: `${pct}%` }}
                       />
                     </div>
                     <div className="flex justify-between text-[10px] text-slate-600 mt-0.5">
                       <span>开奖</span>
-                      <span className="text-yellow-600/70">←投注区间 120s→</span>
+                      <span className="text-yellow-600/70">←投注区间 01:20→</span>
                       <span>封盘</span>
                     </div>
                   </div>
@@ -645,7 +645,7 @@ export default function Dashboard() {
               })()}
 
               {/* Bet window active */}
-              {status.autoBet && countdown > 0 && countdown <= 120 && (
+              {status.autoBet && countdown > 0 && countdown <= 80 && (
                 <div className="mt-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-2.5 text-center">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse mr-2 align-middle" />
                   <span className="text-yellow-400 text-sm font-semibold">投注窗口开启中</span>
@@ -654,11 +654,11 @@ export default function Dashboard() {
               )}
 
               {/* Next bet countdown (outside bet window) */}
-              {nextBetIn !== null && status.autoBet && countdown > 120 && (
+              {nextBetIn !== null && status.autoBet && countdown > 80 && (
                 <div className="mt-2 bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-2.5 text-center">
                   <span className="text-blue-400 text-sm">
                     距投注还有 <span className="font-bold">{nextBetIn}s</span>
-                    <span className="text-blue-300/50 text-xs ml-1">（封盘前 120s 下注）</span>
+                    <span className="text-blue-300/50 text-xs ml-1">（封盘前 01:20 下注）</span>
                   </span>
                 </div>
               )}
