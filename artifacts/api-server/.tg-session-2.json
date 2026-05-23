@@ -9,21 +9,21 @@
   "balanceSource": "manual",
   "watchGroupId": "-1003858203119",
   "cfg": {
-    "autoBet": false,
+    "autoBet": true,
     "betAmount": 100,
     "strategy": "normal",
     "betMultiplier": 2,
     "maxConsecutiveLosses": 5,
-    "stopLoss": 5000,
-    "targetProfit": 3000,
+    "stopLoss": 100000,
+    "targetProfit": 200000,
     "cooldownSeconds": 0,
     "amountLevels": [
-      100,
-      200,
-      400,
-      800,
-      1600,
-      3200
+      10000,
+      20000,
+      40000,
+      15000,
+      30000,
+      60000
     ],
     "stepBackOnWin": true,
     "betOptions": [
@@ -31,7 +31,10 @@
       "small"
     ],
     "algorithms": [
-      "signal_follow"
-    ]
+      "signal_follow",
+      "streak_follow",
+      "dragon_ride"
+    ],
+    "odds": 1.98
   }
 }

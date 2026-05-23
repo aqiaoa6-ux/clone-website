@@ -13,6 +13,12 @@ export default function BottomNav() {
       show: true,
     },
     {
+      path: "/trend",
+      icon: "📊",
+      label: "走势",
+      show: true,
+    },
+    {
       path: "/card-key",
       icon: "🎫",
       label: "卡密",

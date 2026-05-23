@@ -5,6 +5,7 @@ import RegisterPage from "./pages/RegisterPage";
 import CardKeyPage from "./pages/CardKeyPage";
 import Dashboard from "./pages/Dashboard";
 import AdminPage from "./pages/AdminPage";
+import TrendPage from "./pages/TrendPage";
 
 function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: {
   children: React.ReactNode;
@@ -67,6 +68,11 @@ export default function AppRoutes() {
       <Route path="/admin">
         <ProtectedRoute requireAdmin>
           <AdminPage />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/trend">
+        <ProtectedRoute requireCard={false}>
+          <TrendPage />
         </ProtectedRoute>
       </Route>
       <Route path="/">
