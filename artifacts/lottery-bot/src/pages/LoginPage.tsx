@@ -81,6 +81,14 @@ export default function LoginPage() {
             </Link>
           </p>
         </div>
+
+        <div className="mt-4 bg-[#161929] border border-yellow-500/30 rounded-2xl p-4 flex items-center gap-3">
+          <span className="text-2xl">⚙️</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-yellow-400 text-sm font-semibold">管理员后台</div>
+            <div className="text-slate-500 text-xs mt-0.5">登录管理员账号后，底部导航可直接进入后台</div>
+          </div>
+        </div>
       </div>
     </div>
   );
