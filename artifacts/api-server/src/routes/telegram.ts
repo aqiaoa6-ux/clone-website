@@ -748,10 +748,14 @@ function scheduleAutoNextBet(session: TgSession, closeTimeMs: number, cycleDurat
   }
   delay = Math.max(5_000, delay);
 
+  const delaySec = Math.round(delay / 1000);
   logger.info(
-    { closeTimeMs, cycleDurationMs, timeToCloseSec: Math.round(timeToClose / 1000), delaySec: Math.round(delay / 1000) },
-    `[bet-timer] scheduled in ${Math.round(delay / 1000)}s (fires when 120s remain on countdown)`
+    { closeTimeMs, cycleDurationMs, timeToCloseSec: Math.round(timeToClose / 1000), delaySec },
+    `[bet-timer] scheduled in ${delaySec}s (fires when 120s remain on countdown)`
   );
+
+  // Notify the frontend so it can show a live "next bet in Xs" countdown
+  pushEvent("timer:scheduled", { fireAt: Date.now() + delay, delaySec });
 
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
@@ -1466,10 +1470,12 @@ router.post("/tg/config", (req, res) => {
 
   // When autoBet is turned ON — start lottery poller and do one immediate poll so the
   // countdown scheduler is set up without waiting up to 20s for the next interval tick.
-  // Do NOT call autoPlaceBet() directly here — the scheduler will fire at the correct time.
+  // Reset lastSeenLotteryPeriod so the immediate poll always triggers scheduling,
+  // even if the user stopped and re-enabled autoBet within the same period.
   const wasOff = !prev.autoBet;
   if (body.autoBet === true && wasOff && tgSession.watchGroupId) {
     tgSession.betPlacedThisCycle = false;
+    tgSession.lastSeenLotteryPeriod = 0;
     startLotteryPoller(tgSession);
     void pollLotteryDraw(tgSession);
   }

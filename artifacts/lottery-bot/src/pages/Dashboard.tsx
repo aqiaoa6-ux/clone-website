@@ -89,6 +89,8 @@ export default function Dashboard() {
   const [consecutiveLosses, setConsecutiveLosses] = useState(0);
   const [currentBetAmt, setCurrentBetAmt] = useState(100);
   const [lastDraw, setLastDraw] = useState<{ term: number; r3: string; sum1?: number; sum2?: number; sum3?: number; result?: number } | null>(null);
+  const [nextBetAt, setNextBetAt] = useState<number | null>(null); // unix-ms when next bet fires
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [searchPeriod, setSearchPeriod] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [balanceSource, setBalanceSource] = useState<'manual' | 'kkpay'>('manual');
@@ -133,7 +135,9 @@ export default function Dashboard() {
   useEffect(() => {
     if (countdownRef.current) clearInterval(countdownRef.current);
     countdownRef.current = setInterval(() => {
-      const diff = Math.max(0, Math.floor((nextOpenTimeRef.current - Date.now()) / 1000));
+      const now = Date.now();
+      setNowMs(now);
+      const diff = Math.max(0, Math.floor((nextOpenTimeRef.current - now) / 1000));
       setCountdown(diff);
       if (diff === 0) setTimeout(fetchLotteryData, 3000);
     }, 1000);
@@ -238,6 +242,9 @@ export default function Dashboard() {
           sum2?: number;
           sum3?: number;
           result?: number;
+          // timer:scheduled fields
+          fireAt?: number;
+          delaySec?: number;
         };
         if (ev.type === 'bet:new' && ev.bet) {
           setRecords(prev => {
@@ -267,6 +274,8 @@ export default function Dashboard() {
               result: ev.result as number | undefined,
             });
           }
+        } else if (ev.type === 'timer:scheduled') {
+          if (ev.fireAt !== undefined) setNextBetAt(ev.fireAt);
         } else if (ev.type === 'balance:update') {
           if (ev.balance !== undefined) setBalance(ev.balance);
           if (ev.balanceSource) setBalanceSource(ev.balanceSource);
@@ -608,8 +617,14 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="text-center py-2.5 px-1">
-                <div className="text-muted-foreground text-[10px] mb-1">当前注额</div>
-                <div className="text-sm font-semibold text-[#c8a520]">{currentBetAmt.toFixed(0)}</div>
+                <div className="text-muted-foreground text-[10px] mb-1">
+                  {nextBetAt && nextBetAt > nowMs ? '下次投注' : '当前注额'}
+                </div>
+                <div className="text-sm font-semibold text-[#c8a520]">
+                  {nextBetAt && nextBetAt > nowMs
+                    ? `${Math.ceil((nextBetAt - nowMs) / 1000)}s`
+                    : currentBetAmt.toFixed(0)}
+                </div>
               </div>
             </div>
           </div>

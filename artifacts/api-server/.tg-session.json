@@ -19,11 +19,11 @@
     "cooldownSeconds": 0,
     "betType": "follow",
     "amountLevels": [
-      100,
-      200,
-      300,
-      500,
-      1000
+      1000,
+      2000,
+      4000,
+      8000,
+      16000
     ],
     "stepBackOnWin": true,
     "betOptions": [
