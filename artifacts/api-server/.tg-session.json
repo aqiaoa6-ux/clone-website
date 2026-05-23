@@ -1,8 +1,8 @@
 {
   "sessionString": "1AQAOMTQ5LjE1NC4xNzUuNjABux2kXvL2s9+6fpoAM5Sf7CcBADft80ALsJ4s3P5ZprkWp6tCMiV1t5YukU2+tWBRZLlTA7OjaWp6N12+Rjbp9zFg1BLKAoPBzk3q/sdJ6BaDRPeWSD3R/eAPaaD7XQ7TrP4IBzN1MrvflS4sqZhbKbTziCxxbfd7aevUanzMN2lJ7PLq2w5d0qI79JdoMWUr9Sco84OmbdVCLG5uIVQaZikmva8WkTUUIOtEsCdSNTlonHPdimrERC/f2CaM+rBanNgYl3BsLzkyce74bgH/YXMKoRzsRL5UeEsjSV4GtzzEgCT6wo+QGBV+EN9QTR7CFTuMIwMw/MjlAk3qHYVDOm4=",
   "phone": "19089542124",
-  "balance": 497784.97,
-  "todayPnl": -200,
+  "balance": 467784.97,
+  "todayPnl": -30200,
   "todayResetAt": 1779494400000,
   "sessionPnl": 0,
   "kkpayUsername": "kkpay",
@@ -14,16 +14,14 @@
     "strategy": "normal",
     "betMultiplier": 2,
     "maxConsecutiveLosses": 5,
-    "stopLoss": 5000,
-    "targetProfit": 3000,
+    "stopLoss": 0,
+    "targetProfit": 0,
     "cooldownSeconds": 0,
     "betType": "follow",
     "amountLevels": [
-      1000,
-      2000,
-      4000,
-      8000,
-      16000
+      10000,
+      20000,
+      40000
     ],
     "stepBackOnWin": true,
     "betOptions": [
@@ -31,7 +29,7 @@
       "small"
     ],
     "algorithms": [
-      "ai_trend"
+      "streak_follow"
     ]
   }
 }

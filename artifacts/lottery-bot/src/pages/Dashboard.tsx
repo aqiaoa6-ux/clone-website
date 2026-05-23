@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Button } from '@/components/ui/button';
-import { Menu, Moon, RefreshCw, Users, SlidersHorizontal } from 'lucide-react';
+import { Menu, Moon, RefreshCw, Users, SlidersHorizontal, LogOut } from 'lucide-react';
 import SettingsDrawer from '@/components/SettingsDrawer';
 import TelegramLoginModal from '@/components/TelegramLoginModal';
 import BetConfigModal, { type BetConfig } from '@/components/BetConfigModal';
@@ -114,7 +114,10 @@ export default function Dashboard() {
         const latest = items[0];
         setLatestTerm(latest);
         setAllItems(items as TrendTerm[]);
-        nextOpenTimeRef.current = latest.openTime + 210000;
+        // Use the real closeTime from the API (exact period end) as the countdown target.
+        // closeTime is already in ms. Fall back to the legacy estimate if it's missing or stale.
+        const ct = (latest.closeTime ?? 0);
+        nextOpenTimeRef.current = ct > Date.now() ? ct : latest.openTime + 210000;
         setCurrentPeriod(latest.term + 1);
         setFetchError(false);
         setLastFetched(new Date());
@@ -242,6 +245,8 @@ export default function Dashboard() {
           sum2?: number;
           sum3?: number;
           result?: number;
+          closeTime?: number;
+          openTime?: number;
           // timer:scheduled fields
           fireAt?: number;
           delaySec?: number;
@@ -273,6 +278,10 @@ export default function Dashboard() {
               sum3: ev.sum3 as number | undefined,
               result: ev.result as number | undefined,
             });
+            // Use real API closeTime for the countdown so it matches the server timer precisely
+            if (ev.closeTime && ev.closeTime > Date.now()) {
+              nextOpenTimeRef.current = ev.closeTime;
+            }
           }
         } else if (ev.type === 'timer:scheduled') {
           if (ev.fireAt !== undefined) setNextBetAt(ev.fireAt);
@@ -432,7 +441,7 @@ export default function Dashboard() {
           <div className="flex items-center justify-between px-3 py-1.5 bg-green-900/20 border-b border-green-800/30">
             <div className="flex items-center gap-2 text-xs text-green-400">
               <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
-              <span className="truncate max-w-[120px]">
+              <span className="truncate max-w-[100px]">
                 {tgMe.firstName}{tgMe.lastName ? ` ${tgMe.lastName}` : ''}
                 {tgMe.username ? ` @${tgMe.username}` : ''}
               </span>
@@ -444,7 +453,7 @@ export default function Dashboard() {
                 data-testid="button-set-group"
               >
                 <Users className="w-3 h-3" />
-                <span className="truncate max-w-[90px]">{watchGroup ? watchGroup.title : '设置投注群'}</span>
+                <span className="truncate max-w-[80px]">{watchGroup ? watchGroup.title : '设置投注群'}</span>
               </button>
               <button
                 onClick={() => setConfigOpen(true)}
@@ -456,6 +465,18 @@ export default function Dashboard() {
                   {betConfig.strategy === 'martingale' ? '马丁' : betConfig.strategy === 'anti-martingale' ? '反马丁' : '普通'}
                   {' '}¥{betConfig.betAmount ?? 100}
                 </span>
+              </button>
+              <button
+                onClick={async () => {
+                  await handleDisconnect();
+                  setLoginOpen(true);
+                }}
+                className="flex items-center gap-1 text-xs text-red-400/70 hover:text-red-400 transition-colors"
+                title="退出登录 / 切换账号"
+                data-testid="button-tg-logout"
+              >
+                <LogOut className="w-3 h-3" />
+                <span>退出</span>
               </button>
             </div>
           </div>

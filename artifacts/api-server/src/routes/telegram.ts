@@ -563,6 +563,18 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
   session.client.addEventHandler(kkpayHandler, kkpayHandlerBuilder);
 }
 
+// ─── Shared label mapper ─────────────────────────────────────────────────────
+// Maps a raw r3 string (e.g. "大单", "小双") to one of the caller's enabled
+// labels (e.g. "大", "小").  Returns null when no match is found.
+function mapR3ToEnabled(r3: string, enabled: string[]): string | null {
+  if (enabled.includes(r3)) return r3;
+  if (enabled.includes("大") && r3.startsWith("大")) return "大";
+  if (enabled.includes("小") && r3.startsWith("小")) return "小";
+  if (enabled.includes("单") && r3.endsWith("单")) return "单";
+  if (enabled.includes("双") && r3.endsWith("双")) return "双";
+  return null;
+}
+
 function decideAlgorithm(session: TgSession, msgText: string): string | null {
   const { betOptions, algorithms } = session.cfg;
 
@@ -594,21 +606,32 @@ function decideAlgorithm(session: TgSession, msgText: string): string | null {
   }
 
   if (algoId === "streak_follow") {
-    const recent = session.recentResults.slice(-10);
-    if (!recent.length) return enabledLabels[0] ?? null;
+    // Use lotteryHistoryCache as fallback when in-session results are sparse
+    const raw = session.recentResults.length >= 3
+      ? session.recentResults.slice(-10)
+      : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
     const freq: Record<string, number> = {};
-    for (const r of recent) freq[r] = (freq[r] ?? 0) + 1;
+    for (const lbl of enabledLabels) freq[lbl] = 0;
+    for (const r of raw) {
+      const mapped = mapR3ToEnabled(r, enabledLabels);
+      if (mapped) freq[mapped] = (freq[mapped] ?? 0) + 1;
+    }
     const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
-    return sorted.find(([k]) => enabledLabels.includes(k))?.[0] ?? enabledLabels[0] ?? null;
+    return sorted[0]?.[0] ?? enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
   }
 
   if (algoId === "cold_pick") {
-    const recent = session.recentResults.slice(-10);
+    const raw = session.recentResults.length >= 3
+      ? session.recentResults.slice(-10)
+      : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
     const freq: Record<string, number> = {};
     for (const lbl of enabledLabels) freq[lbl] = 0;
-    for (const r of recent) if (freq[r] !== undefined) freq[r]++;
+    for (const r of raw) {
+      const mapped = mapR3ToEnabled(r, enabledLabels);
+      if (mapped) freq[mapped] = (freq[mapped] ?? 0) + 1;
+    }
     const sorted = Object.entries(freq).sort((a, b) => a[1] - b[1]);
-    return sorted[0]?.[0] ?? enabledLabels[0] ?? null;
+    return sorted[0]?.[0] ?? enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
   }
 
   if (algoId === "ai_trend") {
@@ -620,8 +643,9 @@ function decideAlgorithm(session: TgSession, msgText: string): string | null {
 }
 
 // ─── Stat-based direction (no signal text required) ──────────────────────────
-// Used for the 50-second post-draw auto-bet and the immediate start bet.
-// signal_follow → streak_follow logic; signal_reverse → cold_pick logic.
+// Used for the auto-bet timer.
+// Combines in-session recentResults with lotteryHistoryCache so the algorithm
+// has data even on the very first bet after a server restart.
 function decideAlgorithmAuto(session: TgSession): string | null {
   const { betOptions, algorithms } = session.cfg;
   if (!betOptions.length || !algorithms.length) return null;
@@ -634,24 +658,35 @@ function decideAlgorithmAuto(session: TgSession): string | null {
     return decideAI(session);
   }
 
-  // signal_follow → pick the most frequent recent result
-  if (algoId === "signal_follow" || algoId === "streak_follow") {
-    const recent = session.recentResults.slice(-10);
-    if (!recent.length) return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
-    const freq: Record<string, number> = {};
-    for (const r of recent) freq[r] = (freq[r] ?? 0) + 1;
-    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
-    return sorted.find(([k]) => enabledLabels.includes(k))?.[0] ?? enabledLabels[0] ?? null;
-  }
+  // Build a combined history: prefer in-session results when plentiful,
+  // otherwise pad with the lottery history cache so the first few bets
+  // are informed rather than random.
+  const raw = session.recentResults.length >= 3
+    ? session.recentResults.slice(-10)
+    : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
 
-  // signal_reverse → pick the least frequent recent result
-  if (algoId === "signal_reverse" || algoId === "cold_pick") {
-    const recent = session.recentResults.slice(-10);
+  // signal_follow / streak_follow → follow the most frequent side
+  if (algoId === "signal_follow" || algoId === "streak_follow") {
     const freq: Record<string, number> = {};
     for (const lbl of enabledLabels) freq[lbl] = 0;
-    for (const r of recent) if (freq[r] !== undefined) freq[r]++;
+    for (const r of raw) {
+      const mapped = mapR3ToEnabled(r, enabledLabels);
+      if (mapped) freq[mapped] = (freq[mapped] ?? 0) + 1;
+    }
+    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
+    return sorted[0]?.[0] ?? enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
+  }
+
+  // signal_reverse / cold_pick → pick the least frequent (coldest) side
+  if (algoId === "signal_reverse" || algoId === "cold_pick") {
+    const freq: Record<string, number> = {};
+    for (const lbl of enabledLabels) freq[lbl] = 0;
+    for (const r of raw) {
+      const mapped = mapR3ToEnabled(r, enabledLabels);
+      if (mapped) freq[mapped] = (freq[mapped] ?? 0) + 1;
+    }
     const sorted = Object.entries(freq).sort((a, b) => a[1] - b[1]);
-    return sorted[0]?.[0] ?? enabledLabels[0] ?? null;
+    return sorted[0]?.[0] ?? enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
   }
 
   // random
@@ -913,7 +948,8 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
 
       session.lastSeenLotteryPeriod = latest.term;
 
-      // 2. Push real-time draw info to the frontend
+      // 2. Push real-time draw info to the frontend (include closeTime so the
+      //    frontend countdown aligns precisely with the server's bet timer)
       pushEvent("draw:new", {
         term: latest.term,
         r3: latest.r3 ?? "",
@@ -921,6 +957,8 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
         sum2: latest.sum2,
         sum3: latest.sum3,
         result: latest.result,
+        closeTime: latest.closeTime,
+        openTime: latest.openTime,
       });
 
       // 3. Open the new cycle and schedule next bet at 120s before next draw.
@@ -945,8 +983,8 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
 
 function startLotteryPoller(session: TgSession): void {
   if (session.lotteryPollTimer) return; // already running
-  // Poll every 20 seconds — fine-grained enough to catch each ~210-second draw
-  session.lotteryPollTimer = setInterval(() => { void pollLotteryDraw(session); }, 20 * 1000);
+  // Poll every 5 seconds — tight enough to detect each ~202-second draw within ±5 s
+  session.lotteryPollTimer = setInterval(() => { void pollLotteryDraw(session); }, 5 * 1000);
 }
 
 function stopLotteryPoller(session: TgSession): void {
