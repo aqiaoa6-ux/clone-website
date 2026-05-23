@@ -412,15 +412,28 @@ function settleBet(
   session.currentBet = computeNextBet(session, won);
 
   if (record) {
+    const settledBets = betLog.filter(b => b.won !== undefined);
+    const winsNow = settledBets.filter(b => b.won === true).length;
+    let streakCur = 0, streakMax = 0;
+    for (const b of [...betLog].reverse()) {
+      if (b.won === true) { streakCur++; if (streakCur > streakMax) streakMax = streakCur; }
+      else if (b.won === false) streakCur = 0;
+    }
+    const winRateNow = settledBets.length > 0
+      ? ((winsNow / settledBets.length) * 100).toFixed(2)
+      : "0.00";
     pushEvent("bet:result", {
       bet: record,
       balance: session.balance,
       todayPnl: session.todayPnl,
       sessionPnl: session.sessionPnl,
-      totalBets:
-        betLog.filter(b => b.status === "won" || b.status === "lost").length +
-        betLog.filter(b => b.status === "sent").length,
-      wins: betLog.filter(b => b.status === "won").length,
+      consecutiveLosses: session.consecutiveLosses,
+      currentBet: session.currentBet,
+      totalBets: betLog.filter(b => b.status !== "failed").length,
+      settled: settledBets.length,
+      wins: winsNow,
+      maxStreak: streakMax,
+      winRate: winRateNow,
     });
   }
 }
@@ -650,6 +663,13 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   const targetId = session.watchGroupId;
   if (!targetId) return;
 
+  // Expire bets stuck in "sent" for longer than one draw period (240s).
+  // This prevents a missed kkpay message from blocking the cycle permanently.
+  const nowMs = Date.now();
+  for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) {
+    stale.status = "failed";
+  }
+
   // Never bet while a previous bet is still awaiting a result
   if (betLog.some((b) => b.status === "sent")) return;
 
@@ -800,7 +820,38 @@ function decideAI(session: TgSession): string | null {
   return aCount <= last20.length / 2 ? optA : optB;
 }
 
+// ─── Auto-settle a pending bet using the official lottery draw result ─────────
+// Called as soon as the poller detects a new draw, before opening the next cycle.
+// This makes settlement independent of kkpay messages.
+function autoSettleByLotteryResult(
+  session: TgSession,
+  r3: string,
+  term: number,
+): void {
+  const pending = betLog.find(b => b.status === "sent");
+  if (!pending) return;
+
+  const bet = pending.betContent.trim();
+  let won = false;
+  if (bet === r3) {
+    won = true;
+  } else if (bet.length === 1) {
+    if (
+      (bet === "大" && r3.startsWith("大")) ||
+      (bet === "小" && r3.startsWith("小")) ||
+      (bet === "单" && r3.endsWith("单")) ||
+      (bet === "双" && r3.endsWith("双"))
+    ) won = true;
+  }
+  // P&L approximation: ±stake (standard 1:1 payout for 大/小/单/双)
+  // kkpay message will override with precise KKCOIN P&L if it arrives later.
+  const pnl = won ? pending.amount : -pending.amount;
+  settleBet(session, { won, pnl, result: r3, betId: pending.id, period: term });
+}
+
 // ─── Lottery draw poller — triggers betting 50s after each new draw ────────────
+type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number };
+
 async function pollLotteryDraw(session: TgSession): Promise<void> {
   try {
     const r = await fetch("http://pc20.net/api/fengpan", {
@@ -811,7 +862,7 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
       signal: AbortSignal.timeout(8000),
     });
     if (!r.ok) return;
-    const data = await r.json() as { message?: { all?: { keno28?: { data?: { term: number; r3?: string }[] } } } };
+    const data = await r.json() as { message?: { all?: { keno28?: { data?: DrawItem[] } } } };
     const items = data?.message?.all?.keno28?.data ?? [];
     const latest = items[0];
     if (!latest?.term) return;
@@ -820,11 +871,26 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
     const labels = items.map((d) => d.r3).filter((x): x is string => !!x).reverse();
     if (labels.length) lotteryHistoryCache = labels.slice(-50);
 
-    // New draw detected — start the 50s bet timer
+    // New draw detected
     if (latest.term > session.lastSeenLotteryPeriod) {
+      // 1. Auto-settle any pending bet using the official draw result
+      if (latest.r3) autoSettleByLotteryResult(session, latest.r3, latest.term);
+
       session.lastSeenLotteryPeriod = latest.term;
-      // Open the new cycle NOW so message-handler bets and the timer both
-      // share the same guard.  The timer must NOT reset it again later.
+
+      // 2. Push real-time draw info to the frontend
+      pushEvent("draw:new", {
+        term: latest.term,
+        r3: latest.r3 ?? "",
+        sum1: latest.sum1,
+        sum2: latest.sum2,
+        sum3: latest.sum3,
+        result: latest.result,
+      });
+
+      // 3. Open the new cycle and schedule next bet
+      // betPlacedThisCycle is reset HERE (not inside the timer) so the flag is
+      // shared correctly between the message handler and the 50s timer.
       session.betPlacedThisCycle = false;
       if (session.cfg.autoBet && session.watchGroupId) {
         scheduleAutoNextBet(session);

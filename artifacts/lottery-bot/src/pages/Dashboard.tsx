@@ -88,6 +88,7 @@ export default function Dashboard() {
   const [winRate, setWinRate] = useState('0.00');
   const [consecutiveLosses, setConsecutiveLosses] = useState(0);
   const [currentBetAmt, setCurrentBetAmt] = useState(100);
+  const [lastDraw, setLastDraw] = useState<{ term: number; r3: string; sum1?: number; sum2?: number; sum3?: number; result?: number } | null>(null);
   const [searchPeriod, setSearchPeriod] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [balanceSource, setBalanceSource] = useState<'manual' | 'kkpay'>('manual');
@@ -224,7 +225,19 @@ export default function Dashboard() {
           todayPnl?: number;
           sessionPnl?: number;
           totalBets?: number;
+          settled?: number;
           wins?: number;
+          maxStreak?: number;
+          winRate?: string;
+          consecutiveLosses?: number;
+          currentBet?: number;
+          // draw:new fields
+          term?: number;
+          r3?: string;
+          sum1?: number;
+          sum2?: number;
+          sum3?: number;
+          result?: number;
         };
         if (ev.type === 'bet:new' && ev.bet) {
           setRecords(prev => {
@@ -238,11 +251,21 @@ export default function Dashboard() {
           if (ev.todayPnl !== undefined) setTodayPnl(ev.todayPnl);
           if (ev.sessionPnl !== undefined) setTotalPnl(ev.sessionPnl);
           if (ev.totalBets !== undefined) setTotalBets(ev.totalBets);
-          if (ev.wins !== undefined) {
-            setWins(ev.wins);
-            if (ev.totalBets && ev.totalBets > 0) {
-              setWinRate(((ev.wins / ev.totalBets) * 100).toFixed(2));
-            }
+          if (ev.wins !== undefined) setWins(ev.wins);
+          if (ev.maxStreak !== undefined) setMaxStreak(ev.maxStreak);
+          if (ev.winRate !== undefined) setWinRate(ev.winRate);
+          if (ev.consecutiveLosses !== undefined) setConsecutiveLosses(ev.consecutiveLosses);
+          if (ev.currentBet !== undefined) setCurrentBetAmt(ev.currentBet);
+        } else if (ev.type === 'draw:new') {
+          if (ev.term) {
+            setLastDraw({
+              term: ev.term as number,
+              r3: (ev.r3 as string) ?? '',
+              sum1: ev.sum1 as number | undefined,
+              sum2: ev.sum2 as number | undefined,
+              sum3: ev.sum3 as number | undefined,
+              result: ev.result as number | undefined,
+            });
           }
         } else if (ev.type === 'balance:update') {
           if (ev.balance !== undefined) setBalance(ev.balance);
@@ -666,12 +689,20 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Bottom bar */}
+        {/* Bottom bar — shows the latest confirmed draw (SSE draw:new or initial poll) */}
         <div className="absolute bottom-0 left-0 w-full bg-[#1a1f2e] border-t border-border p-2 text-[10px] text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis px-4 z-10">
-          {latestTerm ? (
-            <><span className="text-white/70">{latestTerm.term}期:</span> {latestTerm.sum1}+{latestTerm.sum2}+{latestTerm.sum3}={latestTerm.result} <span className="text-[#4CA2FF]">{latestTerm.r3}</span></>
-          ) : <span className="text-white/70">加载中...</span>}
-          {' '}单金额 <span className="text-[#f44336]">-39200</span> 金额 <span className="text-white/60">400000</span>
+          {(() => {
+            const d = lastDraw ?? (latestTerm ? { term: latestTerm.term, r3: latestTerm.r3, sum1: latestTerm.sum1, sum2: latestTerm.sum2, sum3: latestTerm.sum3, result: latestTerm.result } : null);
+            if (!d) return <span className="text-white/70">加载中...</span>;
+            return (
+              <>
+                <span className="text-white/70">{d.term}期:</span>
+                {d.sum1 !== undefined ? ` ${d.sum1}+${d.sum2}+${d.sum3}=${d.result} ` : ' '}
+                <span className="text-[#4CA2FF]">{d.r3}</span>
+                <span className="ml-2 text-white/40">已开奖</span>
+              </>
+            );
+          })()}
         </div>
 
         <SettingsDrawer

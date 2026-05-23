@@ -4,7 +4,7 @@
   "balance": 497784.97,
   "todayPnl": -200,
   "todayResetAt": 1779494400000,
-  "sessionPnl": -200,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003858203119",
@@ -20,7 +20,6 @@
     "betType": "follow",
     "amountLevels": [
       100,
-      200,
       300,
       500,
       1000
