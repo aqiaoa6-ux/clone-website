@@ -304,6 +304,8 @@ void restoreSession();
 
 function parseBalance(text: string): number | null {
   const patterns = [
+    // kkpay "ye" response: "KKCOIN : 494136.570"
+    /KKCOIN\s*[：:]\s*([\d,]+\.?\d*)/i,
     /当前余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
     /(?:可用|账[户号])?余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
     /balance[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
@@ -320,6 +322,17 @@ function parseBalance(text: string): number | null {
     }
   }
   return null;
+}
+
+// Send "ye" to the watch group to trigger kkpay balance reply
+async function sendYeForBalance(session: TgSession): Promise<void> {
+  if (!session.watchGroupId) return;
+  try {
+    await session.client.sendMessage(session.watchGroupId, { message: "ye" });
+    logger.info("[balance] sent 'ye' to watch group for balance query");
+  } catch (err) {
+    logger.warn({ err }, "[balance] failed to send 'ye'");
+  }
 }
 
 function updateBalance(session: TgSession, text: string): void {
@@ -644,6 +657,9 @@ async function pollLottery(session: TgSession): Promise<void> {
     if (session.cfg.autoBet && session.watchGroupId) {
       scheduleNextBet(session, session.currentCloseTimeMs, cycleMs);
     }
+
+    // Query real-time balance from kkpay by sending "ye" to the group
+    void sendYeForBalance(session);
   } catch { /* network errors ignored */ }
 }
 
