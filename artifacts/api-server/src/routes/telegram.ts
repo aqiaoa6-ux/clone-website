@@ -68,7 +68,7 @@ interface TgSession {
   todayResetAt: number;
   // per-period dedup
   lastBetPeriod?: number;
-  // one-bet-per-cycle lock: true after any bet is placed, false only when the 50s timer fires
+  // one-bet-per-cycle lock: true after any bet is placed, false only when the countdown timer fires
   betPlacedThisCycle: boolean;
   // kkpay integration
   kkpayUsername: string;
@@ -718,16 +718,29 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   }
 }
 
-// ─── Schedule 50-second auto-bet after a draw ─────────────────────────────────
-function scheduleAutoNextBet(session: TgSession): void {
+// ─── Auto-bet scheduler: fires 120 s before the next draw ────────────────────
+// DRAW_CYCLE_MS: approximate duration of one draw period (210 s)
+const DRAW_CYCLE_MS = 210_000;
+// BET_BEFORE_DRAW_MS: place the bet when this many ms remain on the countdown
+const BET_BEFORE_DRAW_MS = 120_000;
+
+function scheduleAutoNextBet(session: TgSession, openTimeMs: number): void {
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (!session.cfg.autoBet || !session.watchGroupId) return;
+
+  // Target: bet fires exactly BET_BEFORE_DRAW_MS before the next draw
+  // nextDraw = openTimeMs + DRAW_CYCLE_MS
+  // betAt    = nextDraw - BET_BEFORE_DRAW_MS
+  const nextDraw = openTimeMs + DRAW_CYCLE_MS;
+  const betAt = nextDraw - BET_BEFORE_DRAW_MS;
+  const delay = Math.max(5_000, betAt - Date.now());
+
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
     // betPlacedThisCycle was already cleared when the new draw was detected —
     // do NOT reset it here to avoid overriding a bet the message handler already placed.
     void autoPlaceBet(session);
-  }, 50 * 1000);
+  }, delay);
 }
 
 // ─── Module-level lottery history cache (shared, updated by poller) ──────────
@@ -849,8 +862,9 @@ function autoSettleByLotteryResult(
   settleBet(session, { won, pnl, result: r3, betId: pending.id, period: term });
 }
 
-// ─── Lottery draw poller — triggers betting 50s after each new draw ────────────
-type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number };
+// ─── Lottery draw poller — triggers betting 120 s before the next draw ────────
+// openTime is the Unix-second timestamp of when the draw was published
+type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number; openTime?: number };
 
 async function pollLotteryDraw(session: TgSession): Promise<void> {
   try {
@@ -888,12 +902,15 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
         result: latest.result,
       });
 
-      // 3. Open the new cycle and schedule next bet
+      // 3. Open the new cycle and schedule next bet at 120s before next draw
       // betPlacedThisCycle is reset HERE (not inside the timer) so the flag is
-      // shared correctly between the message handler and the 50s timer.
+      // shared correctly between the message handler and the countdown timer.
       session.betPlacedThisCycle = false;
       if (session.cfg.autoBet && session.watchGroupId) {
-        scheduleAutoNextBet(session);
+        // openTime is Unix seconds from the API; convert to ms for the scheduler.
+        // Fall back to Date.now() if the field is missing (old API response shape).
+        const openTimeMs = latest.openTime ? latest.openTime * 1000 : Date.now();
+        scheduleAutoNextBet(session, openTimeMs);
       }
     }
   } catch { /* network errors are silently ignored */ }
