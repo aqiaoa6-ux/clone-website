@@ -7,7 +7,7 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 export type BetOption = 'big' | 'small' | 'odd' | 'even' | 'big-odd' | 'big-even' | 'small-odd' | 'small-even';
-export type AlgorithmId = 'signal_follow' | 'signal_reverse' | 'streak_follow' | 'cold_pick' | 'random';
+export type AlgorithmId = 'signal_follow' | 'signal_reverse' | 'streak_follow' | 'cold_pick' | 'random' | 'ai_trend';
 
 export interface BetSetupConfig {
   // group
@@ -90,6 +90,13 @@ const ALGORITHM_META: { id: AlgorithmId; title: string; desc: string; badge: str
     desc: '在已启用的投注选项中随机选择，打乱规律',
     badge: 'A5',
     color: '#f44336',
+  },
+  {
+    id: 'ai_trend',
+    title: '算法6 · AI走势分析',
+    desc: '实时读取50期历史，融合连续性、频率、交替、加权近期4路信号投票决策',
+    badge: 'AI',
+    color: '#a855f7',
   },
 ];
 

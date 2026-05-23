@@ -26,7 +26,7 @@ type BetType =
   | "small-odd"
   | "small-even";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
-type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random";
+type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend";
 interface BetCfg {
   autoBet: boolean;
   betAmount: number;
@@ -586,12 +586,16 @@ function decideAlgorithm(session: TgSession, msgText: string): string | null {
     return sorted[0]?.[0] ?? enabledLabels[0] ?? null;
   }
 
+  if (algoId === "ai_trend") {
+    return decideAI(session);
+  }
+
   // random
   return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
 }
 
 // ─── Stat-based direction (no signal text required) ──────────────────────────
-// Used for the 30-second post-result auto-bet and the immediate start bet.
+// Used for the 50-second post-draw auto-bet and the immediate start bet.
 // signal_follow → streak_follow logic; signal_reverse → cold_pick logic.
 function decideAlgorithmAuto(session: TgSession): string | null {
   const { betOptions, algorithms } = session.cfg;
@@ -600,6 +604,10 @@ function decideAlgorithmAuto(session: TgSession): string | null {
   const enabledLabels = betOptions.map((o) => BET_OPTION_LABELS[o]);
   const algoId = algorithms[session.algIndex % algorithms.length];
   session.algIndex += 1;
+
+  if (algoId === "ai_trend") {
+    return decideAI(session);
+  }
 
   // signal_follow → pick the most frequent recent result
   if (algoId === "signal_follow" || algoId === "streak_follow") {
@@ -691,6 +699,96 @@ function scheduleAutoNextBet(session: TgSession): void {
   }, 50 * 1000);
 }
 
+// ─── Module-level lottery history cache (shared, updated by poller) ──────────
+// Stores the last 50 draw r3 labels (e.g. "大单", "小双") newest-last
+let lotteryHistoryCache: string[] = [];
+
+// ─── AI multi-signal trend analyser ──────────────────────────────────────────
+function decideAI(session: TgSession): string | null {
+  const { betOptions } = session.cfg;
+  if (!betOptions.length) return null;
+
+  const enabledLabels = betOptions.map((o) => BET_OPTION_LABELS[o]);
+  if (!enabledLabels.length) return null;
+
+  // Map an r3 label (大单/大双/小单/小双/大/小/单/双) → one of the enabled labels
+  const mapLabel = (r3: string): string | null => {
+    if (enabledLabels.includes(r3)) return r3;
+    // big/small dimension
+    if (enabledLabels.includes("大") && r3.startsWith("大")) return "大";
+    if (enabledLabels.includes("小") && r3.startsWith("小")) return "小";
+    // odd/even dimension
+    if (enabledLabels.includes("单") && r3.endsWith("单")) return "单";
+    if (enabledLabels.includes("双") && r3.endsWith("双")) return "双";
+    return null;
+  };
+
+  // Combine lottery history cache with in-session results (cache is more complete)
+  const raw = lotteryHistoryCache.length >= 10
+    ? lotteryHistoryCache
+    : [...lotteryHistoryCache, ...session.recentResults];
+  const history = raw.map(mapLabel).filter((x): x is string => x !== null);
+  if (!history.length) return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
+
+  // Work with the first two enabled labels as the two "sides"
+  const [optA, optB] = enabledLabels.length >= 2
+    ? [enabledLabels[0], enabledLabels[1]] as [string, string]
+    : [enabledLabels[0], enabledLabels[0]] as [string, string];
+
+  let votes = 0; // positive → optA, negative → optB
+
+  // ── Signal 1: Streak reversion/momentum (last 5) ─────────────────────────
+  const last5 = history.slice(-5);
+  const streak = last5.reduce((acc, x) => x === last5[last5.length - 1] ? acc + 1 : 0, 0);
+  if (streak >= 4) {
+    // Very long streak → strong reversion signal
+    votes += last5[last5.length - 1] === optA ? -3 : 3;
+  } else if (streak === 3) {
+    // Medium streak → reversion
+    votes += last5[last5.length - 1] === optA ? -2 : 2;
+  } else if (streak === 2) {
+    // Short streak → weak momentum
+    votes += last5[last5.length - 1] === optA ? 1 : -1;
+  }
+
+  // ── Signal 2: Short-term frequency imbalance (last 15) ───────────────────
+  const last15 = history.slice(-15);
+  const countA15 = last15.filter((x) => x === optA).length;
+  const countB15 = last15.length - countA15;
+  const ratio = countA15 / (last15.length || 1);
+  if (ratio >= 0.7) votes -= 2;       // optA heavily over-represented → bet optB
+  else if (ratio <= 0.3) votes += 2;  // optB heavily over-represented → bet optA
+  else votes += countA15 < countB15 ? 1 : -1; // slight imbalance → revert
+
+  // ── Signal 3: Alternation pattern (last 6) ───────────────────────────────
+  const last6 = history.slice(-6);
+  if (last6.length >= 4) {
+    const alternating = last6.every((x, i) => i === 0 || x !== last6[i - 1]);
+    if (alternating) {
+      // Pattern detected → continue alternating (bet opposite of last)
+      votes += last6[last6.length - 1] === optA ? -1 : 1;
+    }
+  }
+
+  // ── Signal 4: Weighted recency score (last 12, newest weighted heavier) ───
+  const last12 = history.slice(-12);
+  let weightedScore = 0;
+  for (let i = 0; i < last12.length; i++) {
+    const w = i + 1; // higher index = more recent = higher weight
+    weightedScore += last12[i] === optA ? w : -w;
+  }
+  // Revert toward underrepresented side
+  votes += weightedScore > 0 ? -1 : 1;
+
+  // ── Decision ──────────────────────────────────────────────────────────────
+  if (votes > 0) return optA;
+  if (votes < 0) return optB;
+  // Tiebreak: pick the less common in last 20
+  const last20 = history.slice(-20);
+  const aCount = last20.filter((x) => x === optA).length;
+  return aCount <= last20.length / 2 ? optA : optB;
+}
+
 // ─── Lottery draw poller — triggers betting 50s after each new draw ────────────
 async function pollLotteryDraw(session: TgSession): Promise<void> {
   try {
@@ -702,9 +800,14 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
       signal: AbortSignal.timeout(8000),
     });
     if (!r.ok) return;
-    const data = await r.json() as { message?: { all?: { keno28?: { data?: { term: number }[] } } } };
-    const latest = data?.message?.all?.keno28?.data?.[0];
+    const data = await r.json() as { message?: { all?: { keno28?: { data?: { term: number; r3?: string }[] } } } };
+    const items = data?.message?.all?.keno28?.data ?? [];
+    const latest = items[0];
     if (!latest?.term) return;
+
+    // Refresh history cache (newest-last order)
+    const labels = items.map((d) => d.r3).filter((x): x is string => !!x).reverse();
+    if (labels.length) lotteryHistoryCache = labels.slice(-50);
 
     // New draw detected — start the 50s bet timer
     if (latest.term > session.lastSeenLotteryPeriod) {
