@@ -86,6 +86,8 @@ export default function Dashboard() {
   const [wins, setWins] = useState(0);
   const [maxStreak, setMaxStreak] = useState(0);
   const [winRate, setWinRate] = useState('0.00');
+  const [consecutiveLosses, setConsecutiveLosses] = useState(0);
+  const [currentBetAmt, setCurrentBetAmt] = useState(100);
   const [searchPeriod, setSearchPeriod] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [balanceSource, setBalanceSource] = useState<'manual' | 'kkpay'>('manual');
@@ -160,6 +162,7 @@ export default function Dashboard() {
           riskBlocked?: boolean; riskReason?: string;
           algorithms?: string[]; betOptions?: string[]; amountLevels?: number[];
           stepBackOnWin?: boolean;
+          consecutiveLosses?: number; currentBet?: number;
         };
         if (sd.connected && sd.me) setTgMe(sd.me);
         // Restore the watch group so user doesn't need to re-enter it after reconnect
@@ -188,6 +191,8 @@ export default function Dashboard() {
         if (sd.wins !== undefined) setWins(sd.wins);
         if (sd.maxStreak !== undefined) setMaxStreak(sd.maxStreak);
         if (sd.winRate !== undefined) setWinRate(sd.winRate);
+        if (sd.consecutiveLosses !== undefined) setConsecutiveLosses(sd.consecutiveLosses);
+        if (sd.currentBet !== undefined) setCurrentBetAmt(sd.currentBet);
         if (sd.balanceSource) setBalanceSource(sd.balanceSource);
         if (sd.balanceUpdatedAt !== undefined) setBalanceUpdatedAt(sd.balanceUpdatedAt);
         if (sd.kkpayUsername) setKkpayUsername(sd.kkpayUsername);
@@ -555,13 +560,35 @@ export default function Dashboard() {
           </div>
 
           {/* Stats Row */}
-          <div className="bg-card border border-border rounded-lg p-3 grid grid-cols-4 gap-2 mb-6 divide-x divide-border">
-            {([['总投注', `${totalBets}次`], ['中奖', `${wins}次`], ['最大连中', String(maxStreak)], ['胜率', `${winRate}%`]] as [string, string][]).map(([label, val]) => (
-              <div key={label} className="text-center">
-                <div className="text-muted-foreground text-[10px] mb-1">{label}</div>
-                <div className="text-sm font-medium">{val}</div>
+          <div className="bg-card border border-border rounded-lg mb-6 overflow-hidden">
+            <div className="grid grid-cols-3 divide-x divide-border border-b border-border">
+              {([
+                ['总投注', `${totalBets}次`, null],
+                ['中奖', `${wins}次`, wins > 0 ? '#00e676' : null],
+                ['胜率', `${winRate}%`, parseFloat(winRate) >= 50 ? '#00e676' : '#f44336'],
+              ] as [string, string, string | null][]).map(([label, val, color]) => (
+                <div key={label} className="text-center py-2.5 px-1">
+                  <div className="text-muted-foreground text-[10px] mb-1">{label}</div>
+                  <div className="text-sm font-semibold" style={color ? { color } : undefined}>{val}</div>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-3 divide-x divide-border">
+              <div className="text-center py-2.5 px-1">
+                <div className="text-muted-foreground text-[10px] mb-1">最大连中</div>
+                <div className="text-sm font-semibold" style={maxStreak >= 3 ? { color: '#00e676' } : undefined}>{maxStreak}</div>
               </div>
-            ))}
+              <div className="text-center py-2.5 px-1">
+                <div className="text-muted-foreground text-[10px] mb-1">当前连亏</div>
+                <div className="text-sm font-semibold" style={consecutiveLosses >= 2 ? { color: '#f44336' } : undefined}>
+                  {consecutiveLosses > 0 ? `${consecutiveLosses}局` : '-'}
+                </div>
+              </div>
+              <div className="text-center py-2.5 px-1">
+                <div className="text-muted-foreground text-[10px] mb-1">当前注额</div>
+                <div className="text-sm font-semibold text-[#c8a520]">{currentBetAmt.toFixed(0)}</div>
+              </div>
+            </div>
           </div>
 
           {/* Betting Records */}

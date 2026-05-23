@@ -485,10 +485,13 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
       isLoss = hasLoss && !hasWin;
     }
 
-    // Trigger settlement if: from kkpay entity, OR in watch group and looks like a result
+    // Watch-group messages only count as results when anchored to a period number
+    // (avoids settling on casual "中奖" mentions that aren't actual kkpay results).
+    // Messages directly from the kkpay entity are always trusted.
+    const hasPeriodRef = /\d{5,}期/.test(text);
     const isKkpayResult =
       isFromKkpay ||
-      (inWatchGroup && (hasWin || hasLoss || danjineMatch !== null || /KKCOIN/i.test(text)));
+      (inWatchGroup && hasPeriodRef && (hasWin || hasLoss || danjineMatch !== null || /KKCOIN/i.test(text)));
 
     if (isKkpayResult && (isWin || isLoss) && tgSession === session) {
       const sentBet = betLog.find(b => b.status === "sent");
@@ -501,6 +504,14 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
         const pnl = pnlMatch
           ? parseFloat(pnlMatch[1].replace(/,/g, ""))
           : undefined;
+
+        // If a numeric P&L was parsed, its sign is the definitive source of truth —
+        // override any keyword-based won/lost decision to prevent contradictions like
+        // status="中奖" with pnl=-100.
+        if (pnl !== undefined) {
+          isWin  = pnl >= 0;
+          isLoss = pnl < 0;
+        }
 
         // Lottery result label (大单/小双/大/小/单/双)
         const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
@@ -693,8 +704,8 @@ function scheduleAutoNextBet(session: TgSession): void {
   if (!session.cfg.autoBet || !session.watchGroupId) return;
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
-    // Open the next cycle — exactly ONE bet is now allowed
-    session.betPlacedThisCycle = false;
+    // betPlacedThisCycle was already cleared when the new draw was detected —
+    // do NOT reset it here to avoid overriding a bet the message handler already placed.
     void autoPlaceBet(session);
   }, 50 * 1000);
 }
@@ -812,6 +823,9 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
     // New draw detected — start the 50s bet timer
     if (latest.term > session.lastSeenLotteryPeriod) {
       session.lastSeenLotteryPeriod = latest.term;
+      // Open the new cycle NOW so message-handler bets and the timer both
+      // share the same guard.  The timer must NOT reset it again later.
+      session.betPlacedThisCycle = false;
       if (session.cfg.autoBet && session.watchGroupId) {
         scheduleAutoNextBet(session);
       }
@@ -1210,7 +1224,8 @@ router.get("/tg/status", (req, res) => {
     if (b.won === true) { cur++; if (cur > maxStreak) maxStreak = cur; }
     else if (b.won === false) cur = 0;
   }
-  const winRate = totalBets > 0 ? ((winsCount / totalBets) * 100).toFixed(2) : "0.00";
+  // winRate denominator = only settled bets, not pending "sent" ones
+  const winRate = settled.length > 0 ? ((winsCount / settled.length) * 100).toFixed(2) : "0.00";
 
   const me = tgSession.me;
   res.json({
