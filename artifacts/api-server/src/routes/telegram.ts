@@ -72,6 +72,7 @@ interface TgSession {
   recentResults: string[];
   betPlacedThisCycle: boolean;
   lastBetPeriod?: number;
+  currentCloseTimeMs: number;
   // balance
   balance: number;
   todayPnl: number;
@@ -276,6 +277,7 @@ async function restoreSession(): Promise<void> {
       algIndex: 0,
       betPlacedThisCycle: false,
       lastSeenLotteryPeriod: 0,
+      currentCloseTimeMs: 0,
       recentResults: [],
       balance: data.balance ?? 1000000,
       todayPnl: data.todayPnl ?? 0,
@@ -549,6 +551,16 @@ async function runAutoBet(session: TgSession): Promise<void> {
   for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) stale.status = "lost";
   if (betLog.some(b => b.status === "sent")) return;
   if (session.betPlacedThisCycle) return;
+
+  // Safety guard: only bet within the 80s window before close
+  if (session.currentCloseTimeMs > 0) {
+    const timeToClose = session.currentCloseTimeMs - nowMs;
+    if (timeToClose > BET_BEFORE_DRAW_MS + 10_000 || timeToClose < 0) {
+      logger.warn({ timeToCloseSec: Math.round(timeToClose / 1000) }, "[auto-bet] outside betting window, skip");
+      return;
+    }
+  }
+
   const risk = checkRisk(session);
   if (!risk.ok) return;
   const direction = decideBetAuto(session);
@@ -628,9 +640,9 @@ async function pollLottery(session: TgSession): Promise<void> {
     });
 
     session.betPlacedThisCycle = false;
+    session.currentCloseTimeMs = nextCloseMs > nowMs ? nextCloseMs : nowMs + cycleMs;
     if (session.cfg.autoBet && session.watchGroupId) {
-      const refClose = nextCloseMs > nowMs ? nextCloseMs : nowMs + cycleMs;
-      scheduleNextBet(session, refClose, cycleMs);
+      scheduleNextBet(session, session.currentCloseTimeMs, cycleMs);
     }
   } catch { /* network errors ignored */ }
 }
@@ -669,6 +681,16 @@ function startGroupListener(session: TgSession): void {
     const periodInMsg = text.match(/第?(\d{6,10})期/)?.at(1);
     const triggerPeriod = periodInMsg ? parseInt(periodInMsg) : undefined;
     if (triggerPeriod && triggerPeriod === session.lastBetPeriod) return;
+
+    // Only bet when inside the 80s window before close
+    if (session.currentCloseTimeMs > 0) {
+      const timeToClose = session.currentCloseTimeMs - Date.now();
+      if (timeToClose > BET_BEFORE_DRAW_MS + 10_000 || timeToClose < 0) {
+        logger.info({ timeToCloseSec: Math.round(timeToClose / 1000) }, "[msg-bet] outside betting window, skip");
+        return;
+      }
+    }
+
     const risk = checkRisk(session);
     if (!risk.ok) return;
     const direction = decideBet(session, text);
@@ -798,7 +820,7 @@ router.post("/tg/send-code", requireAuth, async (req, res) => {
       consecutiveLosses: 0, sessionPnl: 0,
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
-      betPlacedThisCycle: false, lastSeenLotteryPeriod: 0,
+      betPlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0,
       recentResults: [], balance: 1000000,
       todayPnl: 0, todayResetAt: todayMidnight(),
       kkpayUsername: "kkpay", kkpayEntityId: undefined,
