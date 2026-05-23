@@ -36,6 +36,15 @@
       "dragon_ride"
     ],
     "odds": 1.998,
-    "chaseNumbers": []
+    "chaseNumbers": [
+      {
+        "num": 0,
+        "amount": 100
+      },
+      {
+        "num": 27,
+        "amount": 100
+      }
+    ]
   }
 }

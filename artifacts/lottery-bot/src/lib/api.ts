@@ -123,6 +123,7 @@ export interface BetCfg {
   algorithms: string[];
   odds: number;
   chaseNumbers: Array<{ num: number; amount: number }>;
+  enableChase: boolean;
 }
 
 export interface TgStatus {
@@ -144,6 +145,7 @@ export interface TgStatus {
   algorithms?: string[];
   odds?: number;
   chaseNumbers?: Array<{ num: number; amount: number }>;
+  enableChase?: boolean;
   consecutiveLosses?: number;
   sessionPnl?: number;
   currentBet?: number;

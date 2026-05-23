@@ -32,6 +32,7 @@ interface BetCfg {
   algorithms: AlgorithmId[];
   odds: number;
   chaseNumbers: Array<{ num: number; amount: number }>;
+  enableChase: boolean;
 }
 
 interface GroupInfo {
@@ -135,6 +136,7 @@ const DEFAULT_CFG: BetCfg = {
   algorithms: ["signal_follow"],
   odds: 1.98,
   chaseNumbers: [],
+  enableChase: false,
 };
 
 const BET_OPTION_LABELS: Record<BetOption, string> = {
@@ -637,7 +639,7 @@ function decideAI(session: TgSession): string | null {
 // ─── Auto-bet engine ──────────────────────────────────────────────────────────
 
 async function placeChaseNumberBets(session: TgSession): Promise<void> {
-  if (!session.cfg.chaseNumbers.length || !session.watchGroupId) return;
+  if (!session.cfg.enableChase || !session.cfg.chaseNumbers.length || !session.watchGroupId) return;
   const targetId = session.watchGroupId;
   const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
   for (const { num, amount } of session.cfg.chaseNumbers) {
@@ -1135,6 +1137,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     algorithms: body.algorithms ?? prev.algorithms,
     odds: body.odds ?? prev.odds,
     chaseNumbers: body.chaseNumbers ?? prev.chaseNumbers,
+    enableChase: body.enableChase ?? prev.enableChase,
   };
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
