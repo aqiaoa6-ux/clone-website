@@ -18,9 +18,16 @@ interface DrawState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const ALGO_LABELS: Record<string, string> = {
-  signal_follow: "跟信号", signal_reverse: "反信号",
-  streak_follow: "跟热门", cold_pick: "冷号追",
-  random: "随机", ai_trend: "AI趋势",
+  signal_follow:  "跟信号",
+  signal_reverse: "反信号",
+  streak_follow:  "顺势而为",
+  dragon_ride:    "长龙跟龙",
+  dragon_break:   "长龙反打",
+  cold_pick:      "冷号追",
+  random:         "随机",
+  ai_trend:       "AI趋势",
+  momentum:       "近期动量",
+  anti_streak:    "震荡反打",
 };
 
 const BET_OPT_LABELS: Record<string, string> = {
@@ -231,6 +238,9 @@ function SettingsDrawer({ status, onClose, onSave }: {
   onClose: () => void;
   onSave: (cfg: Record<string, unknown>) => Promise<void>;
 }) {
+  const DEFAULT_LEVELS = [100, 200, 400, 800, 1600, 3200];
+  const initLevels = status.amountLevels?.length === 6 ? status.amountLevels : DEFAULT_LEVELS;
+
   const [betAmount, setBetAmount] = useState(String(status.betAmount ?? 100));
   const [strategy, setStrategy] = useState(status.strategy ?? "normal");
   const [multiplier, setMultiplier] = useState(String(status.betMultiplier ?? 2));
@@ -241,10 +251,13 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [algos, setAlgos] = useState<string[]>(status.algorithms ?? ["signal_follow"]);
   const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
   const [kkpay, setKkpay] = useState(status.kkpayUsername ?? "kkpay");
+  const [levels, setLevels] = useState<string[]>(initLevels.map(String));
+  const [stepBackOnWin, setStepBackOnWin] = useState(status.stepBackOnWin ?? true);
   const [saving, setSaving] = useState(false);
 
   const toggleAlgo = (a: string) => setAlgos(prev => prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a]);
   const toggleOpt = (o: string) => setBetOpts(prev => prev.includes(o) ? prev.filter(x => x !== o) : [...prev, o]);
+  const setLevel = (i: number, v: string) => setLevels(prev => prev.map((x, idx) => idx === i ? v : x));
 
   const save = async () => {
     setSaving(true);
@@ -254,6 +267,8 @@ function SettingsDrawer({ status, onClose, onSave }: {
         stopLoss: Number(stopLoss), targetProfit: Number(targetProfit),
         maxConsecutiveLosses: Number(maxLoss), cooldownSeconds: Number(cooldown),
         algorithms: algos, betOptions: betOpts,
+        amountLevels: levels.map(Number),
+        stepBackOnWin,
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
       onClose();
@@ -298,8 +313,23 @@ function SettingsDrawer({ status, onClose, onSave }: {
           <div className={sectionCls}>
             <h4 className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-2">金额策略</h4>
             <div>
-              <label className={labelCls}>基础注额</label>
-              <input type="number" value={betAmount} onChange={e => setBetAmount(e.target.value)} className={inputCls} min="1" />
+              <label className={labelCls}>自定义金额（6层，输负加注）</label>
+              <div className="grid grid-cols-3 gap-2">
+                {levels.map((v, i) => (
+                  <div key={i}>
+                    <label className="block text-[10px] text-slate-500 mb-0.5">第{i + 1}层</label>
+                    <input type="number" value={v} onChange={e => setLevel(i, e.target.value)}
+                      className={inputCls} min="1" />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-slate-400">中后回首注</span>
+              <button onClick={() => setStepBackOnWin(v => !v)}
+                className={`w-11 h-6 rounded-full transition-colors ${stepBackOnWin ? "bg-blue-600" : "bg-[#252a3d]"} relative`}>
+                <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all ${stepBackOnWin ? "left-5" : "left-0.5"}`} />
+              </button>
             </div>
             <div>
               <label className={labelCls}>资金策略</label>

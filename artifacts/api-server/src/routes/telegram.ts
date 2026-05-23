@@ -14,7 +14,8 @@ const router = Router();
 
 type BetStrategy = "normal" | "martingale" | "anti-martingale";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
-type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend";
+type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
+  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak";
 
 interface BetCfg {
   autoBet: boolean;
@@ -118,7 +119,7 @@ const DEFAULT_CFG: BetCfg = {
   stopLoss: 5000,
   targetProfit: 3000,
   cooldownSeconds: 0,
-  amountLevels: [100, 200, 300, 500, 1000],
+  amountLevels: [100, 200, 400, 800, 1600, 3200],
   stepBackOnWin: true,
   betOptions: ["big", "small"],
   algorithms: ["signal_follow"],
@@ -357,7 +358,7 @@ function computeNextBet(session: TgSession, won: boolean): number {
   const { amountLevels, stepBackOnWin, betAmount, strategy, betMultiplier } = session.cfg;
   if (amountLevels.length > 1) {
     let lvl = session.currentLevel;
-    lvl = won ? (stepBackOnWin ? Math.max(0, lvl - 1) : lvl) : Math.min(amountLevels.length - 1, lvl + 1);
+    lvl = won ? (stepBackOnWin ? 0 : lvl) : Math.min(amountLevels.length - 1, lvl + 1);
     session.currentLevel = lvl;
     return amountLevels[lvl]!;
   }
@@ -431,6 +432,62 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
       winRate: settled.length > 0 ? ((wins / settled.length) * 100).toFixed(2) : "0.00",
     });
   }
+}
+
+// ─── Algorithm helpers ────────────────────────────────────────────────────────
+
+function dragonStreak(mapped: string[], label: string): number {
+  let n = 0;
+  for (let i = mapped.length - 1; i >= 0 && mapped[i] === label; i--) n++;
+  return n;
+}
+
+function dragonRide(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return null;
+  const mapped = buildHistory(session).map(r => mapR3ToEnabled(r, labels)).filter((x): x is string => x !== null);
+  if (mapped.length < 3) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  const last = mapped[mapped.length - 1]!;
+  return dragonStreak(mapped, last) >= 3 ? last : (labels[Math.floor(Math.random() * labels.length)] ?? null);
+}
+
+function dragonBreak(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return null;
+  const mapped = buildHistory(session).map(r => mapR3ToEnabled(r, labels)).filter((x): x is string => x !== null);
+  if (mapped.length < 4) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  const last = mapped[mapped.length - 1]!;
+  if (dragonStreak(mapped, last) >= 4) {
+    const opp = labels.find(l => l !== last);
+    return opp ?? labels[Math.floor(Math.random() * labels.length)] ?? null;
+  }
+  return labels[Math.floor(Math.random() * labels.length)] ?? null;
+}
+
+function momentum(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return null;
+  const mapped = buildHistory(session).map(r => mapR3ToEnabled(r, labels)).filter((x): x is string => x !== null);
+  if (!mapped.length) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  const weights: Record<string, number> = {};
+  for (const l of labels) weights[l] = 0;
+  mapped.forEach((r, i) => { weights[r] = (weights[r] ?? 0) + (i + 1); });
+  return Object.entries(weights).sort((a, b) => b[1] - a[1])[0]?.[0] ?? labels[0] ?? null;
+}
+
+function antiStreak(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return null;
+  const mapped = buildHistory(session).map(r => mapR3ToEnabled(r, labels)).filter((x): x is string => x !== null);
+  const last5 = mapped.slice(-5);
+  if (last5.length >= 3) {
+    const alternating = last5.every((x, i) => i === 0 || x !== last5[i - 1]);
+    if (alternating) {
+      const opp = labels.find(l => l !== last5[last5.length - 1]);
+      if (opp) return opp;
+    }
+  }
+  return freqPick(mapped, labels, false);
 }
 
 // ─── Algorithm / direction decision ──────────────────────────────────────────
@@ -525,7 +582,11 @@ function decideBet(session: TgSession, signalText: string): string | null {
     return (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
   }
   if (algoId === "streak_follow") return freqPick(history, labels, false);
-  if (algoId === "cold_pick" || algoId === "signal_reverse") return freqPick(history, labels, true);
+  if (algoId === "cold_pick") return freqPick(history, labels, true);
+  if (algoId === "dragon_ride") return dragonRide(session);
+  if (algoId === "dragon_break") return dragonBreak(session);
+  if (algoId === "momentum") return momentum(session);
+  if (algoId === "anti_streak") return antiStreak(session);
   return freqPick(history, labels, true);
 }
 
@@ -536,8 +597,12 @@ function decideBetAuto(session: TgSession): string | null {
   session.algIndex++;
   if (algoId === "ai_trend") return decideAI(session);
   if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  if (algoId === "dragon_ride") return dragonRide(session);
+  if (algoId === "dragon_break") return dragonBreak(session);
+  if (algoId === "momentum") return momentum(session);
+  if (algoId === "anti_streak") return antiStreak(session);
   const history = buildHistory(session);
-  const cold = algoId === "cold_pick" || algoId === "signal_reverse";
+  const cold = algoId === "cold_pick";
   return freqPick(history, labels, cold);
 }
 
