@@ -121,15 +121,18 @@ export default function Dashboard() {
         const latest = items[0];
         setLatestTerm(latest);
         setAllItems(items as TrendTerm[]);
-        // items[0] is the LAST COMPLETED period — its closeTime is in the past.
-        // The CURRENT open period ends at closeTime + cycleDuration.
+        // items[0] can be either the CURRENT OPEN period (closeTime in future)
+        // OR the LAST COMPLETED period (closeTime in past). Handle both:
         const closedAt = latest.closeTime ?? 0;
         const openedAt = latest.openTime ?? 0;
+        const now = Date.now();
         const cycle = (closedAt > openedAt && closedAt - openedAt < 600000)
           ? closedAt - openedAt
           : 201000;
-        const nextCloseTime = closedAt + cycle;
-        nextOpenTimeRef.current = nextCloseTime > Date.now() ? nextCloseTime : Date.now() + cycle;
+        // If closeTime is still in the future → current open period, use it directly.
+        // If closeTime is in the past → last completed period, next close = closeTime + cycle.
+        const targetClose = closedAt > now ? closedAt : closedAt + cycle;
+        nextOpenTimeRef.current = targetClose > now ? targetClose : now + cycle;
         setCurrentPeriod(latest.term + 1);
         setFetchError(false);
         setLastFetched(new Date());
@@ -651,14 +654,20 @@ export default function Dashboard() {
                 </div>
               </div>
               <div className="text-center py-2.5 px-1">
-                <div className="text-muted-foreground text-[10px] mb-1">
-                  {nextBetAt && nextBetAt > nowMs ? '下次投注' : '当前注额'}
-                </div>
-                <div className="text-sm font-semibold text-[#c8a520]">
-                  {nextBetAt && nextBetAt > nowMs
-                    ? `${Math.ceil((nextBetAt - nowMs) / 1000)}s`
-                    : currentBetAmt.toFixed(0)}
-                </div>
+                {nextBetAt && nextBetAt > nowMs ? (
+                  <>
+                    <div className="text-muted-foreground text-[10px] mb-1">距投注</div>
+                    <div className="text-sm font-semibold text-[#c8a520]">
+                      {Math.ceil((nextBetAt - nowMs) / 1000)}s
+                    </div>
+                    <div className="text-[9px] text-muted-foreground/60 mt-0.5">届时剩余≈120s</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-muted-foreground text-[10px] mb-1">当前注额</div>
+                    <div className="text-sm font-semibold text-[#c8a520]">{currentBetAmt.toFixed(0)}</div>
+                  </>
+                )}
               </div>
             </div>
           </div>

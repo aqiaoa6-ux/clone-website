@@ -509,7 +509,11 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
 
     // Always try to parse and update the absolute balance from any kkpay message —
     // even when there is no pending bet (autoSettle may have already settled it).
-    if (isKkpayResult || isFromKkpay) {
+    // Also catches bet-confirmation messages which have KKCOIN but a hex ticket ID
+    // (no \d{5,}期), so they don't match isKkpayResult unless coming from the entity.
+    const mayHaveBalance = isFromKkpay || isKkpayResult
+      || (inWatchGroup && /KKCOIN/i.test(text));
+    if (mayHaveBalance) {
       const absBalEarly = parseBalanceFromKkpay(text);
       if (absBalEarly !== null) {
         session.balance = absBalEarly;
@@ -965,13 +969,21 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
       session.lastSeenLotteryPeriod = latest.term;
 
       // Compute timing constants used both for the SSE event and the bet scheduler.
-      // items[0] is the LAST COMPLETED period — closeTime is in the past.
-      // The CURRENT open period ends one cycle later (closeTime + cycleDuration).
+      // items[0] can be either:
+      //   a) the CURRENT OPEN period  — closeTime is still in the FUTURE
+      //   b) the LAST COMPLETED period — closeTime is in the PAST
+      // Handle both so the countdown and bet timer are always correct.
       const closeTimeMs = latest.closeTime ?? 0;
       const openTimeMs  = latest.openTime  ?? 0;
+      const nowMs       = Date.now();
       const cycleDurationMs = (closeTimeMs > openTimeMs && closeTimeMs - openTimeMs < 600000)
         ? (closeTimeMs - openTimeMs)   // measured from real API data (~201 000 ms)
         : DRAW_CYCLE_MS;               // fallback if fields are missing
+
+      // nextCloseTime = the close time the frontend should count down to.
+      // Case a: closeTime in future → that IS the next close time.
+      // Case b: closeTime in past   → next close = closeTime + one cycle.
+      const nextCloseTime = closeTimeMs > nowMs ? closeTimeMs : closeTimeMs + cycleDurationMs;
 
       // 2. Push real-time draw info to the frontend.
       pushEvent("draw:new", {
@@ -983,7 +995,7 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
         result: latest.result,
         closeTime: closeTimeMs,
         openTime: openTimeMs,
-        nextCloseTime: closeTimeMs + cycleDurationMs,
+        nextCloseTime,
       });
 
       // 3. Open the new cycle and schedule next bet at 120s before next draw.
@@ -991,8 +1003,9 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
       // shared correctly between the message handler and the countdown timer.
       session.betPlacedThisCycle = false;
       if (session.cfg.autoBet && session.watchGroupId) {
-        // closeTimeMs is the end of the LAST period; next period ends one cycle later.
-        const refClose = closeTimeMs > 0 ? closeTimeMs : Date.now() + cycleDurationMs;
+        // Pass the actual close target (not raw closeTimeMs) so scheduleAutoNextBet
+        // always references the period the bet is targeting.
+        const refClose = nextCloseTime > nowMs ? nextCloseTime : nowMs + cycleDurationMs;
         scheduleAutoNextBet(session, refClose, cycleDurationMs);
       }
     }
