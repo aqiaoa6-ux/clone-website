@@ -6,7 +6,7 @@ import { NewMessage, NewMessageEvent } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
-import { requireAuth, requireAdmin, requireCard } from "../middleware/requireAuth";
+import { requireAuth, requireCard } from "../middleware/requireAuth";
 
 const router = Router();
 
@@ -47,14 +47,15 @@ interface BetRecord {
   betContent: string;
   amount: number;
   timestamp: number;
-  status: "sent" | "failed" | "won" | "lost";
-  period?: number;
-  lotteryResult?: string;
-  pnl?: number;
+  status: "sent" | "won" | "lost" | "failed";
   won?: boolean;
+  pnl?: number;
+  lotteryResult?: string;
+  period?: number;
 }
 
 interface TgSession {
+  userId: number;
   client: TelegramClient;
   stringSession: StringSession;
   phone: string;
@@ -63,7 +64,14 @@ interface TgSession {
   groups: GroupInfo[];
   watchGroupId?: string;
   cfg: BetCfg;
-  // runtime state
+  // per-session state
+  betLog: BetRecord[];
+  sseClients: Set<Response>;
+  messageHandler: ((event: NewMessageEvent) => Promise<void>) | null;
+  messageHandlerBuilder: NewMessage | null;
+  kkpayHandler: ((event: NewMessageEvent) => Promise<void>) | null;
+  kkpayHandlerBuilder: NewMessage | null;
+  // runtime
   consecutiveLosses: number;
   sessionPnl: number;
   currentBet: number;
@@ -108,7 +116,6 @@ interface PersistedData {
 
 const DRAW_CYCLE_MS = 210_000;
 const BET_BEFORE_DRAW_MS = 80_000;
-const SESSION_FILE = path.join(process.cwd(), ".tg-session.json");
 
 const DEFAULT_CFG: BetCfg = {
   autoBet: false,
@@ -132,14 +139,8 @@ const BET_OPTION_LABELS: Record<BetOption, string> = {
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
-let tgSession: TgSession | null = null;
-const betLog: BetRecord[] = [];
-let messageHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
-let messageHandlerBuilder: NewMessage | null = null;
-let kkpayHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
-let kkpayHandlerBuilder: NewMessage | null = null;
+const tgSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
-const sseClients = new Set<Response>();
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -168,32 +169,35 @@ function todayMidnight(): number {
   return d.getTime();
 }
 
-function pushEvent(type: string, payload: Record<string, unknown>): void {
-  if (sseClients.size === 0) return;
+function pushEvent(session: TgSession, type: string, payload: Record<string, unknown>): void {
+  if (session.sseClients.size === 0) return;
   const data = JSON.stringify({ type, ...payload });
-  for (const res of sseClients) {
-    try { res.write(`data: ${data}\n\n`); } catch { sseClients.delete(res); }
+  for (const res of session.sseClients) {
+    try { res.write(`data: ${data}\n\n`); } catch { session.sseClients.delete(res); }
   }
 }
 
 // ─── Session persistence ──────────────────────────────────────────────────────
 
-function saveSession(): void {
-  if (!tgSession) return;
+function sessionFile(userId: number): string {
+  return path.join(process.cwd(), `.tg-session-${userId}.json`);
+}
+
+function saveSession(session: TgSession): void {
   try {
     const data: PersistedData = {
-      sessionString: tgSession.stringSession.save(),
-      phone: tgSession.phone,
-      balance: tgSession.balance,
-      todayPnl: tgSession.todayPnl,
-      todayResetAt: tgSession.todayResetAt,
-      sessionPnl: tgSession.sessionPnl,
-      kkpayUsername: tgSession.kkpayUsername,
-      balanceSource: tgSession.balanceSource,
-      watchGroupId: tgSession.watchGroupId,
-      cfg: tgSession.cfg,
+      sessionString: session.stringSession.save(),
+      phone: session.phone,
+      balance: session.balance,
+      todayPnl: session.todayPnl,
+      todayResetAt: session.todayResetAt,
+      sessionPnl: session.sessionPnl,
+      kkpayUsername: session.kkpayUsername,
+      balanceSource: session.balanceSource,
+      watchGroupId: session.watchGroupId,
+      cfg: session.cfg,
     };
-    fs.writeFileSync(SESSION_FILE, JSON.stringify(data, null, 2), "utf-8");
+    fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
   } catch { /* ignore */ }
 }
 
@@ -226,12 +230,12 @@ function startWatchdog(session: TgSession): void {
   stopAllTimers(session);
 
   session.saveTimer = setInterval(() => {
-    if (tgSession !== session) { clearInterval(session.saveTimer); return; }
-    saveSession();
+    if (tgSessions.get(session.userId) !== session) { clearInterval(session.saveTimer); return; }
+    saveSession(session);
   }, 5 * 60 * 1000);
 
   session.watchdogTimer = setInterval(() => {
-    if (tgSession !== session) { clearInterval(session.watchdogTimer); return; }
+    if (tgSessions.get(session.userId) !== session) { clearInterval(session.watchdogTimer); return; }
     void (async () => {
       try {
         await session.client.getMe();
@@ -240,20 +244,19 @@ function startWatchdog(session: TgSession): void {
           await session.client.connect();
           if (session.watchGroupId) startGroupListener(session);
           await startKkpayListener(session);
-          saveSession();
-          pushEvent("session:reconnected", { at: Date.now() });
+          saveSession(session);
+          pushEvent(session, "session:reconnected", { at: Date.now() });
         } catch { /* retry next cycle */ }
       }
     })();
   }, 15 * 1000);
 }
 
-// ─── Restore session on boot ──────────────────────────────────────────────────
+// ─── Restore sessions on boot ─────────────────────────────────────────────────
 
-async function restoreSession(): Promise<void> {
+async function restoreUserSession(userId: number, file: string): Promise<void> {
   try {
-    if (!fs.existsSync(SESSION_FILE)) return;
-    const raw = fs.readFileSync(SESSION_FILE, "utf-8");
+    const raw = fs.readFileSync(file, "utf-8");
     const data = JSON.parse(raw) as PersistedData;
     if (!data.sessionString) return;
 
@@ -266,11 +269,15 @@ async function restoreSession(): Promise<void> {
     const me = (await client.getMe()) as Api.User;
     if (!me?.id) return;
 
-    tgSession = {
+    const session: TgSession = {
+      userId,
       client, stringSession,
       phone: data.phone ?? "",
       groups: await fetchGroups(client),
       cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG },
+      betLog: [], sseClients: new Set(),
+      messageHandler: null, messageHandlerBuilder: null,
+      kkpayHandler: null, kkpayHandlerBuilder: null,
       consecutiveLosses: 0,
       sessionPnl: 0,
       currentBet: data.cfg?.betAmount ?? DEFAULT_CFG.betAmount,
@@ -292,21 +299,39 @@ async function restoreSession(): Promise<void> {
       watchGroupId: data.watchGroupId,
     };
 
-    if (tgSession.watchGroupId) startGroupListener(tgSession);
-    startKkpayListener(tgSession).catch(() => { /* ignore */ });
-    startWatchdog(tgSession);
+    tgSessions.set(userId, session);
+
+    if (session.watchGroupId) startGroupListener(session);
+    startKkpayListener(session).catch(() => { /* ignore */ });
+    startWatchdog(session);
+    logger.info({ userId }, "[tg] session restored");
   } catch {
-    try { fs.unlinkSync(SESSION_FILE); } catch { /* ok */ }
+    try { fs.unlinkSync(file); } catch { /* ok */ }
   }
 }
 
-void restoreSession();
+async function restoreAllSessions(): Promise<void> {
+  const cwd = process.cwd();
+  try {
+    const files = fs.readdirSync(cwd).filter(f => /^\.tg-session-\d+\.json$/.test(f));
+    for (const f of files) {
+      const userId = parseInt(f.replace(".tg-session-", "").replace(".json", ""), 10);
+      if (!isNaN(userId)) await restoreUserSession(userId, path.join(cwd, f));
+    }
+    // legacy single-user session migration
+    const legacy = path.join(cwd, ".tg-session.json");
+    if (fs.existsSync(legacy)) {
+      logger.info("[tg] legacy session file found but skipped (multi-user mode requires re-login)");
+    }
+  } catch { /* ignore */ }
+}
+
+void restoreAllSessions();
 
 // ─── Balance parsing ──────────────────────────────────────────────────────────
 
 function parseBalance(text: string): number | null {
   const patterns = [
-    // kkpay "ye" response: "KKCOIN : 494136.570"
     /KKCOIN\s*[：:]\s*([\d,]+\.?\d*)/i,
     /当前余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
     /(?:可用|账[户号])?余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
@@ -326,14 +351,12 @@ function parseBalance(text: string): number | null {
   return null;
 }
 
-// Send "ye" to the watch group to trigger kkpay balance reply.
-// Records the sent message ID so we only parse kkpay's reply to THIS message.
 async function sendYeForBalance(session: TgSession): Promise<void> {
   if (!session.watchGroupId) return;
   try {
     const sent = await session.client.sendMessage(session.watchGroupId, { message: "ye" });
     session.yeMessageId = sent.id;
-    logger.info({ msgId: sent.id }, "[balance] sent 'ye', waiting for kkpay reply");
+    logger.info({ msgId: sent.id, userId: session.userId }, "[balance] sent 'ye'");
   } catch (err) {
     logger.warn({ err }, "[balance] failed to send 'ye'");
   }
@@ -345,7 +368,7 @@ function updateBalance(session: TgSession, text: string): void {
   session.balance = bal;
   session.balanceSource = "kkpay";
   session.balanceUpdatedAt = Date.now();
-  pushEvent("balance:update", {
+  pushEvent(session, "balance:update", {
     balance: bal,
     balanceSource: "kkpay",
     balanceUpdatedAt: session.balanceUpdatedAt,
@@ -385,6 +408,7 @@ function checkRisk(session: TgSession): { ok: boolean; reason?: string } {
 
 function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; result?: string; betId?: string; period?: number }): void {
   const { won, pnl, result, betId, period } = opts;
+  const { betLog } = session;
 
   if (pnl !== undefined) {
     session.sessionPnl += pnl;
@@ -419,7 +443,7 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
       if (b.won === true) { streak++; if (streak > maxS) maxS = streak; }
       else if (b.won === false) streak = 0;
     }
-    pushEvent("bet:result", {
+    pushEvent(session, "bet:result", {
       bet: record,
       balance: session.balance,
       todayPnl: session.todayPnl,
@@ -440,6 +464,29 @@ function dragonStreak(mapped: string[], label: string): number {
   let n = 0;
   for (let i = mapped.length - 1; i >= 0 && mapped[i] === label; i--) n++;
   return n;
+}
+
+function mapR3ToEnabled(r3: string, enabled: string[]): string | null {
+  if (enabled.includes(r3)) return r3;
+  if (enabled.includes("大") && r3.startsWith("大")) return "大";
+  if (enabled.includes("小") && r3.startsWith("小")) return "小";
+  if (enabled.includes("单") && r3.endsWith("单")) return "单";
+  if (enabled.includes("双") && r3.endsWith("双")) return "双";
+  return null;
+}
+
+function freqPick(items: string[], labels: string[], sortAsc: boolean): string | null {
+  const freq: Record<string, number> = {};
+  for (const l of labels) freq[l] = 0;
+  for (const r of items) { const m = mapR3ToEnabled(r, labels); if (m) freq[m] = (freq[m] ?? 0) + 1; }
+  const sorted = Object.entries(freq).sort((a, b) => sortAsc ? a[1] - b[1] : b[1] - a[1]);
+  return sorted[0]?.[0] ?? labels[Math.floor(Math.random() * labels.length)] ?? null;
+}
+
+function buildHistory(session: TgSession): string[] {
+  return session.recentResults.length >= 3
+    ? session.recentResults.slice(-10)
+    : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
 }
 
 function dragonRide(session: TgSession): string | null {
@@ -505,27 +552,51 @@ function parseBetLabel(text: string): string | null {
   return null;
 }
 
-function mapR3ToEnabled(r3: string, enabled: string[]): string | null {
-  if (enabled.includes(r3)) return r3;
-  if (enabled.includes("大") && r3.startsWith("大")) return "大";
-  if (enabled.includes("小") && r3.startsWith("小")) return "小";
-  if (enabled.includes("单") && r3.endsWith("单")) return "单";
-  if (enabled.includes("双") && r3.endsWith("双")) return "双";
-  return null;
+function decideBet(session: TgSession, signalText: string): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length || !session.cfg.algorithms.length) return null;
+  const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
+  session.algIndex++;
+
+  if (algoId === "ai_trend") return decideAI(session);
+  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  if (algoId === "dragon_ride") return dragonRide(session);
+  if (algoId === "dragon_break") return dragonBreak(session);
+  if (algoId === "momentum") return momentum(session);
+  if (algoId === "anti_streak") return antiStreak(session);
+
+  const history = buildHistory(session);
+
+  if (algoId === "signal_follow") {
+    const p = parseBetLabel(signalText);
+    if (!p) return null;
+    return labels.includes(p) ? p : (labels[0] ?? null);
+  }
+  if (algoId === "signal_reverse") {
+    const p = parseBetLabel(signalText);
+    if (!p) return null;
+    const opp: Record<string, string> = { 大:"小", 小:"大", 单:"双", 双:"单", 大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单" };
+    const rev = opp[p];
+    return (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
+  }
+  if (algoId === "streak_follow") return freqPick(history, labels, false);
+  if (algoId === "cold_pick") return freqPick(history, labels, true);
+  return freqPick(history, labels, true);
 }
 
-function freqPick(items: string[], labels: string[], sortAsc: boolean): string | null {
-  const freq: Record<string, number> = {};
-  for (const l of labels) freq[l] = 0;
-  for (const r of items) { const m = mapR3ToEnabled(r, labels); if (m) freq[m] = (freq[m] ?? 0) + 1; }
-  const sorted = Object.entries(freq).sort((a, b) => sortAsc ? a[1] - b[1] : b[1] - a[1]);
-  return sorted[0]?.[0] ?? labels[Math.floor(Math.random() * labels.length)] ?? null;
-}
-
-function buildHistory(session: TgSession): string[] {
-  return session.recentResults.length >= 3
-    ? session.recentResults.slice(-10)
-    : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
+function decideBetAuto(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length || !session.cfg.algorithms.length) return null;
+  const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
+  session.algIndex++;
+  if (algoId === "ai_trend") return decideAI(session);
+  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  if (algoId === "dragon_ride") return dragonRide(session);
+  if (algoId === "dragon_break") return dragonBreak(session);
+  if (algoId === "momentum") return momentum(session);
+  if (algoId === "anti_streak") return antiStreak(session);
+  const history = buildHistory(session);
+  return freqPick(history, labels, algoId === "cold_pick");
 }
 
 function decideAI(session: TgSession): string | null {
@@ -558,57 +629,10 @@ function decideAI(session: TgSession): string | null {
   return last20.filter(x => x === optA).length <= last20.length / 2 ? optA : optB;
 }
 
-function decideBet(session: TgSession, signalText: string): string | null {
-  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
-  if (!labels.length || !session.cfg.algorithms.length) return null;
-  const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
-  session.algIndex++;
-
-  if (algoId === "ai_trend") return decideAI(session);
-  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
-
-  const history = buildHistory(session);
-
-  if (algoId === "signal_follow") {
-    const p = parseBetLabel(signalText);
-    if (!p) return null;
-    return labels.includes(p) ? p : (labels[0] ?? null);
-  }
-  if (algoId === "signal_reverse") {
-    const p = parseBetLabel(signalText);
-    if (!p) return null;
-    const opp: Record<string, string> = { 大:"小", 小:"大", 单:"双", 双:"单", 大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单" };
-    const rev = opp[p];
-    return (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
-  }
-  if (algoId === "streak_follow") return freqPick(history, labels, false);
-  if (algoId === "cold_pick") return freqPick(history, labels, true);
-  if (algoId === "dragon_ride") return dragonRide(session);
-  if (algoId === "dragon_break") return dragonBreak(session);
-  if (algoId === "momentum") return momentum(session);
-  if (algoId === "anti_streak") return antiStreak(session);
-  return freqPick(history, labels, true);
-}
-
-function decideBetAuto(session: TgSession): string | null {
-  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
-  if (!labels.length || !session.cfg.algorithms.length) return null;
-  const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
-  session.algIndex++;
-  if (algoId === "ai_trend") return decideAI(session);
-  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
-  if (algoId === "dragon_ride") return dragonRide(session);
-  if (algoId === "dragon_break") return dragonBreak(session);
-  if (algoId === "momentum") return momentum(session);
-  if (algoId === "anti_streak") return antiStreak(session);
-  const history = buildHistory(session);
-  const cold = algoId === "cold_pick";
-  return freqPick(history, labels, cold);
-}
-
 // ─── Auto-bet engine ──────────────────────────────────────────────────────────
 
 async function placeBet(session: TgSession, direction: string): Promise<void> {
+  const { betLog } = session;
   const targetId = session.watchGroupId!;
   const amount = session.currentBet;
   const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
@@ -618,22 +642,22 @@ async function placeBet(session: TgSession, direction: string): Promise<void> {
     session.lastBetAt = Date.now();
     betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: "[自动投注]", betContent: direction, amount, timestamp: Date.now(), status: "sent" });
     if (betLog.length > 200) betLog.pop();
-    pushEvent("bet:new", { bet: betLog[0] });
+    pushEvent(session, "bet:new", { bet: betLog[0] });
   } catch {
     betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: "[自动投注]", betContent: direction, amount, timestamp: Date.now(), status: "failed" });
     if (betLog.length > 200) betLog.pop();
-    pushEvent("bet:new", { bet: betLog[0] });
+    pushEvent(session, "bet:new", { bet: betLog[0] });
   }
 }
 
 async function runAutoBet(session: TgSession): Promise<void> {
   if (!session.cfg.autoBet || !session.watchGroupId) return;
+  const { betLog } = session;
   const nowMs = Date.now();
   for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) stale.status = "lost";
   if (betLog.some(b => b.status === "sent")) return;
   if (session.betPlacedThisCycle) return;
 
-  // Safety guard: only bet within the 80s window before close
   if (session.currentCloseTimeMs > 0) {
     const timeToClose = session.currentCloseTimeMs - nowMs;
     if (timeToClose > BET_BEFORE_DRAW_MS + 10_000 || timeToClose < 0) {
@@ -661,7 +685,7 @@ function scheduleNextBet(session: TgSession, closeTimeMs: number, cycleMs: numbe
   );
 
   logger.info({ delaySec: Math.round(delay / 1000), timeToCloseSec: Math.round(timeToClose / 1000) }, "[bet-timer] scheduled");
-  pushEvent("timer:scheduled", { fireAt: Date.now() + delay, delaySec: Math.round(delay / 1000) });
+  pushEvent(session, "timer:scheduled", { fireAt: Date.now() + delay, delaySec: Math.round(delay / 1000) });
 
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
@@ -691,7 +715,7 @@ async function pollLottery(session: TgSession): Promise<void> {
     if (latest.term <= session.lastSeenLotteryPeriod) return;
 
     if (latest.r3) {
-      const pending = betLog.find(b => b.status === "sent");
+      const pending = session.betLog.find(b => b.status === "sent");
       if (pending) {
         const bet = pending.betContent.trim();
         let won = bet === latest.r3;
@@ -713,7 +737,7 @@ async function pollLottery(session: TgSession): Promise<void> {
     const cycleMs = (closeMs > openMs && closeMs - openMs < 600000) ? (closeMs - openMs) : DRAW_CYCLE_MS;
     const nextCloseMs = closeMs > nowMs ? closeMs : closeMs + cycleMs;
 
-    pushEvent("draw:new", {
+    pushEvent(session, "draw:new", {
       term: latest.term, r3: latest.r3 ?? "",
       sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3,
       result: latest.result, closeTime: closeMs, openTime: openMs,
@@ -726,7 +750,6 @@ async function pollLottery(session: TgSession): Promise<void> {
       scheduleNextBet(session, session.currentCloseTimeMs, cycleMs);
     }
 
-    // Query real-time balance from kkpay by sending "ye" to the group
     void sendYeForBalance(session);
   } catch { /* network errors ignored */ }
 }
@@ -745,13 +768,13 @@ function stopPoller(session: TgSession): void {
 
 function startGroupListener(session: TgSession): void {
   if (!session.watchGroupId) return;
-  if (messageHandler && messageHandlerBuilder) {
-    try { session.client.removeEventHandler(messageHandler, messageHandlerBuilder); } catch { /* ok */ }
-    messageHandler = null; messageHandlerBuilder = null;
+  if (session.messageHandler && session.messageHandlerBuilder) {
+    try { session.client.removeEventHandler(session.messageHandler, session.messageHandlerBuilder); } catch { /* ok */ }
+    session.messageHandler = null; session.messageHandlerBuilder = null;
   }
   const targetId = session.watchGroupId;
 
-  messageHandler = async (event: NewMessageEvent) => {
+  session.messageHandler = async (event: NewMessageEvent) => {
     if (!session.cfg.autoBet) return;
     const msg = event.message;
     if (msg.out) return;
@@ -760,13 +783,12 @@ function startGroupListener(session: TgSession): void {
     const senderId = String(msg.senderId ?? "");
     if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
     const text = msg.message ?? "";
-    if (betLog.some(b => b.status === "sent")) return;
+    if (session.betLog.some(b => b.status === "sent")) return;
     if (session.betPlacedThisCycle) return;
     const periodInMsg = text.match(/第?(\d{6,10})期/)?.at(1);
     const triggerPeriod = periodInMsg ? parseInt(periodInMsg) : undefined;
     if (triggerPeriod && triggerPeriod === session.lastBetPeriod) return;
 
-    // Only bet when inside the 80s window before close
     if (session.currentCloseTimeMs > 0) {
       const timeToClose = session.currentCloseTimeMs - Date.now();
       if (timeToClose > BET_BEFORE_DRAW_MS + 10_000 || timeToClose < 0) {
@@ -788,26 +810,26 @@ function startGroupListener(session: TgSession): void {
       try {
         await session.client.sendMessage(targetId, { message: `${direction}${amount}` });
         session.lastBetAt = Date.now();
-        betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: text.slice(0, 80), betContent: direction, amount, timestamp: Date.now(), status: "sent", period: triggerPeriod });
-        if (betLog.length > 200) betLog.pop();
-        pushEvent("bet:new", { bet: betLog[0] });
+        session.betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: text.slice(0, 80), betContent: direction, amount, timestamp: Date.now(), status: "sent", period: triggerPeriod });
+        if (session.betLog.length > 200) session.betLog.pop();
+        pushEvent(session, "bet:new", { bet: session.betLog[0] });
       } catch {
-        betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: text.slice(0, 80), betContent: direction, amount, timestamp: Date.now(), status: "failed" });
-        if (betLog.length > 200) betLog.pop();
+        session.betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: text.slice(0, 80), betContent: direction, amount, timestamp: Date.now(), status: "failed" });
+        if (session.betLog.length > 200) session.betLog.pop();
       }
     })();
   };
 
-  messageHandlerBuilder = new NewMessage({});
-  session.client.addEventHandler(messageHandler, messageHandlerBuilder);
+  session.messageHandlerBuilder = new NewMessage({});
+  session.client.addEventHandler(session.messageHandler, session.messageHandlerBuilder);
 }
 
 // ─── KKPay listener ───────────────────────────────────────────────────────────
 
 async function startKkpayListener(session: TgSession): Promise<void> {
-  if (kkpayHandler && kkpayHandlerBuilder) {
-    try { session.client.removeEventHandler(kkpayHandler, kkpayHandlerBuilder); } catch { /* ok */ }
-    kkpayHandler = null; kkpayHandlerBuilder = null;
+  if (session.kkpayHandler && session.kkpayHandlerBuilder) {
+    try { session.client.removeEventHandler(session.kkpayHandler, session.kkpayHandlerBuilder); } catch { /* ok */ }
+    session.kkpayHandler = null; session.kkpayHandlerBuilder = null;
   }
 
   const uname = session.kkpayUsername.replace(/^@/, "");
@@ -816,7 +838,7 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     session.kkpayEntityId = String((entity as unknown as { id: bigint | number }).id);
   } catch { /* entity not found */ }
 
-  kkpayHandler = async (event: NewMessageEvent) => {
+  session.kkpayHandler = async (event: NewMessageEvent) => {
     const msg = event.message;
     if (msg.out) return;
     const text = msg.message ?? "";
@@ -829,22 +851,16 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     const inWatchGroup = wgid ? (chatId === wgid || `-100${chatId}` === wgid) : false;
     if (!isFromKkpay && !inWatchGroup) return;
 
-    // Update balance only when:
-    // 1. kkpay replies directly to our "ye" message (identified by replyToMsgId)
-    // 2. OR message comes from kkpay entity directly (private message)
     if (isFromKkpay && /KKCOIN/i.test(text)) {
-      // Direct message from kkpay entity — always accept
       updateBalance(session, text);
     } else if (inWatchGroup && /KKCOIN/i.test(text) && session.yeMessageId) {
-      // Group message: only accept if it's kkpay's reply to our exact "ye" message
       const replyToId = (msg.replyTo as Record<string, unknown> | undefined)?.replyToMsgId as number | undefined;
       if (replyToId === session.yeMessageId) {
         updateBalance(session, text);
-        session.yeMessageId = undefined; // consume — only parse once
+        session.yeMessageId = undefined;
       }
     }
 
-    // Win/loss settlement
     const hasWin = /(?<!未)中奖|✅/.test(text);
     const hasLoss = /挂逼|未中|未赢|❌/.test(text);
     const danjineM = text.match(/单金额\s*([+-]?\d[\d,]*(?:\.\d+)?)/);
@@ -853,8 +869,8 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     const hasPeriodRef = /\d{5,}期/.test(text);
     const isKkpayResult = isFromKkpay || (inWatchGroup && hasPeriodRef && (hasWin || hasLoss || danjineM !== null || /KKCOIN/i.test(text)));
 
-    if (isKkpayResult && (isWin || isLoss) && tgSession === session) {
-      const sentBet = betLog.find(b => b.status === "sent");
+    if (isKkpayResult && (isWin || isLoss)) {
+      const sentBet = session.betLog.find(b => b.status === "sent");
       if (sentBet) {
         const pnlM = text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ?? text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i) ?? danjineM;
         const pnl = pnlM ? parseFloat(pnlM[1].replace(/,/g, "")) : undefined;
@@ -863,18 +879,19 @@ async function startKkpayListener(session: TgSession): Promise<void> {
         const periodFromMsg = text.match(/第?(\d{6,10})期/)?.at(1);
         settleBet(session, { won: isWin, pnl, result: rMatch?.[0], betId: sentBet.id, period: periodFromMsg ? parseInt(periodFromMsg) : undefined });
         updateBalance(session, text);
-        saveSession();
+        saveSession(session);
       }
     }
   };
 
-  kkpayHandlerBuilder = new NewMessage({});
-  session.client.addEventHandler(kkpayHandler, kkpayHandlerBuilder);
+  session.kkpayHandlerBuilder = new NewMessage({});
+  session.client.addEventHandler(session.kkpayHandler, session.kkpayHandlerBuilder);
 }
 
 // ─── Stats helper ─────────────────────────────────────────────────────────────
 
-function buildStats() {
+function buildStats(session: TgSession) {
+  const { betLog } = session;
   const settled = betLog.filter(b => b.won !== undefined);
   const wins = settled.filter(b => b.won === true).length;
   let maxStreak = 0, cur = 0;
@@ -893,24 +910,29 @@ function buildStats() {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-// Login routes (no card required — user must be authenticated but not yet have a card)
-router.post("/tg/send-code", requireAdmin, async (req, res) => {
+router.post("/tg/send-code", requireCard, async (req, res) => {
+  const userId = req.user!.userId;
   const { phone } = req.body as { phone?: string };
   if (!phone) { res.status(400).json({ error: "请输入手机号" }); return; }
   const { apiId, apiHash } = getCredentials();
   if (!apiId || !apiHash) { res.status(500).json({ error: "服务端未配置 Telegram API 凭证" }); return; }
   try {
-    if (tgSession?.client?.connected) {
-      try { await tgSession.client.disconnect(); } catch { /* ok */ }
+    const existing = tgSessions.get(userId);
+    if (existing?.client?.connected) {
+      try { await existing.client.disconnect(); } catch { /* ok */ }
     }
     const stringSession = new StringSession("");
     const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
     await client.connect();
     const result = await client.sendCode({ apiId, apiHash }, phone);
-    tgSession = {
+    const session: TgSession = {
+      userId,
       client, stringSession, phone,
       phoneCodeHash: result.phoneCodeHash,
       groups: [], cfg: { ...DEFAULT_CFG },
+      betLog: [], sseClients: existing?.sseClients ?? new Set(),
+      messageHandler: null, messageHandlerBuilder: null,
+      kkpayHandler: null, kkpayHandlerBuilder: null,
       consecutiveLosses: 0, sessionPnl: 0,
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
@@ -920,6 +942,7 @@ router.post("/tg/send-code", requireAdmin, async (req, res) => {
       kkpayUsername: "kkpay", kkpayEntityId: undefined,
       balanceSource: "manual", balanceUpdatedAt: 0,
     };
+    tgSessions.set(userId, session);
     res.json({ ok: true });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -928,23 +951,25 @@ router.post("/tg/send-code", requireAdmin, async (req, res) => {
   }
 });
 
-router.post("/tg/verify-code", requireAdmin, async (req, res) => {
+router.post("/tg/verify-code", requireCard, async (req, res) => {
+  const userId = req.user!.userId;
   const { code } = req.body as { code?: string };
   if (!code) { res.status(400).json({ error: "请输入验证码" }); return; }
-  if (!tgSession) { res.status(400).json({ error: "请先发送验证码" }); return; }
+  const session = tgSessions.get(userId);
+  if (!session) { res.status(400).json({ error: "请先发送验证码" }); return; }
   const { apiId, apiHash } = getCredentials();
   try {
-    const result = await tgSession.client.invoke(new Api.auth.SignIn({
-      phoneNumber: tgSession.phone,
-      phoneCodeHash: tgSession.phoneCodeHash!,
+    const result = await session.client.invoke(new Api.auth.SignIn({
+      phoneNumber: session.phone,
+      phoneCodeHash: session.phoneCodeHash!,
       phoneCode: code,
     }));
     const me = (result as Api.auth.Authorization).user as Api.User;
-    tgSession.me = me;
-    tgSession.groups = await fetchGroups(tgSession.client);
-    startKkpayListener(tgSession).catch(() => { /* ignore */ });
-    saveSession();
-    startWatchdog(tgSession);
+    session.me = me;
+    session.groups = await fetchGroups(session.client);
+    startKkpayListener(session).catch(() => { /* ignore */ });
+    saveSession(session);
+    startWatchdog(session);
     res.json({ ok: true, me: { id: me.id, firstName: me.firstName, lastName: me.lastName, username: me.username, phone: me.phone } });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -955,19 +980,21 @@ router.post("/tg/verify-code", requireAdmin, async (req, res) => {
   }
 });
 
-router.post("/tg/verify-password", requireAdmin, async (req, res) => {
+router.post("/tg/verify-password", requireCard, async (req, res) => {
+  const userId = req.user!.userId;
   const { password } = req.body as { password?: string };
   if (!password) { res.status(400).json({ error: "请输入二步验证密码" }); return; }
-  if (!tgSession) { res.status(400).json({ error: "会话已失效，请重新登录" }); return; }
+  const session = tgSessions.get(userId);
+  if (!session) { res.status(400).json({ error: "会话已失效，请重新登录" }); return; }
   const { apiId, apiHash } = getCredentials();
   try {
-    await tgSession.client.signInWithPassword({ apiId, apiHash }, { password: async () => password, onError: async (e: Error) => { throw e; } });
-    const me = (await tgSession.client.getMe()) as Api.User;
-    tgSession.me = me;
-    tgSession.groups = await fetchGroups(tgSession.client);
-    startKkpayListener(tgSession).catch(() => { /* ignore */ });
-    saveSession();
-    startWatchdog(tgSession);
+    await session.client.signInWithPassword({ apiId, apiHash }, { password: async () => password, onError: async (e: Error) => { throw e; } });
+    const me = (await session.client.getMe()) as Api.User;
+    session.me = me;
+    session.groups = await fetchGroups(session.client);
+    startKkpayListener(session).catch(() => { /* ignore */ });
+    saveSession(session);
+    startWatchdog(session);
     res.json({ ok: true, me: { id: me.id, firstName: me.firstName, lastName: me.lastName, username: me.username, phone: me.phone } });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -976,45 +1003,49 @@ router.post("/tg/verify-password", requireAdmin, async (req, res) => {
   }
 });
 
-router.get("/tg/status", requireAdmin, (req, res) => {
-  if (!tgSession?.me) { res.json({ connected: false }); return; }
+router.get("/tg/status", requireCard, (req, res) => {
+  const userId = req.user!.userId;
+  const session = tgSessions.get(userId);
+  if (!session?.me) { res.json({ connected: false }); return; }
   const midnight = todayMidnight();
-  if (tgSession.todayResetAt < midnight) { tgSession.todayPnl = 0; tgSession.todayResetAt = midnight; }
-  const stats = buildStats();
+  if (session.todayResetAt < midnight) { session.todayPnl = 0; session.todayResetAt = midnight; }
+  const stats = buildStats(session);
   res.json({
     connected: true,
-    me: { id: tgSession.me.id, firstName: tgSession.me.firstName, lastName: tgSession.me.lastName, username: tgSession.me.username, phone: tgSession.me.phone },
-    watchGroupId: tgSession.watchGroupId,
-    watchGroupTitle: (() => { const wgid = tgSession!.watchGroupId; return tgSession!.groups.find(g => g.id === wgid || `-100${g.id}` === wgid)?.title; })(),
-    ...tgSession.cfg,
-    consecutiveLosses: tgSession.consecutiveLosses,
-    sessionPnl: tgSession.sessionPnl,
-    currentBet: tgSession.currentBet,
-    balance: tgSession.balance,
-    todayPnl: tgSession.todayPnl,
-    balanceSource: tgSession.balanceSource,
-    balanceUpdatedAt: tgSession.balanceUpdatedAt,
-    kkpayUsername: tgSession.kkpayUsername,
-    kkpayEntityId: tgSession.kkpayEntityId,
-    riskBlocked: !checkRisk(tgSession).ok,
-    riskReason: checkRisk(tgSession).reason,
+    me: { id: session.me.id, firstName: session.me.firstName, lastName: session.me.lastName, username: session.me.username, phone: session.me.phone },
+    watchGroupId: session.watchGroupId,
+    watchGroupTitle: (() => { const wgid = session.watchGroupId; return session.groups.find(g => g.id === wgid || `-100${g.id}` === wgid)?.title; })(),
+    ...session.cfg,
+    consecutiveLosses: session.consecutiveLosses,
+    sessionPnl: session.sessionPnl,
+    currentBet: session.currentBet,
+    balance: session.balance,
+    todayPnl: session.todayPnl,
+    balanceSource: session.balanceSource,
+    balanceUpdatedAt: session.balanceUpdatedAt,
+    kkpayUsername: session.kkpayUsername,
+    kkpayEntityId: session.kkpayEntityId,
+    riskBlocked: !checkRisk(session).ok,
+    riskReason: checkRisk(session).reason,
     ...stats,
   });
 });
 
-router.get("/tg/groups", requireAdmin, async (req, res) => {
-  if (!tgSession?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
-  tgSession.groups = await fetchGroups(tgSession.client);
-  res.json({ groups: tgSession.groups });
+router.get("/tg/groups", requireCard, async (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
+  session.groups = await fetchGroups(session.client);
+  res.json({ groups: session.groups });
 });
 
-router.post("/tg/resolve-group", requireAdmin, async (req, res) => {
-  if (!tgSession?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
+router.post("/tg/resolve-group", requireCard, async (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   const { link } = req.body as { link?: string };
   if (!link) { res.status(400).json({ error: "请提供群链接" }); return; }
   let uname = link.trim().replace(/^https?:\/\/t\.me\//i, "").replace(/^@/, "").replace(/\?.*$/, "");
   try {
-    const entity = await tgSession.client.getEntity(uname);
+    const entity = await session.client.getEntity(uname);
     const id = String((entity as unknown as { id: bigint | number }).id);
     const title = (entity as { title?: string; firstName?: string }).title ?? (entity as { firstName?: string }).firstName ?? uname;
     res.json({ ok: true, group: { id, title, type: "broadcast" in entity ? "channel" : "group" } });
@@ -1025,25 +1056,28 @@ router.post("/tg/resolve-group", requireAdmin, async (req, res) => {
   }
 });
 
-router.post("/tg/set-group", requireAdmin, (req, res) => {
-  if (!tgSession) { res.status(401).json({ error: "未连接 Telegram" }); return; }
+router.post("/tg/set-group", requireCard, (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   const { groupId } = req.body as { groupId?: string };
-  if (groupId !== undefined) tgSession.watchGroupId = groupId;
-  if (tgSession.watchGroupId) startGroupListener(tgSession);
-  saveSession();
+  if (groupId !== undefined) session.watchGroupId = groupId;
+  if (session.watchGroupId) startGroupListener(session);
+  saveSession(session);
   res.json({ ok: true });
 });
 
-router.get("/tg/config", requireAdmin, (_req, res) => {
-  if (!tgSession) { res.json({ cfg: DEFAULT_CFG }); return; }
-  res.json({ cfg: tgSession.cfg, consecutiveLosses: tgSession.consecutiveLosses, sessionPnl: tgSession.sessionPnl, currentBet: tgSession.currentBet });
+router.get("/tg/config", requireCard, (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session) { res.json({ cfg: DEFAULT_CFG }); return; }
+  res.json({ cfg: session.cfg, consecutiveLosses: session.consecutiveLosses, sessionPnl: session.sessionPnl, currentBet: session.currentBet });
 });
 
-router.post("/tg/config", requireAdmin, (req, res) => {
-  if (!tgSession) { res.json({ ok: true }); return; }
+router.post("/tg/config", requireCard, (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session) { res.json({ ok: true }); return; }
   const body = req.body as Partial<BetCfg> & { startLevel?: number };
-  const prev = { ...tgSession.cfg };
-  tgSession.cfg = {
+  const prev = { ...session.cfg };
+  session.cfg = {
     autoBet: body.autoBet ?? prev.autoBet,
     betAmount: body.betAmount ?? prev.betAmount,
     strategy: body.strategy ?? prev.strategy,
@@ -1059,68 +1093,85 @@ router.post("/tg/config", requireAdmin, (req, res) => {
   };
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
-    const lvl = Math.min(body.startLevel ?? 0, tgSession.cfg.amountLevels.length - 1);
-    tgSession.currentLevel = lvl;
-    tgSession.currentBet = tgSession.cfg.amountLevels[lvl] ?? tgSession.cfg.betAmount;
-    tgSession.consecutiveLosses = 0;
+    const lvl = Math.min(body.startLevel ?? 0, session.cfg.amountLevels.length - 1);
+    session.currentLevel = lvl;
+    session.currentBet = session.cfg.amountLevels[lvl] ?? session.cfg.betAmount;
+    session.consecutiveLosses = 0;
   }
-  if (body.algorithms !== undefined) tgSession.algIndex = 0;
-  if (tgSession.watchGroupId) startGroupListener(tgSession);
+  if (body.algorithms !== undefined) session.algIndex = 0;
+  if (session.watchGroupId) startGroupListener(session);
 
-  if (body.autoBet === false && prev.autoBet) stopPoller(tgSession);
-  if (body.autoBet === true && !prev.autoBet && tgSession.watchGroupId) {
-    tgSession.betPlacedThisCycle = false;
-    tgSession.lastSeenLotteryPeriod = 0;
-    startPoller(tgSession);
-    void pollLottery(tgSession);
+  if (body.autoBet === false && prev.autoBet) stopPoller(session);
+  if (body.autoBet === true && !prev.autoBet && session.watchGroupId) {
+    session.betPlacedThisCycle = false;
+    session.lastSeenLotteryPeriod = 0;
+    startPoller(session);
+    void pollLottery(session);
   }
-  saveSession();
-  res.json({ ok: true, cfg: tgSession.cfg });
+  saveSession(session);
+  res.json({ ok: true, cfg: session.cfg });
 });
 
-router.post("/tg/kkpay", requireAdmin, async (req, res) => {
-  if (!tgSession) { res.status(401).json({ error: "未连接" }); return; }
+router.post("/tg/kkpay", requireCard, async (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session) { res.status(401).json({ error: "未连接" }); return; }
   const { username } = req.body as { username?: string };
   if (username !== undefined) {
-    tgSession.kkpayUsername = username.replace(/^@/, "");
-    tgSession.kkpayEntityId = undefined;
-    tgSession.balanceSource = "manual";
-    await startKkpayListener(tgSession).catch(() => { /* ignore */ });
+    session.kkpayUsername = username.replace(/^@/, "");
+    session.kkpayEntityId = undefined;
+    session.balanceSource = "manual";
+    await startKkpayListener(session).catch(() => { /* ignore */ });
   }
-  res.json({ ok: true, kkpayUsername: tgSession.kkpayUsername, kkpayEntityId: tgSession.kkpayEntityId, linked: !!tgSession.kkpayEntityId });
+  res.json({ ok: true, kkpayUsername: session.kkpayUsername, kkpayEntityId: session.kkpayEntityId, linked: !!session.kkpayEntityId });
 });
 
-router.get("/tg/bets", requireAdmin, (_req, res) => {
-  res.json({ bets: betLog.slice(0, 100) });
+router.get("/tg/bets", requireCard, (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  res.json({ bets: session ? session.betLog.slice(0, 100) : [] });
 });
 
-router.delete("/tg/bets", requireAdmin, (_req, res) => {
-  betLog.length = 0;
+router.delete("/tg/bets", requireCard, (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (session) session.betLog.length = 0;
   res.json({ ok: true });
 });
 
-router.get("/tg/events", requireAdmin, (req, res) => {
+router.get("/tg/events", requireAuth, (req, res) => {
+  const userId = req.user!.userId;
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   res.write(": connected\n\n");
-  sseClients.add(res);
+
+  // Register to user's session SSE set (create session placeholder if not yet connected)
+  let session = tgSessions.get(userId);
+  if (!session) {
+    // Create a minimal placeholder to hold SSE clients before TG login
+    const placeholder = { sseClients: new Set<Response>() };
+    // Store placeholder temporarily so SSE works even before TG login
+    (req as unknown as Record<string, unknown>)["_ssePlaceholder"] = placeholder;
+    placeholder.sseClients.add(res);
+    const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
+    req.on("close", () => { clearInterval(hb); placeholder.sseClients.delete(res); });
+    return;
+  }
+  session.sseClients.add(res);
   const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
-  req.on("close", () => { clearInterval(hb); sseClients.delete(res); });
+  req.on("close", () => { clearInterval(hb); session?.sseClients.delete(res); });
 });
 
-router.post("/tg/disconnect", requireAdmin, async (_req, res) => {
-  if (tgSession) {
-    stopAllTimers(tgSession);
-    try { await tgSession.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
-    try { await tgSession.client.disconnect(); } catch { /* ok */ }
+router.post("/tg/disconnect", requireCard, async (req, res) => {
+  const userId = req.user!.userId;
+  const session = tgSessions.get(userId);
+  if (session) {
+    stopAllTimers(session);
+    try { await session.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
+    try { await session.client.disconnect(); } catch { /* ok */ }
+    tgSessions.delete(userId);
   }
-  tgSession = null;
-  messageHandler = null;
-  kkpayHandler = null;
-  try { fs.unlinkSync(SESSION_FILE); } catch { /* ok */ }
+  try { fs.unlinkSync(sessionFile(userId)); } catch { /* ok */ }
   res.json({ ok: true });
 });
 
