@@ -1,799 +1,777 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { Button } from '@/components/ui/button';
-import { Menu, Moon, RefreshCw, Users, SlidersHorizontal, LogOut } from 'lucide-react';
-import SettingsDrawer from '@/components/SettingsDrawer';
-import TelegramLoginModal from '@/components/TelegramLoginModal';
-import BetConfigModal, { type BetConfig } from '@/components/BetConfigModal';
-import TrendModal from '@/components/TrendModal';
-import type { LotteryTerm as TrendTerm } from '@/components/TrendModal';
-import BetSetupPanel, { type BetSetupConfig } from '@/components/BetSetupPanel';
+import { useEffect, useRef, useState, useCallback } from "react";
+import { useLocation } from "wouter";
+import { useAuth } from "../context/AuthContext";
+import { api, type TgStatus, type BetRecord, type TgGroup } from "../lib/api";
 
-interface LotteryTerm {
+// ─── Types ────────────────────────────────────────────────────────────────────
+type TgStep = "phone" | "code" | "password" | "done";
+
+interface DrawState {
   term: number;
-  result: number;
-  sum1: number;
-  sum2: number;
-  sum3: number;
-  r1: string;
-  r2: string;
-  r3: string;
-  openTime: number;
-  closeTime: number;
+  sum1?: number;
+  sum2?: number;
+  sum3?: number;
+  r3?: string;
+  nextCloseTime: number;
 }
 
-interface MeInfo {
-  id: number | bigint;
-  firstName?: string;
-  lastName?: string;
-  username?: string;
-  phone?: string;
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const ALGO_LABELS: Record<string, string> = {
+  signal_follow: "跟信号", signal_reverse: "反信号",
+  streak_follow: "跟热门", cold_pick: "冷号追",
+  random: "随机", ai_trend: "AI趋势",
+};
+
+const BET_OPT_LABELS: Record<string, string> = {
+  big: "大", small: "小", odd: "单", even: "双",
+  "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
+};
+
+const STRATEGY_LABELS: Record<string, string> = {
+  normal: "固定", martingale: "马丁", "anti-martingale": "反马丁",
+};
+
+function fmtNum(n: number): string {
+  if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(2)}M`;
+  if (Math.abs(n) >= 1000) return `${(n / 1000).toFixed(1)}K`;
+  return n.toFixed(0);
 }
 
-interface GroupInfo {
-  id: string;
-  title: string;
-  type: string;
+function fmtDate(ts: number): string {
+  return new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
-interface BetRecord {
-  id: string;
-  betContent: string;
-  amount: number;
-  timestamp: number;
-  status: 'sent' | 'failed' | 'paused' | 'won' | 'lost';
-  pauseReason?: string;
-  period?: number;
-  lotteryResult?: string;
-  pnl?: number;
-  won?: boolean;
+function pnlColor(n: number) { return n > 0 ? "text-emerald-400" : n < 0 ? "text-red-400" : "text-slate-400"; }
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+function StatCard({ label, value, sub, valueClass }: { label: string; value: string; sub?: string; valueClass?: string }) {
+  return (
+    <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
+      <div className="text-xs text-slate-500 mb-1">{label}</div>
+      <div className={`text-base font-bold ${valueClass ?? "text-white"}`}>{value}</div>
+      {sub && <div className="text-[10px] text-slate-600 mt-0.5">{sub}</div>}
+    </div>
+  );
 }
 
-const STATUS_LABEL: Record<string, string> = { sent: '待开奖', won: '中奖', lost: '挂逼', paused: '停', failed: '失败' };
-const STATUS_COLOR: Record<string, string> = { sent: '#c8a520', won: '#00e676', lost: '#f44336', paused: '#888', failed: '#555' };
-
-function getSumColor(result: number): string {
-  const blue = [0, 1, 3, 4, 9, 10, 14, 15, 20];
-  const green = [6, 11, 16, 17, 21, 22];
-  if (blue.includes(result)) return '#4CA2FF';
-  if (green.includes(result)) return '#10b981';
-  return '#f44336';
+function BetTag({ status, won }: { status: string; won?: boolean }) {
+  if (status === "sent") return <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded">待开奖</span>;
+  if (status === "won" || won === true) return <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">中奖</span>;
+  if (status === "lost" || won === false) return <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded">未中</span>;
+  return <span className="text-[10px] bg-slate-500/20 text-slate-400 px-1.5 py-0.5 rounded">失败</span>;
 }
+
+function NumBall({ n, sum }: { n?: number; sum?: boolean }) {
+  const c = sum
+    ? (n !== undefined && n >= 14 ? "bg-red-500" : "bg-blue-500")
+    : n !== undefined && n >= 5 ? "bg-orange-500" : "bg-slate-600";
+  return (
+    <div className={`${c} rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>
+      {n ?? "?"}
+    </div>
+  );
+}
+
+// ─── TG Login Flow ────────────────────────────────────────────────────────────
+
+function TgLoginCard({ onDone }: { onDone: () => void }) {
+  const [step, setStep] = useState<TgStep>("phone");
+  const [phone, setPhone] = useState("");
+  const [code, setCode] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const send = async (fn: () => Promise<void>) => {
+    setError(""); setLoading(true);
+    try { await fn(); }
+    catch (e) { setError(e instanceof Error ? e.message : "操作失败"); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 mb-4">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-lg">📱</span>
+        <h3 className="text-white font-semibold">连接 Telegram</h3>
+      </div>
+
+      {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-lg px-3 py-2 mb-3">{error}</div>}
+
+      {step === "phone" && (
+        <div className="space-y-3">
+          <input
+            type="tel" value={phone} onChange={e => setPhone(e.target.value)}
+            placeholder="+8613800001234（含国际区号）"
+            className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-4 py-2.5 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500"
+          />
+          <button disabled={loading || !phone} onClick={() => send(async () => { await api.tg.sendCode(phone); setStep("code"); })}
+            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-semibold rounded-xl py-2.5 transition">
+            {loading ? "发送中..." : "发送验证码"}
+          </button>
+        </div>
+      )}
+
+      {step === "code" && (
+        <div className="space-y-3">
+          <p className="text-slate-400 text-xs">验证码已发送到 {phone}</p>
+          <input
+            type="text" value={code} onChange={e => setCode(e.target.value)}
+            placeholder="请输入验证码"
+            className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-4 py-2.5 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500"
+          />
+          <button disabled={loading || !code} onClick={() => send(async () => {
+            const r = await api.tg.verifyCode(code);
+            if (r.needPassword) setStep("password");
+            else { onDone(); }
+          })}
+            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-semibold rounded-xl py-2.5 transition">
+            {loading ? "验证中..." : "验证"}
+          </button>
+          <button onClick={() => setStep("phone")} className="w-full text-slate-500 text-xs hover:text-slate-300 transition">重新发送</button>
+        </div>
+      )}
+
+      {step === "password" && (
+        <div className="space-y-3">
+          <p className="text-slate-400 text-xs">需要二步验证密码</p>
+          <input
+            type="password" value={password} onChange={e => setPassword(e.target.value)}
+            placeholder="二步验证密码"
+            className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-4 py-2.5 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500"
+          />
+          <button disabled={loading || !password} onClick={() => send(async () => { await api.tg.verifyPassword(password); onDone(); })}
+            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm font-semibold rounded-xl py-2.5 transition">
+            {loading ? "验证中..." : "确认"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Group Setup ──────────────────────────────────────────────────────────────
+
+function GroupSetupCard({ groups, onDone }: { groups: TgGroup[]; onDone: () => void }) {
+  const [link, setLink] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+
+  const filtered = groups.filter(g => g.title.toLowerCase().includes(search.toLowerCase()));
+
+  const selectGroup = async (gid: string) => {
+    await api.tg.setGroup(gid);
+    onDone();
+  };
+
+  const resolveLink = async () => {
+    if (!link.trim()) return;
+    setError(""); setLoading(true);
+    try {
+      const r = await api.tg.resolveGroup(link);
+      await selectGroup(r.group.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "解析失败");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 mb-4">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-lg">💬</span>
+        <h3 className="text-white font-semibold">选择投注群组</h3>
+      </div>
+
+      {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-lg px-3 py-2 mb-3">{error}</div>}
+
+      <div className="flex gap-2 mb-3">
+        <input
+          type="text" value={link} onChange={e => setLink(e.target.value)}
+          placeholder="粘贴群链接 t.me/..."
+          className="flex-1 bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500"
+        />
+        <button onClick={() => void resolveLink()} disabled={loading || !link.trim()}
+          className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-sm px-4 rounded-xl transition">
+          {loading ? "..." : "搜索"}
+        </button>
+      </div>
+
+      {groups.length > 0 && (
+        <>
+          <input
+            type="text" value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="搜索已加入的群..."
+            className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500 mb-2"
+          />
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {filtered.map(g => (
+              <button key={g.id} onClick={() => void selectGroup(g.id)}
+                className="w-full text-left flex items-center gap-3 bg-[#0f1220] hover:bg-[#1a1f35] border border-transparent hover:border-blue-500/30 rounded-xl px-3 py-2 transition">
+                <span className="text-slate-400">{g.type === "channel" ? "📢" : "💬"}</span>
+                <div>
+                  <div className="text-white text-sm">{g.title}</div>
+                  {g.membersCount && <div className="text-slate-600 text-[10px]">{g.membersCount} 成员</div>}
+                </div>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Settings Drawer ──────────────────────────────────────────────────────────
+
+function SettingsDrawer({ status, onClose, onSave }: {
+  status: TgStatus;
+  onClose: () => void;
+  onSave: (cfg: Record<string, unknown>) => Promise<void>;
+}) {
+  const [betAmount, setBetAmount] = useState(String(status.betAmount ?? 100));
+  const [strategy, setStrategy] = useState(status.strategy ?? "normal");
+  const [multiplier, setMultiplier] = useState(String(status.betMultiplier ?? 2));
+  const [stopLoss, setStopLoss] = useState(String(status.stopLoss ?? 5000));
+  const [targetProfit, setTargetProfit] = useState(String(status.targetProfit ?? 3000));
+  const [maxLoss, setMaxLoss] = useState(String(status.maxConsecutiveLosses ?? 5));
+  const [cooldown, setCooldown] = useState(String(status.cooldownSeconds ?? 0));
+  const [algos, setAlgos] = useState<string[]>(status.algorithms ?? ["signal_follow"]);
+  const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
+  const [kkpay, setKkpay] = useState(status.kkpayUsername ?? "kkpay");
+  const [saving, setSaving] = useState(false);
+
+  const toggleAlgo = (a: string) => setAlgos(prev => prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a]);
+  const toggleOpt = (o: string) => setBetOpts(prev => prev.includes(o) ? prev.filter(x => x !== o) : [...prev, o]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSave({
+        betAmount: Number(betAmount), strategy, betMultiplier: Number(multiplier),
+        stopLoss: Number(stopLoss), targetProfit: Number(targetProfit),
+        maxConsecutiveLosses: Number(maxLoss), cooldownSeconds: Number(cooldown),
+        algorithms: algos, betOptions: betOpts,
+      });
+      if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
+      onClose();
+    } finally { setSaving(false); }
+  };
+
+  const sectionCls = "space-y-3 pb-4 mb-4 border-b border-[#252a3d]";
+  const labelCls = "block text-xs text-slate-400 mb-1";
+  const inputCls = "w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500";
+  const tagCls = (active: boolean) => `px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition border ${active ? "bg-blue-600 border-blue-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50"}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex">
+      <div className="flex-1 bg-black/60" onClick={onClose} />
+      <div className="w-80 max-w-[90vw] bg-[#0f1220] border-l border-[#252a3d] overflow-y-auto flex flex-col">
+        <div className="flex justify-between items-center px-5 py-4 border-b border-[#252a3d] sticky top-0 bg-[#0f1220]">
+          <h3 className="text-white font-semibold">投注设置</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-white text-xl">×</button>
+        </div>
+
+        <div className="p-5 flex-1 space-y-0">
+          <div className={sectionCls}>
+            <h4 className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-2">玩法策略</h4>
+            <div>
+              <label className={labelCls}>下注选项</label>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(BET_OPT_LABELS).map(([k, v]) => (
+                  <span key={k} className={tagCls(betOpts.includes(k))} onClick={() => toggleOpt(k)}>{v}</span>
+                ))}
+              </div>
+            </div>
+            <div>
+              <label className={labelCls}>算法选择</label>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(ALGO_LABELS).map(([k, v]) => (
+                  <span key={k} className={tagCls(algos.includes(k))} onClick={() => toggleAlgo(k)}>{v}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className={sectionCls}>
+            <h4 className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-2">金额策略</h4>
+            <div>
+              <label className={labelCls}>基础注额</label>
+              <input type="number" value={betAmount} onChange={e => setBetAmount(e.target.value)} className={inputCls} min="1" />
+            </div>
+            <div>
+              <label className={labelCls}>资金策略</label>
+              <div className="flex gap-2">
+                {Object.entries(STRATEGY_LABELS).map(([k, v]) => (
+                  <span key={k} className={`flex-1 text-center ${tagCls(strategy === k)}`} onClick={() => setStrategy(k)}>{v}</span>
+                ))}
+              </div>
+            </div>
+            {strategy !== "normal" && (
+              <div>
+                <label className={labelCls}>倍数</label>
+                <input type="number" value={multiplier} onChange={e => setMultiplier(e.target.value)} className={inputCls} min="1.1" step="0.1" />
+              </div>
+            )}
+          </div>
+
+          <div className={sectionCls}>
+            <h4 className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-2">风控设置</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className={labelCls}>止损金额</label>
+                <input type="number" value={stopLoss} onChange={e => setStopLoss(e.target.value)} className={inputCls} min="0" />
+              </div>
+              <div>
+                <label className={labelCls}>止盈金额</label>
+                <input type="number" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} className={inputCls} min="0" />
+              </div>
+              <div>
+                <label className={labelCls}>最大连亏</label>
+                <input type="number" value={maxLoss} onChange={e => setMaxLoss(e.target.value)} className={inputCls} min="0" />
+              </div>
+              <div>
+                <label className={labelCls}>冷却秒数</label>
+                <input type="number" value={cooldown} onChange={e => setCooldown(e.target.value)} className={inputCls} min="0" />
+              </div>
+            </div>
+          </div>
+
+          <div className="pb-4">
+            <h4 className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-3">KKPay 钱包</h4>
+            <div>
+              <label className={labelCls}>KKPay 用户名（@username）</label>
+              <input type="text" value={kkpay} onChange={e => setKkpay(e.target.value)} className={inputCls} placeholder="kkpay" />
+            </div>
+          </div>
+        </div>
+
+        <div className="p-5 border-t border-[#252a3d] sticky bottom-0 bg-[#0f1220]">
+          <button onClick={() => void save()} disabled={saving}
+            className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-xl py-3 transition">
+            {saving ? "保存中..." : "保存设置"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [loginOpen, setLoginOpen] = useState(false);
-  const [configOpen, setConfigOpen] = useState(false);
-  const [countdown, setCountdown] = useState(0);
-  const [currentPeriod, setCurrentPeriod] = useState(0);
-  const [latestTerm, setLatestTerm] = useState<LotteryTerm | null>(null);
-  const [isRunning, setIsRunning] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(false);
-  const [lastFetched, setLastFetched] = useState<Date | null>(null);
-  const [tgMe, setTgMe] = useState<MeInfo | null>(null);
-  const [watchGroup, setWatchGroup] = useState<GroupInfo | null>(null);
-  const [betConfig, setBetConfig] = useState<Partial<BetConfig>>({ betAmount: 100, autoBet: false, strategy: 'normal' });
-  const [trendOpen, setTrendOpen] = useState(false);
-  const [betSetupOpen, setBetSetupOpen] = useState(false);
-  const [betSetupConfig, setBetSetupConfig] = useState<BetSetupConfig>({
-    stopLoss: 5000,
-    targetProfit: 3000,
-    maxConsecutiveLosses: 5,
-    cooldownSeconds: 0,
-  });
-  const [allItems, setAllItems] = useState<TrendTerm[]>([]);
-  // live data
-  const [records, setRecords] = useState<BetRecord[]>([]);
-  const [balance, setBalance] = useState(1000000);
-  const [todayPnl, setTodayPnl] = useState(0);
-  const [totalPnl, setTotalPnl] = useState(0);
-  const [totalBets, setTotalBets] = useState(0);
-  const [wins, setWins] = useState(0);
-  const [maxStreak, setMaxStreak] = useState(0);
-  const [winRate, setWinRate] = useState('0.00');
-  const [consecutiveLosses, setConsecutiveLosses] = useState(0);
-  const [currentBetAmt, setCurrentBetAmt] = useState(100);
-  const [lastDraw, setLastDraw] = useState<{ term: number; r3: string; sum1?: number; sum2?: number; sum3?: number; result?: number } | null>(null);
-  const [nextBetAt, setNextBetAt] = useState<number | null>(null); // unix-ms when next bet fires
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [searchPeriod, setSearchPeriod] = useState('');
-  const [showSearch, setShowSearch] = useState(false);
-  const [balanceSource, setBalanceSource] = useState<'manual' | 'kkpay'>('manual');
-  const [balanceUpdatedAt, setBalanceUpdatedAt] = useState(0);
-  const [kkpayLinked, setKkpayLinked] = useState(false);
-  const [kkpayUsername, setKkpayUsername] = useState('kkpay');
-  const [showKkpayInput, setShowKkpayInput] = useState(false);
-  const [kkpayInput, setKkpayInput] = useState('');
-  const [sseConnected, setSseConnected] = useState(true);
-  const [riskBlockReason, setRiskBlockReason] = useState<string | null>(null);
-  const nextOpenTimeRef = useRef<number>(0);
-  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const fetchScheduledRef = useRef<boolean>(false);
+  const { user, card, logout } = useAuth();
+  const [, setLocation] = useLocation();
 
-  const fetchLotteryData = useCallback(async () => {
-    fetchScheduledRef.current = false;
+  const [status, setStatus] = useState<TgStatus | null>(null);
+  const [bets, setBets] = useState<BetRecord[]>([]);
+  const [draw, setDraw] = useState<DrawState | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
+  const [nextBetAt, setNextBetAt] = useState<number | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [showGroupSetup, setShowGroupSetup] = useState(false);
+  const [groups, setGroups] = useState<TgGroup[]>([]);
+  const [tgStep, setTgStep] = useState<"checking" | "login" | "group" | "ready">("checking");
+  const [betAmountInput, setBetAmountInput] = useState("100");
+  const [toggleLoading, setToggleLoading] = useState(false);
+  const [clearLoading, setClearLoading] = useState(false);
+
+  const nextCloseRef = useRef<number>(0);
+  const sseRef = useRef<EventSource | null>(null);
+
+  // ─── Fetch lottery draw data ─────────────────────────────────────────────
+
+  const fetchDraw = useCallback(async () => {
     try {
-      const res = await fetch('/api/lottery/fengpan');
-      if (!res.ok) throw new Error('API error');
-      const data = await res.json() as { message?: { all?: { keno28?: { data?: LotteryTerm[] } } } };
-      const items: LotteryTerm[] = data?.message?.all?.keno28?.data ?? [];
-      if (items.length > 0) {
-        const latest = items[0];
-        setLatestTerm(latest);
-        setAllItems(items as TrendTerm[]);
-        // items[0] can be either the CURRENT OPEN period (closeTime in future)
-        // OR the LAST COMPLETED period (closeTime in past). Handle both:
-        const closedAt = latest.closeTime ?? 0;
-        const openedAt = latest.openTime ?? 0;
-        const now = Date.now();
-        const cycle = (closedAt > openedAt && closedAt - openedAt < 600000)
-          ? closedAt - openedAt
-          : 201000;
-        // If closeTime is still in the future → current open period, use it directly.
-        // If closeTime is in the past → last completed period, next close = closeTime + cycle.
-        const targetClose = closedAt > now ? closedAt : closedAt + cycle;
-        nextOpenTimeRef.current = targetClose > now ? targetClose : now + cycle;
-        setCurrentPeriod(latest.term + 1);
-        setFetchError(false);
-        setLastFetched(new Date());
-      }
-    } catch {
-      setFetchError(true);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchLotteryData();
-    const poll = setInterval(fetchLotteryData, 210000);
-    return () => clearInterval(poll);
-  }, [fetchLotteryData]);
-
-  useEffect(() => {
-    if (countdownRef.current) clearInterval(countdownRef.current);
-    countdownRef.current = setInterval(() => {
+      const data = await api.lottery.fengpan();
+      const items = data?.message?.all?.keno28?.data ?? [];
+      if (!items.length) return;
+      const latest = items[0]!;
+      const closeMs = latest.closeTime ?? 0;
+      const openMs = latest.openTime ?? 0;
       const now = Date.now();
-      setNowMs(now);
-      const diff = Math.max(0, Math.floor((nextOpenTimeRef.current - now) / 1000));
-      setCountdown(diff);
-      if (diff === 0 && !fetchScheduledRef.current) {
-        fetchScheduledRef.current = true;
-        setTimeout(fetchLotteryData, 3000);
-      }
-    }, 1000);
-    return () => { if (countdownRef.current) clearInterval(countdownRef.current); };
-  }, [fetchLotteryData]);
-
-  const fetchBetsAndStats = useCallback(async () => {
-    try {
-      const [betsRes, statusRes] = await Promise.all([
-        fetch('/api/tg/bets'),
-        fetch('/api/tg/status'),
-      ]);
-      if (betsRes.ok) {
-        const d = await betsRes.json() as { bets?: BetRecord[] };
-        setRecords(d.bets ?? []);
-      }
-      if (statusRes.ok) {
-        const sd = await statusRes.json() as {
-          connected?: boolean; me?: MeInfo; watchGroupId?: string; watchGroupTitle?: string;
-          autoBet?: boolean; betAmount?: number; strategy?: BetConfig['strategy'];
-          betMultiplier?: number; maxConsecutiveLosses?: number; stopLoss?: number;
-          targetProfit?: number; cooldownSeconds?: number; betType?: BetConfig['betType'];
-          balance?: number; todayPnl?: number; sessionPnl?: number;
-          totalBets?: number; wins?: number; maxStreak?: number; winRate?: string;
-          balanceSource?: 'manual' | 'kkpay'; balanceUpdatedAt?: number;
-          kkpayUsername?: string; kkpayEntityId?: string;
-          riskBlocked?: boolean; riskReason?: string;
-          algorithms?: string[]; betOptions?: string[]; amountLevels?: number[];
-          stepBackOnWin?: boolean;
-          consecutiveLosses?: number; currentBet?: number;
-        };
-        if (sd.connected && sd.me) setTgMe(sd.me);
-        // Restore the watch group so user doesn't need to re-enter it after reconnect
-        if (sd.watchGroupId) {
-          const title = sd.watchGroupTitle ?? sd.watchGroupId;
-          setWatchGroup({ id: sd.watchGroupId, title, type: 'group' });
-          setBetSetupConfig(prev => ({ ...prev, groupId: sd.watchGroupId, groupTitle: title }));
-        }
-        setBetConfig({
-          autoBet: sd.autoBet ?? false,
-          betAmount: sd.betAmount ?? 100,
-          strategy: sd.strategy ?? 'normal',
-          betMultiplier: sd.betMultiplier ?? 2,
-          maxConsecutiveLosses: sd.maxConsecutiveLosses ?? 5,
-          stopLoss: sd.stopLoss ?? 5000,
-          targetProfit: sd.targetProfit ?? 3000,
-          cooldownSeconds: sd.cooldownSeconds ?? 0,
-          betType: sd.betType ?? 'follow',
-        });
-        setRiskBlockReason(sd.riskBlocked && sd.riskReason ? sd.riskReason : null);
-        if (sd.autoBet) setIsRunning(true);
-        if (sd.balance !== undefined) setBalance(sd.balance);
-        if (sd.todayPnl !== undefined) setTodayPnl(sd.todayPnl);
-        if (sd.sessionPnl !== undefined) setTotalPnl(sd.sessionPnl);
-        if (sd.totalBets !== undefined) setTotalBets(sd.totalBets);
-        if (sd.wins !== undefined) setWins(sd.wins);
-        if (sd.maxStreak !== undefined) setMaxStreak(sd.maxStreak);
-        if (sd.winRate !== undefined) setWinRate(sd.winRate);
-        if (sd.consecutiveLosses !== undefined) setConsecutiveLosses(sd.consecutiveLosses);
-        if (sd.currentBet !== undefined) setCurrentBetAmt(sd.currentBet);
-        if (sd.balanceSource) setBalanceSource(sd.balanceSource);
-        if (sd.balanceUpdatedAt !== undefined) setBalanceUpdatedAt(sd.balanceUpdatedAt);
-        if (sd.kkpayUsername) setKkpayUsername(sd.kkpayUsername);
-        setKkpayLinked(!!sd.kkpayEntityId);
-      }
+      const cycleMs = closeMs > openMs && closeMs - openMs < 600000 ? closeMs - openMs : 210000;
+      const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
+      nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
+      setDraw({ term: latest.term + (closeMs < now ? 1 : 0), sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3, r3: latest.r3, nextCloseTime: nextCloseRef.current });
     } catch { /* ignore */ }
   }, []);
 
+  // ─── Fetch status ────────────────────────────────────────────────────────
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const s = await api.tg.status();
+      setStatus(s);
+      setBetAmountInput(String(s.betAmount ?? 100));
+      if (!s.connected) { setTgStep("login"); return; }
+      if (!s.watchGroupId) {
+        const { groups: g } = await api.tg.groups();
+        setGroups(g);
+        setTgStep("group");
+        return;
+      }
+      setTgStep("ready");
+    } catch { setTgStep("login"); }
+  }, []);
+
+  const fetchBets = useCallback(async () => {
+    try {
+      const { bets: b } = await api.tg.bets();
+      setBets(b);
+    } catch { /* ignore */ }
+  }, []);
+
+  // ─── SSE stream ──────────────────────────────────────────────────────────
+
   useEffect(() => {
-    fetchBetsAndStats();
-    const poll = setInterval(fetchBetsAndStats, 5000);
+    const es = new EventSource("/api/tg/events", { withCredentials: true });
+    sseRef.current = es;
 
-    // SSE real-time updates with auto-reconnect
-    let es: EventSource | null = null;
-    let retryMs = 1000;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    let destroyed = false;
-
-    const handleMessage = (e: MessageEvent<string>) => {
-      setSseConnected(true);
-      retryMs = 1000;
+    es.onmessage = (e) => {
+      if (!e.data) return;
       try {
-        const ev = JSON.parse(e.data) as {
-          type: string;
-          bet?: BetRecord;
-          balance?: number;
-          balanceSource?: 'manual' | 'kkpay';
-          balanceUpdatedAt?: number;
-          todayPnl?: number;
-          sessionPnl?: number;
-          totalBets?: number;
-          settled?: number;
-          wins?: number;
-          maxStreak?: number;
-          winRate?: string;
-          consecutiveLosses?: number;
-          currentBet?: number;
-          // draw:new fields
-          term?: number;
-          r3?: string;
-          sum1?: number;
-          sum2?: number;
-          sum3?: number;
-          result?: number;
-          closeTime?: number;
-          openTime?: number;
-          nextCloseTime?: number;
-          // timer:scheduled fields
-          fireAt?: number;
-          delaySec?: number;
-        };
-        if (ev.type === 'bet:new' && ev.bet) {
-          setRecords(prev => {
-            const exists = prev.some(r => r.id === ev.bet!.id);
-            return exists ? prev : [ev.bet!, ...prev.slice(0, 49)];
-          });
-          if (ev.balance !== undefined) setBalance(ev.balance);
-        } else if (ev.type === 'bet:result' && ev.bet) {
-          setRecords(prev => prev.map(r => r.id === ev.bet!.id ? ev.bet! : r));
-          if (ev.balance !== undefined) setBalance(ev.balance);
-          if (ev.todayPnl !== undefined) setTodayPnl(ev.todayPnl);
-          if (ev.sessionPnl !== undefined) setTotalPnl(ev.sessionPnl);
-          if (ev.totalBets !== undefined) setTotalBets(ev.totalBets);
-          if (ev.wins !== undefined) setWins(ev.wins);
-          if (ev.maxStreak !== undefined) setMaxStreak(ev.maxStreak);
-          if (ev.winRate !== undefined) setWinRate(ev.winRate);
-          if (ev.consecutiveLosses !== undefined) setConsecutiveLosses(ev.consecutiveLosses);
-          if (ev.currentBet !== undefined) setCurrentBetAmt(ev.currentBet);
-        } else if (ev.type === 'draw:new') {
-          if (ev.term) {
-            setLastDraw({
-              term: ev.term as number,
-              r3: (ev.r3 as string) ?? '',
-              sum1: ev.sum1 as number | undefined,
-              sum2: ev.sum2 as number | undefined,
-              sum3: ev.sum3 as number | undefined,
-              result: ev.result as number | undefined,
-            });
-            // nextCloseTime = when the CURRENT open period ends (closeTime + cycle).
-            // closeTime alone is in the past (items[0] = last completed period).
-            if (ev.nextCloseTime) {
-              nextOpenTimeRef.current = ev.nextCloseTime as number;
-            } else if (ev.closeTime && ev.openTime) {
-              const cyc = (ev.closeTime as number) - (ev.openTime as number);
-              nextOpenTimeRef.current = (ev.closeTime as number) + (cyc > 0 ? cyc : 201000);
-            }
-          }
-        } else if (ev.type === 'timer:scheduled') {
-          if (ev.fireAt !== undefined) setNextBetAt(ev.fireAt);
-        } else if (ev.type === 'balance:update') {
-          if (ev.balance !== undefined) setBalance(ev.balance);
-          if (ev.balanceSource) setBalanceSource(ev.balanceSource);
-          if (ev.balanceUpdatedAt !== undefined) setBalanceUpdatedAt(ev.balanceUpdatedAt);
-        } else if (ev.type === 'session:reconnected') {
-          fetchBetsAndStats();
+        const ev = JSON.parse(e.data as string) as Record<string, unknown>;
+        if (ev.type === "draw:new") {
+          const closeMs = ev.closeTime as number ?? 0;
+          const openMs = ev.openTime as number ?? 0;
+          const nowT = Date.now();
+          const cycleMs = closeMs > openMs && closeMs - openMs < 600000 ? closeMs - openMs : 210000;
+          const targetClose = closeMs > nowT ? closeMs : closeMs + cycleMs;
+          nextCloseRef.current = targetClose > nowT ? targetClose : nowT + cycleMs;
+          if (ev.nextCloseTime as number) nextCloseRef.current = ev.nextCloseTime as number;
+          const term = ev.term as number;
+          setDraw({ term: term + (closeMs < nowT ? 1 : 0), sum1: ev.sum1 as number, sum2: ev.sum2 as number, sum3: ev.sum3 as number, r3: ev.r3 as string, nextCloseTime: nextCloseRef.current });
+        }
+        if (ev.type === "timer:scheduled") {
+          if (ev.fireAt) setNextBetAt(ev.fireAt as number);
+        }
+        if (ev.type === "bet:new" || ev.type === "bet:result") {
+          void fetchBets();
+          if (ev.type === "bet:result") void fetchStatus();
+        }
+        if (ev.type === "balance:update") {
+          setStatus(prev => prev ? { ...prev, balance: ev.balance as number, balanceSource: ev.balanceSource as string, balanceUpdatedAt: ev.balanceUpdatedAt as number } : prev);
         }
       } catch { /* ignore */ }
     };
 
-    const connect = () => {
-      if (destroyed) return;
-      es = new EventSource('/api/tg/events');
-      es.onmessage = handleMessage;
-      es.onerror = () => {
-        setSseConnected(false);
-        es?.close();
-        es = null;
-        if (!destroyed) {
-          retryTimer = setTimeout(() => {
-            retryMs = Math.min(retryMs * 2, 30000);
-            connect();
-          }, retryMs);
-        }
-      };
-      es.onopen = () => { setSseConnected(true); retryMs = 1000; };
-    };
-    connect();
+    return () => { es.close(); sseRef.current = null; };
+  }, [fetchBets, fetchStatus]);
 
-    return () => {
-      destroyed = true;
-      clearInterval(poll);
-      if (retryTimer) clearTimeout(retryTimer);
-      es?.close();
-    };
-  }, [fetchBetsAndStats]);
+  // ─── Init & polling ──────────────────────────────────────────────────────
 
-  function handleConnected(me: MeInfo) {
-    setTgMe(me);
-    setLoginOpen(false);
-    setTimeout(() => setBetSetupOpen(true), 400);
+  useEffect(() => {
+    void fetchStatus();
+    void fetchBets();
+    void fetchDraw();
+    const statusInterval = setInterval(() => void fetchStatus(), 10_000);
+    const drawInterval = setInterval(() => void fetchDraw(), 60_000);
+    const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
+  }, [fetchStatus, fetchBets, fetchDraw]);
+
+  // ─── Derived state ───────────────────────────────────────────────────────
+
+  const countdown = draw ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
+  const nextBetIn = nextBetAt && nextBetAt > nowMs ? Math.ceil((nextBetAt - nowMs) / 1000) : null;
+  const cardExpiry = card?.expiresAt ? new Date(card.expiresAt) : null;
+  const cardDaysLeft = cardExpiry ? Math.ceil((cardExpiry.getTime() - Date.now()) / 86400000) : 0;
+
+  const settled = bets.filter(b => b.won !== undefined);
+  const wins = settled.filter(b => b.won === true).length;
+  const winRate = settled.length > 0 ? ((wins / settled.length) * 100).toFixed(1) : "0.0";
+  let maxStreak = 0, curStreak = 0;
+  for (const b of [...bets].reverse()) {
+    if (b.won === true) { curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
+    else if (b.won === false) curStreak = 0;
   }
 
-  async function handleDisconnect() {
-    await fetch('/api/tg/disconnect', { method: 'POST' });
-    setTgMe(null);
-    setWatchGroup(null);
-    setIsRunning(false);
-  }
+  // ─── Actions ─────────────────────────────────────────────────────────────
 
-  async function handleToggleRun() {
-    const next = !isRunning;
-    setIsRunning(next);
-    if (!tgMe) return;
+  const toggleAutoBet = async () => {
+    if (!status) return;
+    setToggleLoading(true);
+    try {
+      const newState = !status.autoBet;
+      await api.tg.config({ autoBet: newState });
+      setStatus(prev => prev ? { ...prev, autoBet: newState } : prev);
+      if (!newState) setNextBetAt(null);
+    } finally { setToggleLoading(false); }
+  };
 
-    if (next) setRiskBlockReason(null);
+  const saveCfg = async (cfg: Record<string, unknown>) => {
+    await api.tg.config(cfg);
+    await fetchStatus();
+  };
 
-    // When starting: set the watch group if one is known
-    const groupIdToSet = watchGroup?.id;
-    if (next && groupIdToSet) {
-      await fetch('/api/tg/set-group', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ groupId: groupIdToSet }),
-      }).catch(() => {});
-    }
+  const clearBets = async () => {
+    setClearLoading(true);
+    try { await api.tg.clearBets(); setBets([]); }
+    finally { setClearLoading(false); }
+  };
 
-    const body: Record<string, unknown> = { autoBet: next };
-    await fetch('/api/tg/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }).catch(() => {});
-    setBetConfig(prev => ({ ...prev, autoBet: next }));
-  }
+  const handleDisconnect = async () => {
+    await api.tg.disconnect();
+    setTgStep("login");
+    setStatus(null);
+    setNextBetAt(null);
+  };
 
-  function handleSaveConfig(cfg: BetConfig) {
-    setBetConfig(cfg);
-    if (cfg.autoBet) setIsRunning(true);
-  }
-
-  const prevBalls = latestTerm ? [latestTerm.sum1, latestTerm.sum2, latestTerm.sum3] : [4, 3, 6];
-  const prevResult = latestTerm?.result ?? 13;
-  const prevLabel = latestTerm?.r3 ?? '小单';
-  const prevTerm = latestTerm?.term ?? 0;
+  // ─── Render ──────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex justify-center pb-8 relative">
-      <div className="w-full max-w-[430px] bg-background shadow-2xl overflow-hidden flex flex-col relative">
-
-        {/* Header */}
-        <div className="flex items-center justify-between p-3 border-b border-border/50">
-          <Button variant="ghost" size="icon" onClick={() => setDrawerOpen(true)} className="text-muted-foreground hover:text-white" data-testid="button-open-drawer">
-            <Menu className="w-6 h-6" />
-          </Button>
-
-          <div className="flex items-center gap-1.5">
-            {!sseConnected && (
-              <span className="flex items-center gap-1 text-[10px] text-yellow-400 animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 inline-block" />
-                重连中
+    <div className="min-h-screen bg-[#0b0e1a] text-white">
+      {/* Header */}
+      <div className="sticky top-0 z-40 bg-[#0b0e1a]/95 border-b border-[#1e2235] backdrop-blur">
+        <div className="max-w-lg mx-auto px-4 py-3 flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🎰</span>
+            <span className="font-bold text-white">彩票机器人</span>
+            {card?.active && (
+              <span className="text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded">
+                {card.type === "daily" ? "天卡" : card.type === "weekly" ? "周卡" : "月卡"} {cardDaysLeft}天
               </span>
             )}
-            <Button
-              size="sm"
-              onClick={() => tgMe ? setBetSetupOpen(true) : setLoginOpen(true)}
-              className={`${tgMe ? 'bg-green-600 hover:bg-green-700' : 'bg-[#3b5de7] hover:bg-blue-600'} text-white h-8 text-xs px-3`}
-              data-testid="button-connect-tg"
-            >
-              {tgMe ? '已连接' : '连接TG'}
-            </Button>
-            <Button
-              size="sm"
-              className={`${isRunning ? 'bg-[#f44336] hover:bg-red-600 text-white' : 'bg-[#00e676] hover:bg-green-500 text-black'} font-semibold h-8 text-xs px-3`}
-              onClick={handleToggleRun}
-              data-testid="button-start"
-            >
-              {isRunning ? '暂停' : '启动'}
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="text-muted-foreground hover:text-white h-8 w-8 p-0"
-              onClick={() => setConfigOpen(true)}
-              data-testid="button-config"
-              title="投注配置"
-            >
-              <SlidersHorizontal className="w-4 h-4" />
-            </Button>
           </div>
-
-          <Button variant="ghost" size="icon" className="text-muted-foreground" data-testid="button-theme">
-            <Moon className="w-5 h-5" />
-          </Button>
+          <div className="flex items-center gap-2">
+            {user?.isAdmin && (
+              <button onClick={() => setLocation("/admin")} className="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-lg hover:bg-white/5 transition">管理</button>
+            )}
+            <span className="text-slate-500 text-xs">{user?.username}</span>
+            <button onClick={() => void logout()} className="text-slate-500 hover:text-slate-300 text-xs transition">退出</button>
+          </div>
         </div>
+      </div>
 
-        {/* Risk blocked warning */}
-        {riskBlockReason && (
-          <div className="flex items-center justify-between px-3 py-1.5 bg-red-900/30 border-b border-red-700/40">
-            <span className="text-xs text-red-400 flex-1">⚠️ 风控暂停：{riskBlockReason}</span>
-            <button onClick={() => setRiskBlockReason(null)} className="text-xs text-red-400/60 hover:text-red-300 ml-2">✕</button>
-          </div>
+      <div className="max-w-lg mx-auto px-4 py-4 space-y-3 pb-20">
+
+        {/* TG Login */}
+        {tgStep === "login" && <TgLoginCard onDone={() => void fetchStatus()} />}
+
+        {/* Group Setup */}
+        {tgStep === "group" && (
+          <GroupSetupCard groups={groups} onDone={() => void fetchStatus()} />
         )}
 
-        {/* TG Connected bar */}
-        {tgMe && (
-          <div className="flex items-center justify-between px-3 py-1.5 bg-green-900/20 border-b border-green-800/30">
-            <div className="flex items-center gap-2 text-xs text-green-400">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse flex-shrink-0" />
-              <span className="truncate max-w-[100px]">
-                {tgMe.firstName}{tgMe.lastName ? ` ${tgMe.lastName}` : ''}
-                {tgMe.username ? ` @${tgMe.username}` : ''}
-              </span>
+        {/* Main content when ready */}
+        {tgStep === "ready" && status && (
+          <>
+            {/* Balance */}
+            <div className="bg-gradient-to-br from-[#161929] to-[#0f1428] border border-[#252a3d] rounded-2xl p-5">
+              <div className="flex justify-between items-start mb-1">
+                <span className="text-slate-400 text-xs">当前余额</span>
+                <div className="flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${status.kkpayEntityId ? "bg-emerald-400" : "bg-slate-500"}`} />
+                  <span className="text-[10px] text-slate-500">
+                    {status.balanceSource === "kkpay" ? `@kkpay ${status.balanceUpdatedAt ? fmtDate(status.balanceUpdatedAt) : ""}` : "手动"}
+                  </span>
+                </div>
+              </div>
+              <div className="text-3xl font-bold text-emerald-400 mb-3">
+                {(status.balance ?? 0).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </div>
+              <div className="flex gap-4 text-sm">
+                <div>
+                  <span className="text-slate-500 text-xs">今日</span>
+                  <span className={`ml-1 font-semibold ${pnlColor(status.todayPnl ?? 0)}`}>
+                    {(status.todayPnl ?? 0) >= 0 ? "+" : ""}{fmtNum(status.todayPnl ?? 0)}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 text-xs">本次</span>
+                  <span className={`ml-1 font-semibold ${pnlColor(status.sessionPnl ?? 0)}`}>
+                    {(status.sessionPnl ?? 0) >= 0 ? "+" : ""}{fmtNum(status.sessionPnl ?? 0)}
+                  </span>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setBetSetupOpen(true)}
-                className="flex items-center gap-1 text-xs text-[#4CA2FF] hover:text-blue-400 transition-colors"
-                data-testid="button-set-group"
-              >
-                <Users className="w-3 h-3" />
-                <span className="truncate max-w-[80px]">{watchGroup ? watchGroup.title : '设置投注群'}</span>
-              </button>
-              <button
-                onClick={() => setConfigOpen(true)}
-                className="flex items-center gap-1 text-xs text-[#c8a520] hover:text-yellow-400 transition-colors"
-                data-testid="button-open-config"
-              >
-                <SlidersHorizontal className="w-3 h-3" />
-                <span>
-                  {betConfig.strategy === 'martingale' ? '马丁' : betConfig.strategy === 'anti-martingale' ? '反马丁' : '普通'}
-                  {' '}¥{betConfig.betAmount ?? 100}
-                </span>
-              </button>
-              <button
-                onClick={async () => {
-                  await handleDisconnect();
-                  setLoginOpen(true);
-                }}
-                className="flex items-center gap-1 text-xs text-red-400/70 hover:text-red-400 transition-colors"
-                title="退出登录 / 切换账号"
-                data-testid="button-tg-logout"
-              >
-                <LogOut className="w-3 h-3" />
-                <span>退出</span>
-              </button>
-            </div>
-          </div>
-        )}
 
-        <div className="p-4 flex-1 overflow-y-auto pb-10">
+            {/* Period & Countdown */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5">
+              <div className="flex justify-between items-center mb-3">
+                <div>
+                  <span className="text-slate-400 text-xs">当前期号</span>
+                  <div className="text-white font-bold text-lg">{draw?.term ?? "---"}期</div>
+                </div>
+                {draw?.sum1 !== undefined && (
+                  <div className="flex items-center gap-1.5">
+                    <NumBall n={draw.sum1} />
+                    <span className="text-slate-500">+</span>
+                    <NumBall n={draw.sum2} />
+                    <span className="text-slate-500">+</span>
+                    <NumBall n={draw.sum3} />
+                    <span className="text-slate-500">=</span>
+                    <NumBall n={(draw.sum1 ?? 0) + (draw.sum2 ?? 0) + (draw.sum3 ?? 0)} sum />
+                    <span className="text-[10px] text-slate-400 ml-1">{draw.r3}</span>
+                  </div>
+                )}
+              </div>
 
-          {/* Period Info */}
-          <div className="mb-4">
-            <div className="flex items-center gap-2 mb-2 text-lg">
-              {loading ? (
-                <span className="text-muted-foreground text-sm">加载开奖数据...</span>
-              ) : fetchError ? (
-                <span className="text-[#f44336] text-sm flex items-center gap-2">
-                  数据获取失败
-                  <button onClick={fetchLotteryData} className="text-xs underline text-muted-foreground">重试</button>
-                </span>
-              ) : (
-                <>
-                  <span className="text-[#3b5de7] font-medium" data-testid="text-current-period">{currentPeriod}期:</span>
-                  <span className="text-[#c8a520] font-bold" data-testid="text-countdown">{countdown}秒</span>
-                  <button onClick={fetchLotteryData} className="ml-1 text-muted-foreground hover:text-white transition-colors" title={lastFetched ? `上次更新: ${lastFetched.toLocaleTimeString()}` : ''} data-testid="button-refresh">
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  </button>
-                </>
+              <div className="text-center py-2">
+                <div className="text-5xl font-bold font-mono text-white tracking-tight">
+                  {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
+                </div>
+                <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
+              </div>
+
+              {nextBetIn !== null && status.autoBet && (
+                <div className="mt-3 bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-2.5 text-center">
+                  <span className="text-blue-400 text-sm">
+                    距下次投注 <span className="font-bold">{nextBetIn}s</span>
+                    <span className="text-blue-300/50 text-xs ml-1">（届时剩余≈120s）</span>
+                  </span>
+                </div>
+              )}
+
+              {status.riskBlocked && (
+                <div className="mt-3 bg-orange-500/10 border border-orange-500/20 rounded-xl px-4 py-2.5 text-center">
+                  <span className="text-orange-400 text-xs">⚠️ {status.riskReason}</span>
+                </div>
               )}
             </div>
 
-            {!loading && !fetchError && (
-              <div className="flex items-center gap-1.5 text-sm">
-                <span className="text-muted-foreground">上期:</span>
-                <span className="text-muted-foreground text-xs ml-0.5">{prevTerm}</span>
-                <div className="flex items-center gap-1 ml-1">
-                  {prevBalls.map((b, i) => (
-                    <span key={i} className="flex items-center gap-0.5">
-                      <span className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs" style={{ backgroundColor: '#3b5de733', border: '1px solid #3b5de766', color: '#4CA2FF' }} data-testid={`text-ball-${i}`}>{b}</span>
-                      {i < 2 && <span className="text-muted-foreground text-xs">+</span>}
-                    </span>
-                  ))}
-                  <span className="text-muted-foreground text-xs">=</span>
-                  <span className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs" style={{ backgroundColor: getSumColor(prevResult) + '33', border: `1px solid ${getSumColor(prevResult)}66`, color: getSumColor(prevResult) }} data-testid="text-result">{prevResult}</span>
-                </div>
-                <span className="text-muted-foreground text-xs ml-1">({prevLabel})</span>
-              </div>
-            )}
-          </div>
+            {/* Stats */}
+            <div className="grid grid-cols-4 gap-2">
+              <StatCard label="总投注" value={String(status.totalBets ?? 0)} />
+              <StatCard label="胜率" value={`${winRate}%`} valueClass={parseFloat(winRate) >= 50 ? "text-emerald-400" : "text-red-400"} />
+              <StatCard label="最大连中" value={String(maxStreak)} valueClass="text-emerald-400" />
+              <StatCard label="连亏" value={status.consecutiveLosses ? `${status.consecutiveLosses}局` : "-"}
+                valueClass={(status.consecutiveLosses ?? 0) >= 3 ? "text-red-400" : "text-white"} />
+            </div>
 
-          {/* Balance */}
-          <div className="bg-card border border-border rounded-lg p-4 mb-4">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-muted-foreground text-sm">当前余额:</span>
-              <div className="flex items-center gap-2">
-                {balanceSource === 'kkpay' ? (
-                  <div className="flex items-center gap-1.5">
-                    <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-                    <span className="text-[10px] text-green-400 font-medium">@{kkpayUsername} 实时</span>
-                    {balanceUpdatedAt > 0 && (
-                      <span className="text-[10px] text-muted-foreground">
-                        {new Date(balanceUpdatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </span>
-                    )}
+            {/* Auto Bet Controls */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5">
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <div className="text-white font-semibold">自动投注</div>
+                  <div className="text-slate-500 text-xs mt-0.5">
+                    {status.autoBet
+                      ? `运行中 · ${ALGO_LABELS[status.algorithms?.[0] ?? ""] ?? "未知算法"} · ${BET_OPT_LABELS[status.betOptions?.[0] ?? ""] ?? "?"}`
+                      : "已停止"}
                   </div>
-                ) : (
-                  <button
-                    className="text-[10px] text-[#4CA2FF] hover:text-blue-400 transition-colors"
-                    onClick={() => { setShowKkpayInput(v => !v); setKkpayInput(kkpayUsername); }}
-                  >
-                    {kkpayLinked ? `@${kkpayUsername} 未连接` : '+ 接入kkpay'}
+                </div>
+                <button
+                  onClick={() => void toggleAutoBet()}
+                  disabled={toggleLoading}
+                  className={`relative w-14 h-7 rounded-full transition-colors ${status.autoBet ? "bg-blue-600" : "bg-[#252a3d]"} ${toggleLoading ? "opacity-50" : ""}`}
+                >
+                  <div className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all ${status.autoBet ? "left-8" : "left-1"}`} />
+                </button>
+              </div>
+
+              <div className="flex gap-2 items-center">
+                <div className="flex-1">
+                  <label className="text-xs text-slate-500 mb-1 block">当前注额</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="number" value={betAmountInput} onChange={e => setBetAmountInput(e.target.value)}
+                      className="flex-1 bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                      min="1"
+                    />
+                    <button onClick={() => void api.tg.config({ betAmount: Number(betAmountInput) }).then(() => void fetchStatus())}
+                      className="bg-[#252a3d] hover:bg-[#30375a] text-white text-sm px-3 rounded-xl transition">
+                      设置
+                    </button>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs text-slate-500 mb-1">本次注额</div>
+                  <div className="text-white font-bold text-lg">{status.currentBet ?? status.betAmount ?? 100}</div>
+                </div>
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                <button onClick={() => setShowSettings(true)}
+                  className="flex-1 bg-[#252a3d] hover:bg-[#30375a] text-slate-300 text-sm py-2 rounded-xl transition">
+                  ⚙️ 详细设置
+                </button>
+                <button onClick={() => { setShowGroupSetup(true); void api.tg.groups().then(r => setGroups(r.groups)); }}
+                  className="flex-1 bg-[#252a3d] hover:bg-[#30375a] text-slate-300 text-sm py-2 rounded-xl transition">
+                  💬 {status.watchGroupTitle ? status.watchGroupTitle.slice(0, 8) + "..." : "换群"}
+                </button>
+              </div>
+            </div>
+
+            {/* Bet History */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+              <div className="flex justify-between items-center px-5 py-3 border-b border-[#252a3d]">
+                <h3 className="text-white font-semibold text-sm">📋 投注记录</h3>
+                <div className="flex gap-2 items-center">
+                  <span className="text-slate-500 text-xs">{bets.length} 条</span>
+                  <button onClick={() => void clearBets()} disabled={clearLoading || bets.length === 0}
+                    className="text-xs text-red-400 hover:text-red-300 disabled:opacity-30 transition px-2 py-0.5 rounded border border-red-500/20 hover:border-red-500/40">
+                    清空
                   </button>
-                )}
-                {balanceSource === 'kkpay' && (
-                  <button
-                    className="text-[10px] text-muted-foreground hover:text-[#00e676] transition-colors"
-                    title="立即查询余额"
-                    onClick={async () => {
-                      await fetch('/api/tg/kkpay/refresh', { method: 'POST' });
-                      setTimeout(fetchBetsAndStats, 2500);
-                    }}
-                  >↻</button>
-                )}
-                <button
-                  className="text-[10px] text-muted-foreground hover:text-white transition-colors"
-                  onClick={() => { setShowKkpayInput(v => !v); setKkpayInput(kkpayUsername); }}
-                  title="配置kkpay钱包"
-                >⚙</button>
-              </div>
-            </div>
-            {showKkpayInput && (
-              <div className="flex gap-2 mb-2">
-                <input
-                  value={kkpayInput}
-                  onChange={e => setKkpayInput(e.target.value)}
-                  placeholder="输入机器人用户名，如 kkpay"
-                  className="flex-1 bg-[#2d3654] border border-border rounded px-2 py-1 text-xs text-white placeholder-muted-foreground outline-none focus:border-[#3b5de7]"
-                  onKeyDown={async e => {
-                    if (e.key === 'Enter') {
-                      await fetch('/api/tg/kkpay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: kkpayInput }) });
-                      setKkpayUsername(kkpayInput.replace(/^@/, ''));
-                      setShowKkpayInput(false);
-                      setTimeout(fetchBetsAndStats, 2000);
-                    }
-                  }}
-                />
-                <button
-                  className="bg-[#3b5de7] hover:bg-blue-600 text-white text-xs px-3 py-1 rounded transition-colors"
-                  onClick={async () => {
-                    await fetch('/api/tg/kkpay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: kkpayInput }) });
-                    setKkpayUsername(kkpayInput.replace(/^@/, ''));
-                    setShowKkpayInput(false);
-                    setTimeout(fetchBetsAndStats, 2000);
-                  }}
-                >绑定</button>
-              </div>
-            )}
-            <div className="text-[#00e676] text-3xl font-bold font-mono tracking-tight" data-testid="text-balance">
-              {balance.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </div>
-          </div>
-
-          {/* Stats Cards */}
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className="bg-card border border-border rounded-lg p-3">
-              <div className="text-muted-foreground text-xs mb-1">今日盈亏</div>
-              <div className={`font-bold ${todayPnl >= 0 ? 'text-[#00e676]' : 'text-[#f44336]'}`}>
-                {todayPnl >= 0 ? '+' : ''}{todayPnl.toFixed(2)}
-              </div>
-            </div>
-            <div className="bg-card border border-border rounded-lg p-3">
-              <div className="text-muted-foreground text-xs mb-1">总盈亏</div>
-              <div className={`font-bold ${totalPnl >= 0 ? 'text-[#00e676]' : 'text-[#f44336]'}`}>
-                {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)}
-              </div>
-            </div>
-          </div>
-
-          {/* Stats Row */}
-          <div className="bg-card border border-border rounded-lg mb-6 overflow-hidden">
-            <div className="grid grid-cols-3 divide-x divide-border border-b border-border">
-              {([
-                ['总投注', `${totalBets}次`, null],
-                ['中奖', `${wins}次`, wins > 0 ? '#00e676' : null],
-                ['胜率', `${winRate}%`, parseFloat(winRate) >= 50 ? '#00e676' : '#f44336'],
-              ] as [string, string, string | null][]).map(([label, val, color]) => (
-                <div key={label} className="text-center py-2.5 px-1">
-                  <div className="text-muted-foreground text-[10px] mb-1">{label}</div>
-                  <div className="text-sm font-semibold" style={color ? { color } : undefined}>{val}</div>
-                </div>
-              ))}
-            </div>
-            <div className="grid grid-cols-3 divide-x divide-border">
-              <div className="text-center py-2.5 px-1">
-                <div className="text-muted-foreground text-[10px] mb-1">最大连中</div>
-                <div className="text-sm font-semibold" style={maxStreak >= 3 ? { color: '#00e676' } : undefined}>{maxStreak}</div>
-              </div>
-              <div className="text-center py-2.5 px-1">
-                <div className="text-muted-foreground text-[10px] mb-1">当前连亏</div>
-                <div className="text-sm font-semibold" style={consecutiveLosses >= 2 ? { color: '#f44336' } : undefined}>
-                  {consecutiveLosses > 0 ? `${consecutiveLosses}局` : '-'}
                 </div>
               </div>
-              <div className="text-center py-2.5 px-1">
-                {nextBetAt && nextBetAt > nowMs ? (
-                  <>
-                    <div className="text-muted-foreground text-[10px] mb-1">距投注</div>
-                    <div className="text-sm font-semibold text-[#c8a520]">
-                      {Math.ceil((nextBetAt - nowMs) / 1000)}s
+
+              {bets.length === 0 ? (
+                <div className="text-center text-slate-600 text-sm py-10">暂无投注记录</div>
+              ) : (
+                <div className="divide-y divide-[#1e2235]">
+                  {bets.slice(0, 30).map(b => (
+                    <div key={b.id} className="flex items-center gap-3 px-4 py-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-white text-sm font-semibold">{b.betContent}</span>
+                          <span className="text-slate-500 text-xs">{b.amount.toLocaleString()}</span>
+                          {b.period && <span className="text-slate-600 text-[10px]">{b.period}期</span>}
+                        </div>
+                        <div className="text-slate-600 text-[10px] mt-0.5">
+                          {fmtDate(b.timestamp)} · {b.lotteryResult ?? b.messageText.slice(0, 20)}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <BetTag status={b.status} won={b.won} />
+                        {b.pnl !== undefined && (
+                          <div className={`text-xs font-semibold mt-1 ${pnlColor(b.pnl)}`}>
+                            {b.pnl >= 0 ? "+" : ""}{b.pnl.toLocaleString()}
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div className="text-[9px] text-muted-foreground/60 mt-0.5">届时剩余≈120s</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-muted-foreground text-[10px] mb-1">当前注额</div>
-                    <div className="text-sm font-semibold text-[#c8a520]">{currentBetAmt.toFixed(0)}</div>
-                  </>
-                )}
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* TG Info */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+              <div className="flex justify-between items-center">
+                <div className="text-xs text-slate-400">
+                  <span className="text-emerald-400 mr-1.5">●</span>
+                  已连接：{status.me?.firstName ?? ""} {status.me?.username ? `@${status.me.username}` : ""}
+                </div>
+                <button onClick={() => void handleDisconnect()} className="text-xs text-red-400 hover:text-red-300 transition">
+                  断开连接
+                </button>
               </div>
             </div>
-          </div>
+          </>
+        )}
 
-          {/* Betting Records */}
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="text-sm font-medium flex items-center gap-1.5"><span>📋</span> 投注记录</h3>
-              <div className="flex gap-1.5">
-                <Button
-                  size="sm"
-                  className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2"
-                  onClick={() => setShowSearch(s => !s)}
-                >期号搜索</Button>
-                <Button
-                  size="sm"
-                  className="bg-[#2d3654] hover:bg-[#3d4664] text-white h-7 text-xs px-2"
-                  onClick={() => { setSearchPeriod(''); setShowSearch(false); }}
-                >重置</Button>
-                <Button
-                  size="sm"
-                  className="bg-transparent border border-[#f44336] text-[#f44336] hover:bg-[#f44336]/10 h-7 text-xs px-2"
-                  onClick={async () => {
-                    await fetch('/api/tg/bets', { method: 'DELETE' });
-                    setRecords([]);
-                  }}
-                >🚫 清空投注</Button>
-              </div>
-            </div>
-            {showSearch && (
-              <div className="mb-2">
-                <input
-                  value={searchPeriod}
-                  onChange={e => setSearchPeriod(e.target.value)}
-                  placeholder="输入期号筛选..."
-                  className="w-full bg-[#2d3654] border border-border rounded px-3 py-1.5 text-xs text-white placeholder-muted-foreground outline-none focus:border-[#3b5de7]"
-                />
-              </div>
-            )}
-            <div className="rounded-md border border-border overflow-hidden text-xs">
-              <table className="w-full text-center">
-                <thead className="bg-[#2d3654]/50 border-b border-border">
-                  <tr>
-                    {['期号', '投注内容', '开奖', '盈亏', '金额', '状态'].map(h => (
-                      <th key={h} className="py-2 px-1 font-normal text-muted-foreground">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/50">
-                  {records
-                    .filter(r => !searchPeriod || String(r.period ?? '').includes(searchPeriod))
-                    .map((record, i) => {
-                      const statusLabel = STATUS_LABEL[record.status] ?? record.status;
-                      const statusColor = STATUS_COLOR[record.status] ?? '#888';
-                      const pnl = record.pnl;
-                      return (
-                        <tr key={record.id ?? i} className="hover:bg-muted/50" data-testid={`row-record-${i}`}>
-                          <td className="py-2.5 px-1">{record.period ?? '-'}</td>
-                          <td className="py-2.5 px-1">{record.betContent}</td>
-                          <td className="py-2.5 px-1">{record.lotteryResult ?? '-'}</td>
-                          <td className={`py-2.5 px-1 ${pnl !== undefined ? (pnl >= 0 ? 'text-[#00e676]' : 'text-[#f44336]') : 'text-muted-foreground'}`}>
-                            {pnl !== undefined ? (pnl >= 0 ? `+${pnl.toFixed(2)}` : pnl.toFixed(2)) : '-'}
-                          </td>
-                          <td className="py-2.5 px-1 text-muted-foreground">{record.amount.toFixed(2)}</td>
-                          <td className="py-2.5 px-1 font-medium" style={{ color: statusColor }}>{statusLabel}</td>
-                        </tr>
-                      );
-                    })}
-                  {records.length === 0 && (
-                    <tr>
-                      <td colSpan={6} className="py-8 text-center text-muted-foreground">暂无投注记录</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        {/* Bottom bar — shows the latest confirmed draw (SSE draw:new or initial poll) */}
-        <div className="absolute bottom-0 left-0 w-full bg-[#1a1f2e] border-t border-border p-2 text-[10px] text-muted-foreground whitespace-nowrap overflow-hidden text-ellipsis px-4 z-10">
-          {(() => {
-            const d = lastDraw ?? (latestTerm ? { term: latestTerm.term, r3: latestTerm.r3, sum1: latestTerm.sum1, sum2: latestTerm.sum2, sum3: latestTerm.sum3, result: latestTerm.result } : null);
-            if (!d) return <span className="text-white/70">加载中...</span>;
-            return (
-              <>
-                <span className="text-white/70">{d.term}期:</span>
-                {d.sum1 !== undefined ? ` ${d.sum1}+${d.sum2}+${d.sum3}=${d.result} ` : ' '}
-                <span className="text-[#4CA2FF]">{d.r3}</span>
-                <span className="ml-2 text-white/40">已开奖</span>
-              </>
-            );
-          })()}
-        </div>
-
-        <SettingsDrawer
-          isOpen={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          tgMe={tgMe}
-          watchGroup={watchGroup}
-          onConnectTg={() => { setDrawerOpen(false); setTimeout(() => setLoginOpen(true), 200); }}
-          onSetGroup={() => { setDrawerOpen(false); setTimeout(() => setBetSetupOpen(true), 200); }}
-          onDisconnect={handleDisconnect}
-          onOpenConfig={() => { setDrawerOpen(false); setTimeout(() => setConfigOpen(true), 200); }}
-          onOpenTrend={() => { setDrawerOpen(false); setTimeout(() => setTrendOpen(true), 200); }}
-          onOpenBetSetup={() => { setDrawerOpen(false); setTimeout(() => setBetSetupOpen(true), 200); }}
-        />
-        <TelegramLoginModal isOpen={loginOpen} onClose={() => setLoginOpen(false)} onConnected={handleConnected} />
-        <BetConfigModal
-          isOpen={configOpen}
-          onClose={() => setConfigOpen(false)}
-          onSave={handleSaveConfig}
-          initialConfig={betConfig}
-        />
-        <TrendModal
-          isOpen={trendOpen}
-          onClose={() => setTrendOpen(false)}
-          initialItems={allItems}
-        />
-        <BetSetupPanel
-          isOpen={betSetupOpen}
-          onClose={() => setBetSetupOpen(false)}
-          onSave={(cfg) => setBetSetupConfig(cfg)}
-          initialConfig={betSetupConfig}
-        />
+        {/* Loading state */}
+        {tgStep === "checking" && (
+          <div className="text-center text-slate-500 py-20">加载中...</div>
+        )}
       </div>
+
+      {/* Settings Drawer */}
+      {showSettings && status && (
+        <SettingsDrawer status={status} onClose={() => setShowSettings(false)} onSave={saveCfg} />
+      )}
+
+      {/* Group Switcher */}
+      {showGroupSetup && (
+        <div className="fixed inset-0 z-50 flex items-end">
+          <div className="flex-1 bg-black/60 absolute inset-0" onClick={() => setShowGroupSetup(false)} />
+          <div className="relative w-full bg-[#0f1220] border-t border-[#252a3d] rounded-t-2xl p-4 pb-8 max-h-[80vh] overflow-y-auto z-50">
+            <GroupSetupCard groups={groups} onDone={() => { setShowGroupSetup(false); void fetchStatus(); }} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

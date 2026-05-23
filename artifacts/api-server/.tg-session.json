@@ -6,7 +6,7 @@
   "todayResetAt": 1779494400000,
   "sessionPnl": 0,
   "kkpayUsername": "kkpay",
-  "balanceSource": "kkpay",
+  "balanceSource": "manual",
   "watchGroupId": "-1003858203119",
   "cfg": {
     "autoBet": false,

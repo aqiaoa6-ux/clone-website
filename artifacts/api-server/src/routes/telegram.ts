@@ -6,28 +6,16 @@ import { NewMessage, NewMessageEvent } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
+import { requireAuth, requireCard } from "../middleware/requireAuth";
 
 const router = Router();
 
-function getCredentials() {
-  const apiId = parseInt(process.env["TELEGRAM_API_ID"] ?? "0", 10);
-  const apiHash = process.env["TELEGRAM_API_HASH"] ?? "";
-  return { apiId, apiHash };
-}
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type BetStrategy = "normal" | "martingale" | "anti-martingale";
-type BetType =
-  | "follow"
-  | "big"
-  | "small"
-  | "odd"
-  | "even"
-  | "big-odd"
-  | "big-even"
-  | "small-odd"
-  | "small-even";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend";
+
 interface BetCfg {
   autoBet: boolean;
   betAmount: number;
@@ -37,69 +25,10 @@ interface BetCfg {
   stopLoss: number;
   targetProfit: number;
   cooldownSeconds: number;
-  betType: BetType;
-  // advanced
   amountLevels: number[];
   stepBackOnWin: boolean;
   betOptions: BetOption[];
   algorithms: AlgorithmId[];
-}
-
-interface TgSession {
-  client: TelegramClient;
-  stringSession: StringSession;
-  phone: string;
-  phoneCodeHash?: string;
-  me?: Api.User;
-  groups: GroupInfo[];
-  watchGroupId?: string;
-  cfg: BetCfg;
-  // runtime state
-  consecutiveLosses: number;
-  sessionPnl: number;
-  currentBet: number;
-  lastBetAt: number;
-  // advanced state
-  currentLevel: number;
-  algIndex: number;
-  recentResults: string[];
-  // balance tracking
-  balance: number;
-  todayPnl: number;
-  todayResetAt: number;
-  // per-period dedup
-  lastBetPeriod?: number;
-  // one-bet-per-cycle lock: true after any bet is placed, false only when the countdown timer fires
-  betPlacedThisCycle: boolean;
-  // kkpay integration
-  kkpayUsername: string;
-  kkpayEntityId?: string;
-  balanceSource: "manual" | "kkpay";
-  balanceUpdatedAt: number;
-  // watchdog timers
-  watchdogTimer?: ReturnType<typeof setInterval>;
-  saveTimer?: ReturnType<typeof setInterval>;
-  // 50-second post-draw auto-bet timer
-  autoNextBetTimer?: ReturnType<typeof setTimeout>;
-  // lottery draw poller — fires scheduleAutoNextBet when a new draw is detected
-  lotteryPollTimer?: ReturnType<typeof setInterval>;
-  lastSeenLotteryPeriod: number;
-}
-
-// ─── Session persistence ──────────────────────────────────────────────────────
-const SESSION_FILE = path.join(process.cwd(), ".tg-session.json");
-
-interface PersistedData {
-  sessionString: string;
-  phone: string;
-  balance: number;
-  todayPnl: number;
-  todayResetAt: number;
-  sessionPnl: number;
-  kkpayUsername: string;
-  balanceSource: "manual" | "kkpay";
-  watchGroupId?: string;
-  cfg?: Partial<BetCfg>;
 }
 
 interface GroupInfo {
@@ -117,13 +46,66 @@ interface BetRecord {
   betContent: string;
   amount: number;
   timestamp: number;
-  status: "sent" | "failed" | "paused" | "won" | "lost";
-  pauseReason?: string;
+  status: "sent" | "failed" | "won" | "lost";
   period?: number;
   lotteryResult?: string;
   pnl?: number;
   won?: boolean;
 }
+
+interface TgSession {
+  client: TelegramClient;
+  stringSession: StringSession;
+  phone: string;
+  phoneCodeHash?: string;
+  me?: Api.User;
+  groups: GroupInfo[];
+  watchGroupId?: string;
+  cfg: BetCfg;
+  // runtime state
+  consecutiveLosses: number;
+  sessionPnl: number;
+  currentBet: number;
+  lastBetAt: number;
+  currentLevel: number;
+  algIndex: number;
+  recentResults: string[];
+  betPlacedThisCycle: boolean;
+  lastBetPeriod?: number;
+  // balance
+  balance: number;
+  todayPnl: number;
+  todayResetAt: number;
+  balanceSource: "manual" | "kkpay";
+  balanceUpdatedAt: number;
+  kkpayUsername: string;
+  kkpayEntityId?: string;
+  // timers
+  watchdogTimer?: ReturnType<typeof setInterval>;
+  saveTimer?: ReturnType<typeof setInterval>;
+  autoNextBetTimer?: ReturnType<typeof setTimeout>;
+  lotteryPollTimer?: ReturnType<typeof setInterval>;
+  lastSeenLotteryPeriod: number;
+}
+
+interface PersistedData {
+  sessionString: string;
+  phone: string;
+  balance: number;
+  todayPnl: number;
+  todayResetAt: number;
+  sessionPnl: number;
+  kkpayUsername: string;
+  balanceSource: "manual" | "kkpay";
+  watchGroupId?: string;
+  cfg?: Partial<BetCfg>;
+}
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const DRAW_CYCLE_MS = 210_000;
+const BET_BEFORE_DRAW_MS = 120_000;
+const SESSION_FILE = path.join(process.cwd(), ".tg-session.json");
 
 const DEFAULT_CFG: BetCfg = {
   autoBet: false,
@@ -134,49 +116,37 @@ const DEFAULT_CFG: BetCfg = {
   stopLoss: 5000,
   targetProfit: 3000,
   cooldownSeconds: 0,
-  betType: "follow",
   amountLevels: [100, 200, 300, 500, 1000],
   stepBackOnWin: true,
   betOptions: ["big", "small"],
   algorithms: ["signal_follow"],
 };
 
-const QUADRANT_OPTIONS: BetOption[] = ["big-odd", "big-even", "small-odd", "small-even"];
-
-function todayMidnight(): number {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
-}
-
-function parsePeriodFromMessage(text: string): number | undefined {
-  const m = text.match(/第?(\d{6,10})期/);
-  return m ? parseInt(m[1]) : undefined;
-}
-
-const BET_TYPE_TEXT: Record<BetType, string> = {
-  follow: "", // determined from message
-  big: "大",
-  small: "小",
-  odd: "单",
-  even: "双",
-  "big-odd": "大单",
-  "big-even": "大双",
-  "small-odd": "小单",
-  "small-even": "小双",
+const BET_OPTION_LABELS: Record<BetOption, string> = {
+  big: "大", small: "小", odd: "单", even: "双",
+  "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
 };
+
+// ─── Module state ─────────────────────────────────────────────────────────────
 
 let tgSession: TgSession | null = null;
 const betLog: BetRecord[] = [];
-// Store handler + the exact builder instance used at registration.
-// GramJS removeEventHandler matches by object reference — creating a new
-// NewMessage({}) for removal will NOT match the one used at addEventHandler.
 let messageHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
 let messageHandlerBuilder: NewMessage | null = null;
 let kkpayHandler: ((event: NewMessageEvent) => Promise<void>) | null = null;
 let kkpayHandlerBuilder: NewMessage | null = null;
+let lotteryHistoryCache: string[] = [];
+const sseClients = new Set<Response>();
 
-// ─── TG client options (shared) ───────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function getCredentials() {
+  return {
+    apiId: parseInt(process.env["TELEGRAM_API_ID"] ?? "0", 10),
+    apiHash: process.env["TELEGRAM_API_HASH"] ?? "",
+  };
+}
+
 function makeClientOptions() {
   return {
     connectionRetries: 1000,
@@ -189,7 +159,22 @@ function makeClientOptions() {
   };
 }
 
-// ─── Session save / restore ───────────────────────────────────────────────────
+function todayMidnight(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function pushEvent(type: string, payload: Record<string, unknown>): void {
+  if (sseClients.size === 0) return;
+  const data = JSON.stringify({ type, ...payload });
+  for (const res of sseClients) {
+    try { res.write(`data: ${data}\n\n`); } catch { sseClients.delete(res); }
+  }
+}
+
+// ─── Session persistence ──────────────────────────────────────────────────────
+
 function saveSession(): void {
   if (!tgSession) return;
   try {
@@ -209,42 +194,58 @@ function saveSession(): void {
   } catch { /* ignore */ }
 }
 
-function stopWatchdog(session: TgSession): void {
+async function fetchGroups(client: TelegramClient): Promise<GroupInfo[]> {
+  try {
+    const dialogs = await client.getDialogs({ limit: 100 });
+    return dialogs
+      .filter((d) => d.isGroup || d.isChannel)
+      .map((d) => ({
+        id: String(d.id),
+        title: d.title ?? "Unknown",
+        type: d.isChannel ? "channel" : "group",
+        membersCount: (d.entity as Api.Chat)?.participantsCount ?? undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// ─── Watchdog ─────────────────────────────────────────────────────────────────
+
+function stopAllTimers(session: TgSession): void {
   if (session.watchdogTimer) { clearInterval(session.watchdogTimer); session.watchdogTimer = undefined; }
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (session.lotteryPollTimer) { clearInterval(session.lotteryPollTimer); session.lotteryPollTimer = undefined; }
 }
 
-function startConnectionWatchdog(session: TgSession): void {
-  stopWatchdog(session);
+function startWatchdog(session: TgSession): void {
+  stopAllTimers(session);
 
-  // Periodic session save — every 5 min to capture refreshed auth tokens
   session.saveTimer = setInterval(() => {
     if (tgSession !== session) { clearInterval(session.saveTimer); return; }
     saveSession();
   }, 5 * 60 * 1000);
 
-  // Connection health check — every 15 s via real getMe() ping
   session.watchdogTimer = setInterval(() => {
     if (tgSession !== session) { clearInterval(session.watchdogTimer); return; }
     void (async () => {
       try {
-        await session.client.getMe(); // real round-trip ping
+        await session.client.getMe();
       } catch {
-        // Ping failed — force a full reconnect cycle
         try {
           await session.client.connect();
-          // Re-attach handlers after reconnect
-          if (session.watchGroupId) startWatching(session);
-          await startKkpayWatcher(session);
+          if (session.watchGroupId) startGroupListener(session);
+          await startKkpayListener(session);
           saveSession();
           pushEvent("session:reconnected", { at: Date.now() });
-        } catch { /* will retry next cycle */ }
+        } catch { /* retry next cycle */ }
       }
     })();
   }, 15 * 1000);
 }
+
+// ─── Restore session on boot ──────────────────────────────────────────────────
 
 async function restoreSession(): Promise<void> {
   try {
@@ -259,19 +260,15 @@ async function restoreSession(): Promise<void> {
     const stringSession = new StringSession(data.sessionString);
     const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
     await client.connect();
-
     const me = (await client.getMe()) as Api.User;
     if (!me?.id) return;
 
     tgSession = {
-      client,
-      stringSession,
+      client, stringSession,
       phone: data.phone ?? "",
       groups: await fetchGroups(client),
-      // Always restore autoBet=false so pressing Start always triggers the first bet
       cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG },
       consecutiveLosses: 0,
-      // Reset sessionPnl each restart so old stop-loss/take-profit never silently blocks new bets
       sessionPnl: 0,
       currentBet: data.cfg?.betAmount ?? DEFAULT_CFG.betAmount,
       lastBetAt: 0,
@@ -291,75 +288,25 @@ async function restoreSession(): Promise<void> {
       watchGroupId: data.watchGroupId,
     };
 
-    const restored = tgSession;
-    // Re-establish the group message listener so group binding survives server restart
-    if (restored.watchGroupId) startWatching(restored);
-    startKkpayWatcher(restored).catch(() => { /* ignore */ });
-    startConnectionWatchdog(restored);
+    if (tgSession.watchGroupId) startGroupListener(tgSession);
+    startKkpayListener(tgSession).catch(() => { /* ignore */ });
+    startWatchdog(tgSession);
   } catch {
-    // Session expired — remove stale file so user can login fresh
     try { fs.unlinkSync(SESSION_FILE); } catch { /* ok */ }
   }
 }
 
-// Auto-restore saved session on server startup
 void restoreSession();
 
-// ─── SSE client registry ──────────────────────────────────────────────────────
-const sseClients = new Set<Response>();
+// ─── Balance parsing ──────────────────────────────────────────────────────────
 
-function pushEvent(type: string, payload: Record<string, unknown>): void {
-  if (sseClients.size === 0) return;
-  const data = JSON.stringify({ type, ...payload });
-  for (const res of sseClients) {
-    try { res.write(`data: ${data}\n\n`); } catch { sseClients.delete(res); }
-  }
-}
-
-async function fetchGroups(client: TelegramClient): Promise<GroupInfo[]> {
-  try {
-    const dialogs = await client.getDialogs({ limit: 100 });
-    return dialogs
-      .filter((d) => d.isGroup || d.isChannel)
-      .map((d) => ({
-        id: String(d.id),
-        title: d.title ?? "Unknown",
-        type: d.isChannel ? "channel" : "group",
-        membersCount:
-          (d.entity as Api.Chat)?.participantsCount ?? undefined,
-      }));
-  } catch {
-    return [];
-  }
-}
-
-function parseBetFromMessage(text: string): string | null {
-  const lower = text.toLowerCase();
-  if (lower.includes("大单")) return "大单";
-  if (lower.includes("大双")) return "大双";
-  if (lower.includes("小单")) return "小单";
-  if (lower.includes("小双")) return "小双";
-  if (lower.includes("大")) return "大";
-  if (lower.includes("小")) return "小";
-  if (lower.includes("单")) return "单";
-  if (lower.includes("双")) return "双";
-  return null;
-}
-
-
-const BET_OPTION_LABELS: Record<BetOption, string> = {
-  big: "大", small: "小", odd: "单", even: "双",
-  "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
-};
-
-// ─── KKPay balance parsing ────────────────────────────────────────────────────
-function parseBalanceFromKkpay(text: string): number | null {
+function parseBalance(text: string): number | null {
   const patterns = [
     /当前余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
     /(?:可用|账[户号])?余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
     /balance[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
-    /剩余[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
     /💰\s*[¥￥]?\s*([\d,]+\.?\d*)/,
+    /剩余[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
     /总资产[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
     /钱包余额[：:\s]*[¥￥]?\s*([\d,]+\.?\d*)/i,
   ];
@@ -373,34 +320,67 @@ function parseBalanceFromKkpay(text: string): number | null {
   return null;
 }
 
+function updateBalance(session: TgSession, text: string): void {
+  const bal = parseBalance(text);
+  if (bal === null) return;
+  session.balance = bal;
+  session.balanceSource = "kkpay";
+  session.balanceUpdatedAt = Date.now();
+  pushEvent("balance:update", {
+    balance: bal,
+    balanceSource: "kkpay",
+    balanceUpdatedAt: session.balanceUpdatedAt,
+  });
+}
 
-// ─── Settle a bet result (shared by kkpayHandler auto-detect & /tg/bet-result) ─
-function settleBet(
-  session: TgSession,
-  opts: { won: boolean; pnl?: number; result?: string; betId?: string; period?: number },
-): void {
+// ─── Bet settlement ───────────────────────────────────────────────────────────
+
+function computeNextBet(session: TgSession, won: boolean): number {
+  const { amountLevels, stepBackOnWin, betAmount, strategy, betMultiplier } = session.cfg;
+  if (amountLevels.length > 1) {
+    let lvl = session.currentLevel;
+    lvl = won ? (stepBackOnWin ? Math.max(0, lvl - 1) : lvl) : Math.min(amountLevels.length - 1, lvl + 1);
+    session.currentLevel = lvl;
+    return amountLevels[lvl]!;
+  }
+  if (strategy === "normal") return betAmount;
+  if (strategy === "martingale") return won ? betAmount : Math.round(session.currentBet * betMultiplier);
+  return won ? Math.round(session.currentBet * betMultiplier) : betAmount;
+}
+
+function checkRisk(session: TgSession): { ok: boolean; reason?: string } {
+  const { stopLoss, targetProfit, maxConsecutiveLosses, cooldownSeconds } = session.cfg;
+  if (maxConsecutiveLosses > 0 && session.consecutiveLosses >= maxConsecutiveLosses)
+    return { ok: false, reason: `连亏${session.consecutiveLosses}局，已达上限${maxConsecutiveLosses}局` };
+  if (stopLoss > 0 && session.sessionPnl <= -stopLoss)
+    return { ok: false, reason: `亏损 ¥${Math.abs(session.sessionPnl).toFixed(0)} 已达止损 ¥${stopLoss}` };
+  if (targetProfit > 0 && session.sessionPnl >= targetProfit)
+    return { ok: false, reason: `盈利 ¥${session.sessionPnl.toFixed(0)} 已达止盈 ¥${targetProfit}` };
+  if (cooldownSeconds > 0 && session.lastBetAt > 0) {
+    const elapsed = (Date.now() - session.lastBetAt) / 1000;
+    if (elapsed < cooldownSeconds)
+      return { ok: false, reason: `冷却中 (${Math.ceil(cooldownSeconds - elapsed)}s)` };
+  }
+  return { ok: true };
+}
+
+function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; result?: string; betId?: string; period?: number }): void {
   const { won, pnl, result, betId, period } = opts;
 
   if (pnl !== undefined) {
     session.sessionPnl += pnl;
     session.balance += pnl;
     const midnight = todayMidnight();
-    if (session.todayResetAt < midnight) {
-      session.todayPnl = 0;
-      session.todayResetAt = midnight;
-    }
+    if (session.todayResetAt < midnight) { session.todayPnl = 0; session.todayResetAt = midnight; }
     session.todayPnl += pnl;
   }
 
-  const record = betId
-    ? betLog.find(b => b.id === betId)
-    : betLog.find(b => b.status === "sent");
+  const record = betId ? betLog.find(b => b.id === betId) : betLog.find(b => b.status === "sent");
   if (record) {
     record.won = won;
     record.status = won ? "won" : "lost";
     if (pnl !== undefined) record.pnl = pnl;
     if (result) record.lotteryResult = result;
-    // Backfill period onto the bet record if it wasn't set at bet time
     if (period && !record.period) record.period = period;
   }
 
@@ -413,16 +393,13 @@ function settleBet(
   session.currentBet = computeNextBet(session, won);
 
   if (record) {
-    const settledBets = betLog.filter(b => b.won !== undefined);
-    const winsNow = settledBets.filter(b => b.won === true).length;
-    let streakCur = 0, streakMax = 0;
+    const settled = betLog.filter(b => b.won !== undefined);
+    const wins = settled.filter(b => b.won === true).length;
+    let streak = 0, maxS = 0;
     for (const b of [...betLog].reverse()) {
-      if (b.won === true) { streakCur++; if (streakCur > streakMax) streakMax = streakCur; }
-      else if (b.won === false) streakCur = 0;
+      if (b.won === true) { streak++; if (streak > maxS) maxS = streak; }
+      else if (b.won === false) streak = 0;
     }
-    const winRateNow = settledBets.length > 0
-      ? ((winsNow / settledBets.length) * 100).toFixed(2)
-      : "0.00";
     pushEvent("bet:result", {
       bet: record,
       balance: session.balance,
@@ -431,161 +408,28 @@ function settleBet(
       consecutiveLosses: session.consecutiveLosses,
       currentBet: session.currentBet,
       totalBets: betLog.filter(b => b.status !== "failed").length,
-      settled: settledBets.length,
-      wins: winsNow,
-      maxStreak: streakMax,
-      winRate: winRateNow,
+      settled: settled.length,
+      wins, maxStreak: maxS,
+      winRate: settled.length > 0 ? ((wins / settled.length) * 100).toFixed(2) : "0.00",
     });
   }
 }
 
-async function startKkpayWatcher(session: TgSession): Promise<void> {
-  // Remove previous handler using the stored builder instance
-  if (kkpayHandler && kkpayHandlerBuilder) {
-    try { session.client.removeEventHandler(kkpayHandler, kkpayHandlerBuilder); } catch { /* ok */ }
-    kkpayHandler = null;
-    kkpayHandlerBuilder = null;
-  }
+// ─── Algorithm / direction decision ──────────────────────────────────────────
 
-  // Resolve entity ID for the configured kkpay username
-  const uname = session.kkpayUsername.replace(/^@/, "");
-  try {
-    const entity = await session.client.getEntity(uname);
-    session.kkpayEntityId = String((entity as unknown as { id: bigint | number }).id);
-  } catch {
-    // entity not found; handler will not match until resolved
-  }
-
-  kkpayHandler = async (event: NewMessageEvent) => {
-    const msg = event.message;
-    // Skip our own outgoing messages
-    if (msg.out) return;
-
-    const text = msg.message ?? "";
-    if (!text) return;
-
-    const chatId = String(msg.chatId ?? "");
-    const senderId = String(msg.senderId ?? "");
-
-    const wgid = session.watchGroupId;
-    const eid = session.kkpayEntityId;
-
-    // Match: (a) message from kkpay entity anywhere, OR (b) any message in the watch group
-    const isFromKkpay = eid ? (senderId === eid || chatId === eid || `-100${chatId}` === eid) : false;
-    const inWatchGroup = wgid ? (chatId === wgid || `-100${chatId}` === wgid) : false;
-
-    if (!isFromKkpay && !inWatchGroup) return;
-
-    // ── Win / loss auto-settle ────────────────────────────────────────────────
-    // Support two kkpay result formats:
-    //   Format A (KKCOIN):  "中奖 +700000 KKCOIN" / "挂逼 -100000 KKCOIN"
-    //   Format B (单金额):  "3435823期: 4+1+8=13 小单 单金额 -39200 金额 400000"
-
-    // "未中奖" contains "中奖" — use lookbehind so it never triggers hasWin
-    const hasWin  = /(?<!未)中奖|✅/.test(text);
-    const hasLoss = /挂逼|未中|未赢|❌/.test(text);
-
-    // Format B: detect win/loss from sign of 单金额
-    // When present, the numeric sign is the definitive indicator and overrides keywords
-    const danjineMatch = text.match(/单金额\s*([+-]?\d[\d,]*(?:\.\d+)?)/);
-    let isWin: boolean;
-    let isLoss: boolean;
-    if (danjineMatch) {
-      const val = parseFloat(danjineMatch[1].replace(/,/g, ""));
-      isWin  = val >= 0;
-      isLoss = val < 0;
-    } else {
-      isWin  = hasWin;
-      isLoss = hasLoss && !hasWin;
-    }
-
-    // Watch-group messages only count as results when anchored to a period number
-    // (avoids settling on casual "中奖" mentions that aren't actual kkpay results).
-    // Messages directly from the kkpay entity are always trusted.
-    const hasPeriodRef = /\d{5,}期/.test(text);
-    const isKkpayResult =
-      isFromKkpay ||
-      (inWatchGroup && hasPeriodRef && (hasWin || hasLoss || danjineMatch !== null || /KKCOIN/i.test(text)));
-
-    // Always try to parse and update the absolute balance from any kkpay message —
-    // even when there is no pending bet (autoSettle may have already settled it).
-    // Also catches bet-confirmation messages which have KKCOIN but a hex ticket ID
-    // (no \d{5,}期), so they don't match isKkpayResult unless coming from the entity.
-    const mayHaveBalance = isFromKkpay || isKkpayResult
-      || (inWatchGroup && /KKCOIN/i.test(text));
-    if (mayHaveBalance) {
-      const absBalEarly = parseBalanceFromKkpay(text);
-      if (absBalEarly !== null) {
-        session.balance = absBalEarly;
-        session.balanceSource = "kkpay";
-        session.balanceUpdatedAt = Date.now();
-        pushEvent("balance:update", {
-          balance: session.balance,
-          balanceSource: session.balanceSource,
-          balanceUpdatedAt: session.balanceUpdatedAt,
-        });
-      }
-    }
-
-    if (isKkpayResult && (isWin || isLoss) && tgSession === session) {
-      const sentBet = betLog.find(b => b.status === "sent");
-      if (sentBet) {
-        // P&L — try KKCOIN format first, then 单金额 format
-        const pnlMatch =
-          text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ??
-          text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i) ??
-          (danjineMatch ? danjineMatch : null);
-        const pnl = pnlMatch
-          ? parseFloat(pnlMatch[1].replace(/,/g, ""))
-          : undefined;
-
-        // If a numeric P&L was parsed, its sign is the definitive source of truth —
-        // override any keyword-based won/lost decision to prevent contradictions like
-        // status="中奖" with pnl=-100.
-        if (pnl !== undefined) {
-          isWin  = pnl >= 0;
-          isLoss = pnl < 0;
-        }
-
-        // Lottery result label (大单/小双/大/小/单/双)
-        const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
-
-        // Period from result message (e.g. "3435823期")
-        const periodFromMsg = parsePeriodFromMessage(text);
-
-        settleBet(session, {
-          won: isWin,
-          pnl,
-          result: rMatch?.[0],
-          betId: sentBet.id,
-          period: periodFromMsg,
-        });
-        // kkpay handles P&L settlement only — draw timing is driven by the lottery poller
-
-        // Update absolute balance again after settle (may differ from the early parse above)
-        const absBal = parseBalanceFromKkpay(text);
-        if (absBal !== null) {
-          session.balance = absBal;
-          session.balanceSource = "kkpay";
-          session.balanceUpdatedAt = Date.now();
-          pushEvent("balance:update", {
-            balance: session.balance,
-            balanceSource: session.balanceSource,
-            balanceUpdatedAt: session.balanceUpdatedAt,
-          });
-          saveSession();
-        }
-      }
-    }
-  };
-
-  kkpayHandlerBuilder = new NewMessage({});
-  session.client.addEventHandler(kkpayHandler, kkpayHandlerBuilder);
+function parseBetLabel(text: string): string | null {
+  const lower = text.toLowerCase();
+  if (lower.includes("大单")) return "大单";
+  if (lower.includes("大双")) return "大双";
+  if (lower.includes("小单")) return "小单";
+  if (lower.includes("小双")) return "小双";
+  if (lower.includes("大")) return "大";
+  if (lower.includes("小")) return "小";
+  if (lower.includes("单")) return "单";
+  if (lower.includes("双")) return "双";
+  return null;
 }
 
-// ─── Shared label mapper ─────────────────────────────────────────────────────
-// Maps a raw r3 string (e.g. "大单", "小双") to one of the caller's enabled
-// labels (e.g. "大", "小").  Returns null when no match is found.
 function mapR3ToEnabled(r3: string, enabled: string[]): string | null {
   if (enabled.includes(r3)) return r3;
   if (enabled.includes("大") && r3.startsWith("大")) return "大";
@@ -595,360 +439,151 @@ function mapR3ToEnabled(r3: string, enabled: string[]): string | null {
   return null;
 }
 
-function decideAlgorithm(session: TgSession, msgText: string): string | null {
-  const { betOptions, algorithms } = session.cfg;
-
-  // ── Algorithm-driven direction selection ─────────────────────────────────────
-  const opts = betOptions;
-  const algos = algorithms;
-  if (!opts.length || !algos.length) return null;
-
-  const enabledLabels = opts.map((o) => BET_OPTION_LABELS[o]);
-  const algoId = algos[session.algIndex % algos.length];
-  session.algIndex += 1;
-
-  if (algoId === "signal_follow") {
-    const parsed = parseBetFromMessage(msgText);
-    if (!parsed) return null;
-    return enabledLabels.includes(parsed) ? parsed : (enabledLabels[0] ?? null);
-  }
-
-  if (algoId === "signal_reverse") {
-    const parsed = parseBetFromMessage(msgText);
-    if (!parsed) return null;
-    const opposite: Record<string, string> = {
-      大: "小", 小: "大", 单: "双", 双: "单",
-      大单: "小双", 大双: "小单", 小单: "大双", 小双: "大单",
-    };
-    const rev = opposite[parsed];
-    if (rev && enabledLabels.includes(rev)) return rev;
-    return enabledLabels[0] ?? null;
-  }
-
-  if (algoId === "streak_follow") {
-    // Use lotteryHistoryCache as fallback when in-session results are sparse
-    const raw = session.recentResults.length >= 3
-      ? session.recentResults.slice(-10)
-      : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
-    const freq: Record<string, number> = {};
-    for (const lbl of enabledLabels) freq[lbl] = 0;
-    for (const r of raw) {
-      const mapped = mapR3ToEnabled(r, enabledLabels);
-      if (mapped) freq[mapped] = (freq[mapped] ?? 0) + 1;
-    }
-    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
-    return sorted[0]?.[0] ?? enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
-  }
-
-  if (algoId === "cold_pick") {
-    const raw = session.recentResults.length >= 3
-      ? session.recentResults.slice(-10)
-      : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
-    const freq: Record<string, number> = {};
-    for (const lbl of enabledLabels) freq[lbl] = 0;
-    for (const r of raw) {
-      const mapped = mapR3ToEnabled(r, enabledLabels);
-      if (mapped) freq[mapped] = (freq[mapped] ?? 0) + 1;
-    }
-    const sorted = Object.entries(freq).sort((a, b) => a[1] - b[1]);
-    return sorted[0]?.[0] ?? enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
-  }
-
-  if (algoId === "ai_trend") {
-    return decideAI(session);
-  }
-
-  // random
-  return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
+function freqPick(items: string[], labels: string[], sortAsc: boolean): string | null {
+  const freq: Record<string, number> = {};
+  for (const l of labels) freq[l] = 0;
+  for (const r of items) { const m = mapR3ToEnabled(r, labels); if (m) freq[m] = (freq[m] ?? 0) + 1; }
+  const sorted = Object.entries(freq).sort((a, b) => sortAsc ? a[1] - b[1] : b[1] - a[1]);
+  return sorted[0]?.[0] ?? labels[Math.floor(Math.random() * labels.length)] ?? null;
 }
 
-// ─── Stat-based direction (no signal text required) ──────────────────────────
-// Used for the auto-bet timer.
-// Combines in-session recentResults with lotteryHistoryCache so the algorithm
-// has data even on the very first bet after a server restart.
-function decideAlgorithmAuto(session: TgSession): string | null {
-  const { betOptions, algorithms } = session.cfg;
-  if (!betOptions.length || !algorithms.length) return null;
-
-  const enabledLabels = betOptions.map((o) => BET_OPTION_LABELS[o]);
-  const algoId = algorithms[session.algIndex % algorithms.length];
-  session.algIndex += 1;
-
-  if (algoId === "ai_trend") {
-    return decideAI(session);
-  }
-
-  // Build a combined history: prefer in-session results when plentiful,
-  // otherwise pad with the lottery history cache so the first few bets
-  // are informed rather than random.
-  const raw = session.recentResults.length >= 3
+function buildHistory(session: TgSession): string[] {
+  return session.recentResults.length >= 3
     ? session.recentResults.slice(-10)
     : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
-
-  // signal_follow / streak_follow → follow the most frequent side
-  if (algoId === "signal_follow" || algoId === "streak_follow") {
-    const freq: Record<string, number> = {};
-    for (const lbl of enabledLabels) freq[lbl] = 0;
-    for (const r of raw) {
-      const mapped = mapR3ToEnabled(r, enabledLabels);
-      if (mapped) freq[mapped] = (freq[mapped] ?? 0) + 1;
-    }
-    const sorted = Object.entries(freq).sort((a, b) => b[1] - a[1]);
-    return sorted[0]?.[0] ?? enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
-  }
-
-  // signal_reverse / cold_pick → pick the least frequent (coldest) side
-  if (algoId === "signal_reverse" || algoId === "cold_pick") {
-    const freq: Record<string, number> = {};
-    for (const lbl of enabledLabels) freq[lbl] = 0;
-    for (const r of raw) {
-      const mapped = mapR3ToEnabled(r, enabledLabels);
-      if (mapped) freq[mapped] = (freq[mapped] ?? 0) + 1;
-    }
-    const sorted = Object.entries(freq).sort((a, b) => a[1] - b[1]);
-    return sorted[0]?.[0] ?? enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
-  }
-
-  // random
-  return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
 }
 
-// ─── Auto-place a bet immediately (no signal required) ────────────────────────
-async function autoPlaceBet(session: TgSession): Promise<void> {
-  if (!session.cfg.autoBet) return;
-  const targetId = session.watchGroupId;
-  if (!targetId) return;
+function decideAI(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return null;
+  const [optA, optB = optA] = labels;
+  const history = [...lotteryHistoryCache, ...session.recentResults]
+    .map(r => mapR3ToEnabled(r, labels)).filter((x): x is string => x !== null);
+  if (!history.length) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  let votes = 0;
+  const last5 = history.slice(-5);
+  const streak = last5.reduce((acc, x) => x === last5[last5.length - 1] ? acc + 1 : 0, 0);
+  if (streak >= 4) votes += last5[last5.length - 1] === optA ? -3 : 3;
+  else if (streak === 3) votes += last5[last5.length - 1] === optA ? -2 : 2;
+  else if (streak === 2) votes += last5[last5.length - 1] === optA ? 1 : -1;
+  const last15 = history.slice(-15);
+  const rA = last15.filter(x => x === optA).length / (last15.length || 1);
+  if (rA >= 0.7) votes -= 2;
+  else if (rA <= 0.3) votes += 2;
+  else votes += rA < 0.5 ? 1 : -1;
+  const last6 = history.slice(-6);
+  if (last6.length >= 4 && last6.every((x, i) => i === 0 || x !== last6[i - 1]))
+    votes += last6[last6.length - 1] === optA ? -1 : 1;
+  const last12 = history.slice(-12);
+  const ws = last12.reduce((s, x, i) => s + ((i + 1) * (x === optA ? 1 : -1)), 0);
+  votes += ws > 0 ? -1 : 1;
+  if (votes > 0) return optA;
+  if (votes < 0) return optB;
+  const last20 = history.slice(-20);
+  return last20.filter(x => x === optA).length <= last20.length / 2 ? optA : optB;
+}
 
-  // Expire bets stuck in "sent" for longer than one draw period (240s).
-  // This prevents a missed kkpay message from blocking the cycle permanently.
-  const nowMs = Date.now();
-  for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) {
-    stale.status = "failed";
+function decideBet(session: TgSession, signalText: string): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length || !session.cfg.algorithms.length) return null;
+  const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
+  session.algIndex++;
+
+  if (algoId === "ai_trend") return decideAI(session);
+  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
+
+  const history = buildHistory(session);
+
+  if (algoId === "signal_follow") {
+    const p = parseBetLabel(signalText);
+    if (!p) return null;
+    return labels.includes(p) ? p : (labels[0] ?? null);
   }
+  if (algoId === "signal_reverse") {
+    const p = parseBetLabel(signalText);
+    if (!p) return null;
+    const opp: Record<string, string> = { 大:"小", 小:"大", 单:"双", 双:"单", 大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单" };
+    const rev = opp[p];
+    return (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
+  }
+  if (algoId === "streak_follow") return freqPick(history, labels, false);
+  if (algoId === "cold_pick" || algoId === "signal_reverse") return freqPick(history, labels, true);
+  return freqPick(history, labels, true);
+}
 
-  // Never bet while a previous bet is still awaiting a result
-  if (betLog.some((b) => b.status === "sent")) return;
+function decideBetAuto(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length || !session.cfg.algorithms.length) return null;
+  const algoId = session.cfg.algorithms[session.algIndex % session.cfg.algorithms.length];
+  session.algIndex++;
+  if (algoId === "ai_trend") return decideAI(session);
+  if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  const history = buildHistory(session);
+  const cold = algoId === "cold_pick" || algoId === "signal_reverse";
+  return freqPick(history, labels, cold);
+}
 
-  // One bet per cycle — only clear by the 50s timer
-  if (session.betPlacedThisCycle) return;
+// ─── Auto-bet engine ──────────────────────────────────────────────────────────
 
-  const risk = checkRiskLimits(session);
-  // Silently skip — no log entry spam when limits are hit
-  if (!risk.ok) return;
-
-  const direction = decideAlgorithmAuto(session);
-  if (!direction) return;
-
+async function placeBet(session: TgSession, direction: string): Promise<void> {
+  const targetId = session.watchGroupId!;
   const amount = session.currentBet;
-  const groupTitle = session.groups.find((g) => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
-
-  // Lock BEFORE the await to prevent a second concurrent call from passing the guard
+  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
   session.betPlacedThisCycle = true;
   try {
     await session.client.sendMessage(targetId, { message: `${direction}${amount}` });
     session.lastBetAt = Date.now();
-    betLog.unshift({
-      id: String(Date.now()),
-      groupId: targetId,
-      groupTitle,
-      messageText: "[自动投注]",
-      betContent: direction,
-      amount,
-      timestamp: Date.now(),
-      status: "sent",
-    });
+    betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: "[自动投注]", betContent: direction, amount, timestamp: Date.now(), status: "sent" });
     if (betLog.length > 200) betLog.pop();
     pushEvent("bet:new", { bet: betLog[0] });
   } catch {
-    betLog.unshift({
-      id: String(Date.now()),
-      groupId: targetId,
-      groupTitle,
-      messageText: "[自动投注]",
-      betContent: direction,
-      amount,
-      timestamp: Date.now(),
-      status: "failed",
-    });
+    betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: "[自动投注]", betContent: direction, amount, timestamp: Date.now(), status: "failed" });
     if (betLog.length > 200) betLog.pop();
     pushEvent("bet:new", { bet: betLog[0] });
   }
 }
 
-// ─── Auto-bet scheduler: fires 120 s before the next draw ────────────────────
-// DRAW_CYCLE_MS: approximate duration of one draw period (210 s)
-const DRAW_CYCLE_MS = 210_000;
-// BET_BEFORE_DRAW_MS: place the bet when this many ms remain on the countdown
-const BET_BEFORE_DRAW_MS = 120_000;
+async function runAutoBet(session: TgSession): Promise<void> {
+  if (!session.cfg.autoBet || !session.watchGroupId) return;
+  const nowMs = Date.now();
+  for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) stale.status = "lost";
+  if (betLog.some(b => b.status === "sent")) return;
+  if (session.betPlacedThisCycle) return;
+  const risk = checkRisk(session);
+  if (!risk.ok) return;
+  const direction = decideBetAuto(session);
+  if (!direction) return;
+  await placeBet(session, direction);
+}
 
-// closeTimeMs: end of the CURRENT open period (Unix-ms, direct from pc20.net API — no *1000).
-// cycleDurationMs: closeTime - openTime of the same draw item (~202 000 ms).
-function scheduleAutoNextBet(session: TgSession, closeTimeMs: number, cycleDurationMs: number): void {
+function scheduleNextBet(session: TgSession, closeTimeMs: number, cycleMs: number): void {
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (!session.cfg.autoBet || !session.watchGroupId) return;
 
-  // Two-case scheduling:
-  //   Case A — enough time left in the current period:
-  //     betAt = closeTimeMs - BET_BEFORE_DRAW_MS   (fires when countdown hits 120s)
-  //   Case B — already past the 120s mark:
-  //     betAt = closeTimeMs + cycleDurationMs - BET_BEFORE_DRAW_MS  (next period)
   const timeToClose = closeTimeMs - Date.now();
-  let delay: number;
-  if (timeToClose >= BET_BEFORE_DRAW_MS + 5_000) {
-    // Still ≥ 125s before period closes — bet in the CURRENT period
-    delay = timeToClose - BET_BEFORE_DRAW_MS;
-  } else {
-    // Already past the 120s window — wait for the NEXT period
-    delay = timeToClose + cycleDurationMs - BET_BEFORE_DRAW_MS;
-  }
-  delay = Math.max(5_000, delay);
-
-  const delaySec = Math.round(delay / 1000);
-  logger.info(
-    { closeTimeMs, cycleDurationMs, timeToCloseSec: Math.round(timeToClose / 1000), delaySec },
-    `[bet-timer] scheduled in ${delaySec}s (fires when 120s remain on countdown)`
+  const delay = Math.max(5_000,
+    timeToClose >= BET_BEFORE_DRAW_MS + 5_000
+      ? timeToClose - BET_BEFORE_DRAW_MS
+      : timeToClose + cycleMs - BET_BEFORE_DRAW_MS
   );
 
-  // Notify the frontend so it can show a live "next bet in Xs" countdown
-  pushEvent("timer:scheduled", { fireAt: Date.now() + delay, delaySec });
+  logger.info({ delaySec: Math.round(delay / 1000), timeToCloseSec: Math.round(timeToClose / 1000) }, "[bet-timer] scheduled");
+  pushEvent("timer:scheduled", { fireAt: Date.now() + delay, delaySec: Math.round(delay / 1000) });
 
   session.autoNextBetTimer = setTimeout(() => {
     session.autoNextBetTimer = undefined;
-    void autoPlaceBet(session);
+    void runAutoBet(session);
   }, delay);
 }
 
-// ─── Module-level lottery history cache (shared, updated by poller) ──────────
-// Stores the last 50 draw r3 labels (e.g. "大单", "小双") newest-last
-let lotteryHistoryCache: string[] = [];
+// ─── Lottery poller ───────────────────────────────────────────────────────────
 
-// ─── AI multi-signal trend analyser ──────────────────────────────────────────
-function decideAI(session: TgSession): string | null {
-  const { betOptions } = session.cfg;
-  if (!betOptions.length) return null;
-
-  const enabledLabels = betOptions.map((o) => BET_OPTION_LABELS[o]);
-  if (!enabledLabels.length) return null;
-
-  // Map an r3 label (大单/大双/小单/小双/大/小/单/双) → one of the enabled labels
-  const mapLabel = (r3: string): string | null => {
-    if (enabledLabels.includes(r3)) return r3;
-    // big/small dimension
-    if (enabledLabels.includes("大") && r3.startsWith("大")) return "大";
-    if (enabledLabels.includes("小") && r3.startsWith("小")) return "小";
-    // odd/even dimension
-    if (enabledLabels.includes("单") && r3.endsWith("单")) return "单";
-    if (enabledLabels.includes("双") && r3.endsWith("双")) return "双";
-    return null;
-  };
-
-  // Combine lottery history cache with in-session results (cache is more complete)
-  const raw = lotteryHistoryCache.length >= 10
-    ? lotteryHistoryCache
-    : [...lotteryHistoryCache, ...session.recentResults];
-  const history = raw.map(mapLabel).filter((x): x is string => x !== null);
-  if (!history.length) return enabledLabels[Math.floor(Math.random() * enabledLabels.length)] ?? null;
-
-  // Work with the first two enabled labels as the two "sides"
-  const [optA, optB] = enabledLabels.length >= 2
-    ? [enabledLabels[0], enabledLabels[1]] as [string, string]
-    : [enabledLabels[0], enabledLabels[0]] as [string, string];
-
-  let votes = 0; // positive → optA, negative → optB
-
-  // ── Signal 1: Streak reversion/momentum (last 5) ─────────────────────────
-  const last5 = history.slice(-5);
-  const streak = last5.reduce((acc, x) => x === last5[last5.length - 1] ? acc + 1 : 0, 0);
-  if (streak >= 4) {
-    // Very long streak → strong reversion signal
-    votes += last5[last5.length - 1] === optA ? -3 : 3;
-  } else if (streak === 3) {
-    // Medium streak → reversion
-    votes += last5[last5.length - 1] === optA ? -2 : 2;
-  } else if (streak === 2) {
-    // Short streak → weak momentum
-    votes += last5[last5.length - 1] === optA ? 1 : -1;
-  }
-
-  // ── Signal 2: Short-term frequency imbalance (last 15) ───────────────────
-  const last15 = history.slice(-15);
-  const countA15 = last15.filter((x) => x === optA).length;
-  const countB15 = last15.length - countA15;
-  const ratio = countA15 / (last15.length || 1);
-  if (ratio >= 0.7) votes -= 2;       // optA heavily over-represented → bet optB
-  else if (ratio <= 0.3) votes += 2;  // optB heavily over-represented → bet optA
-  else votes += countA15 < countB15 ? 1 : -1; // slight imbalance → revert
-
-  // ── Signal 3: Alternation pattern (last 6) ───────────────────────────────
-  const last6 = history.slice(-6);
-  if (last6.length >= 4) {
-    const alternating = last6.every((x, i) => i === 0 || x !== last6[i - 1]);
-    if (alternating) {
-      // Pattern detected → continue alternating (bet opposite of last)
-      votes += last6[last6.length - 1] === optA ? -1 : 1;
-    }
-  }
-
-  // ── Signal 4: Weighted recency score (last 12, newest weighted heavier) ───
-  const last12 = history.slice(-12);
-  let weightedScore = 0;
-  for (let i = 0; i < last12.length; i++) {
-    const w = i + 1; // higher index = more recent = higher weight
-    weightedScore += last12[i] === optA ? w : -w;
-  }
-  // Revert toward underrepresented side
-  votes += weightedScore > 0 ? -1 : 1;
-
-  // ── Decision ──────────────────────────────────────────────────────────────
-  if (votes > 0) return optA;
-  if (votes < 0) return optB;
-  // Tiebreak: pick the less common in last 20
-  const last20 = history.slice(-20);
-  const aCount = last20.filter((x) => x === optA).length;
-  return aCount <= last20.length / 2 ? optA : optB;
-}
-
-// ─── Auto-settle a pending bet using the official lottery draw result ─────────
-// Called as soon as the poller detects a new draw, before opening the next cycle.
-// This makes settlement independent of kkpay messages.
-function autoSettleByLotteryResult(
-  session: TgSession,
-  r3: string,
-  term: number,
-): void {
-  const pending = betLog.find(b => b.status === "sent");
-  if (!pending) return;
-
-  const bet = pending.betContent.trim();
-  let won = false;
-  if (bet === r3) {
-    won = true;
-  } else if (bet.length === 1) {
-    if (
-      (bet === "大" && r3.startsWith("大")) ||
-      (bet === "小" && r3.startsWith("小")) ||
-      (bet === "单" && r3.endsWith("单")) ||
-      (bet === "双" && r3.endsWith("双"))
-    ) won = true;
-  }
-  // P&L approximation: ±stake (standard 1:1 payout for 大/小/单/双)
-  // kkpay message will override with precise KKCOIN P&L if it arrives later.
-  const pnl = won ? pending.amount : -pending.amount;
-  settleBet(session, { won, pnl, result: r3, betId: pending.id, period: term });
-}
-
-// ─── Lottery draw poller — triggers betting 120 s before the next draw ────────
-// openTime/closeTime are Unix-millisecond timestamps from the pc20.net API.
-// closeTime marks the end of the period; the next period ends at closeTime + cycleDuration.
 type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number; openTime?: number; closeTime?: number };
 
-async function pollLotteryDraw(session: TgSession): Promise<void> {
+async function pollLottery(session: TgSession): Promise<void> {
   try {
     const r = await fetch("http://pc20.net/api/fengpan", {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Referer": "http://pc20.net/",
-      },
+      headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", "Referer": "http://pc20.net/" },
       signal: AbortSignal.timeout(8000),
     });
     if (!r.ok) return;
@@ -957,236 +592,101 @@ async function pollLotteryDraw(session: TgSession): Promise<void> {
     const latest = items[0];
     if (!latest?.term) return;
 
-    // Refresh history cache (newest-last order)
-    const labels = items.map((d) => d.r3).filter((x): x is string => !!x).reverse();
+    const labels = items.map(d => d.r3).filter((x): x is string => !!x).reverse();
     if (labels.length) lotteryHistoryCache = labels.slice(-50);
 
-    // New draw detected
-    if (latest.term > session.lastSeenLotteryPeriod) {
-      // 1. Auto-settle any pending bet using the official draw result
-      if (latest.r3) autoSettleByLotteryResult(session, latest.r3, latest.term);
+    if (latest.term <= session.lastSeenLotteryPeriod) return;
 
-      session.lastSeenLotteryPeriod = latest.term;
-
-      // Compute timing constants used both for the SSE event and the bet scheduler.
-      // items[0] can be either:
-      //   a) the CURRENT OPEN period  — closeTime is still in the FUTURE
-      //   b) the LAST COMPLETED period — closeTime is in the PAST
-      // Handle both so the countdown and bet timer are always correct.
-      const closeTimeMs = latest.closeTime ?? 0;
-      const openTimeMs  = latest.openTime  ?? 0;
-      const nowMs       = Date.now();
-      const cycleDurationMs = (closeTimeMs > openTimeMs && closeTimeMs - openTimeMs < 600000)
-        ? (closeTimeMs - openTimeMs)   // measured from real API data (~201 000 ms)
-        : DRAW_CYCLE_MS;               // fallback if fields are missing
-
-      // nextCloseTime = the close time the frontend should count down to.
-      // Case a: closeTime in future → that IS the next close time.
-      // Case b: closeTime in past   → next close = closeTime + one cycle.
-      const nextCloseTime = closeTimeMs > nowMs ? closeTimeMs : closeTimeMs + cycleDurationMs;
-
-      // 2. Push real-time draw info to the frontend.
-      pushEvent("draw:new", {
-        term: latest.term,
-        r3: latest.r3 ?? "",
-        sum1: latest.sum1,
-        sum2: latest.sum2,
-        sum3: latest.sum3,
-        result: latest.result,
-        closeTime: closeTimeMs,
-        openTime: openTimeMs,
-        nextCloseTime,
-      });
-
-      // 3. Open the new cycle and schedule next bet at 120s before next draw.
-      // betPlacedThisCycle is reset HERE (not inside the timer) so the flag is
-      // shared correctly between the message handler and the countdown timer.
-      session.betPlacedThisCycle = false;
-      if (session.cfg.autoBet && session.watchGroupId) {
-        // Pass the actual close target (not raw closeTimeMs) so scheduleAutoNextBet
-        // always references the period the bet is targeting.
-        const refClose = nextCloseTime > nowMs ? nextCloseTime : nowMs + cycleDurationMs;
-        scheduleAutoNextBet(session, refClose, cycleDurationMs);
+    if (latest.r3) {
+      const pending = betLog.find(b => b.status === "sent");
+      if (pending) {
+        const bet = pending.betContent.trim();
+        let won = bet === latest.r3;
+        if (!won && bet.length === 1) {
+          won = (bet === "大" && latest.r3.startsWith("大")) ||
+                (bet === "小" && latest.r3.startsWith("小")) ||
+                (bet === "单" && latest.r3.endsWith("单")) ||
+                (bet === "双" && latest.r3.endsWith("双"));
+        }
+        settleBet(session, { won, pnl: won ? pending.amount : -pending.amount, result: latest.r3, betId: pending.id, period: latest.term });
       }
     }
-  } catch { /* network errors are silently ignored */ }
+
+    session.lastSeenLotteryPeriod = latest.term;
+
+    const closeMs = latest.closeTime ?? 0;
+    const openMs = latest.openTime ?? 0;
+    const nowMs = Date.now();
+    const cycleMs = (closeMs > openMs && closeMs - openMs < 600000) ? (closeMs - openMs) : DRAW_CYCLE_MS;
+    const nextCloseMs = closeMs > nowMs ? closeMs : closeMs + cycleMs;
+
+    pushEvent("draw:new", {
+      term: latest.term, r3: latest.r3 ?? "",
+      sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3,
+      result: latest.result, closeTime: closeMs, openTime: openMs,
+      nextCloseTime: nextCloseMs,
+    });
+
+    session.betPlacedThisCycle = false;
+    if (session.cfg.autoBet && session.watchGroupId) {
+      const refClose = nextCloseMs > nowMs ? nextCloseMs : nowMs + cycleMs;
+      scheduleNextBet(session, refClose, cycleMs);
+    }
+  } catch { /* network errors ignored */ }
 }
 
-function startLotteryPoller(session: TgSession): void {
-  if (session.lotteryPollTimer) return; // already running
-  // Poll every 5 seconds — tight enough to detect each ~202-second draw within ±5 s
-  session.lotteryPollTimer = setInterval(() => { void pollLotteryDraw(session); }, 5 * 1000);
+function startPoller(session: TgSession): void {
+  if (session.lotteryPollTimer) return;
+  session.lotteryPollTimer = setInterval(() => { void pollLottery(session); }, 5_000);
 }
 
-function stopLotteryPoller(session: TgSession): void {
+function stopPoller(session: TgSession): void {
   if (session.lotteryPollTimer) { clearInterval(session.lotteryPollTimer); session.lotteryPollTimer = undefined; }
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
 }
 
-function computeNextBet(session: TgSession, won: boolean): number {
-  const { amountLevels, stepBackOnWin, betAmount, strategy, betMultiplier } = session.cfg;
+// ─── Group message listener ───────────────────────────────────────────────────
 
-  // Advanced: amountLevels-based progression
-  if (amountLevels.length > 1) {
-    let level = session.currentLevel;
-    if (won) {
-      if (stepBackOnWin) level = Math.max(0, level - 1);
-    } else {
-      level = Math.min(amountLevels.length - 1, level + 1);
-    }
-    session.currentLevel = level;
-    return amountLevels[level]!;
-  }
-
-  // Fallback legacy strategy
-  if (strategy === "normal") return betAmount;
-  if (strategy === "martingale") {
-    return won ? betAmount : Math.round(session.currentBet * betMultiplier);
-  }
-  return won ? Math.round(session.currentBet * betMultiplier) : betAmount;
-}
-
-/** Returns { ok, reason } — if !ok, do not send bet */
-function checkRiskLimits(session: TgSession): { ok: boolean; reason?: string } {
-  const { stopLoss, targetProfit, maxConsecutiveLosses, cooldownSeconds } =
-    session.cfg;
-
-  if (
-    maxConsecutiveLosses > 0 &&
-    session.consecutiveLosses >= maxConsecutiveLosses
-  ) {
-    return {
-      ok: false,
-      reason: `连亏${session.consecutiveLosses}局，已达上限${maxConsecutiveLosses}局`,
-    };
-  }
-  if (stopLoss > 0 && session.sessionPnl <= -stopLoss) {
-    return {
-      ok: false,
-      reason: `亏损 ¥${Math.abs(session.sessionPnl)} 已达止损 ¥${stopLoss}`,
-    };
-  }
-  if (targetProfit > 0 && session.sessionPnl >= targetProfit) {
-    return {
-      ok: false,
-      reason: `盈利 ¥${session.sessionPnl} 已达止盈 ¥${targetProfit}`,
-    };
-  }
-  if (cooldownSeconds > 0) {
-    const elapsed = (Date.now() - session.lastBetAt) / 1000;
-    if (session.lastBetAt > 0 && elapsed < cooldownSeconds) {
-      return {
-        ok: false,
-        reason: `冷却中 (${Math.ceil(cooldownSeconds - elapsed)}s)`,
-      };
-    }
-  }
-  return { ok: true };
-}
-
-function startWatching(session: TgSession) {
+function startGroupListener(session: TgSession): void {
   if (!session.watchGroupId) return;
-
   if (messageHandler && messageHandlerBuilder) {
-    try {
-      session.client.removeEventHandler(messageHandler, messageHandlerBuilder);
-    } catch { /* ok */ }
-    messageHandler = null;
-    messageHandlerBuilder = null;
+    try { session.client.removeEventHandler(messageHandler, messageHandlerBuilder); } catch { /* ok */ }
+    messageHandler = null; messageHandlerBuilder = null;
   }
-
   const targetId = session.watchGroupId;
 
   messageHandler = async (event: NewMessageEvent) => {
     if (!session.cfg.autoBet) return;
-
     const msg = event.message;
-    // Never react to our own outgoing messages — prevents bet loops
     if (msg.out) return;
-
     const chatId = String(msg.chatId);
     if (chatId !== targetId && `-100${chatId}` !== targetId) return;
-
     const senderId = String(msg.senderId ?? "");
-    // Skip messages from the kkpay bot — those are balance replies, not signals
     if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
-
     const text = msg.message ?? "";
-
-    // Never bet while a previous bet is still awaiting a result
-    if (betLog.some((b) => b.status === "sent")) return;
-
-    // One bet per cycle — guard against multiple signal messages per period
+    if (betLog.some(b => b.status === "sent")) return;
     if (session.betPlacedThisCycle) return;
-
-    // Per-period dedup: only bet once per lottery period
-    const triggerPeriod = parsePeriodFromMessage(text);
+    const periodInMsg = text.match(/第?(\d{6,10})期/)?.at(1);
+    const triggerPeriod = periodInMsg ? parseInt(periodInMsg) : undefined;
     if (triggerPeriod && triggerPeriod === session.lastBetPeriod) return;
-
-    // Determine what to bet via algorithm or legacy betType
-    let betContent: string;
-    if (session.cfg.algorithms.length > 0 && session.cfg.betOptions.length > 0) {
-      const decided = decideAlgorithm(session, text);
-      if (!decided) return;
-      betContent = decided;
-    } else if (session.cfg.betType === "follow") {
-      const parsed = parseBetFromMessage(text);
-      if (!parsed) return;
-      betContent = parsed;
-    } else {
-      betContent = BET_TYPE_TEXT[session.cfg.betType];
-    }
-
-    // Capture bet parameters at signal time (amount may change during the wait)
-    const plannedContent = betContent;
-    const plannedAmount = session.currentBet;
-    const group = session.groups.find(
-      (g) => g.id === targetId || `-100${g.id}` === targetId,
-    );
-
-    // Check risk limits — silently skip, no log spam
-    const risk = checkRiskLimits(session);
+    const risk = checkRisk(session);
     if (!risk.ok) return;
-
-    // Cancel any pending countdown auto-bet (signal takes priority)
+    const direction = decideBet(session, text);
+    if (!direction) return;
     if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
-
-    // Lock BEFORE the await to prevent concurrent calls from passing the guard
     session.betPlacedThisCycle = true;
     if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
-
-    // Bet immediately
+    const amount = session.currentBet;
+    const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
     void (async () => {
       try {
-        // Format: 大100 / 小100 / 小单100 / 大单100
-        await session.client.sendMessage(targetId, {
-          message: `${plannedContent}${plannedAmount}`,
-        });
+        await session.client.sendMessage(targetId, { message: `${direction}${amount}` });
         session.lastBetAt = Date.now();
-        betLog.unshift({
-          id: String(Date.now()),
-          groupId: targetId,
-          groupTitle: group?.title ?? targetId,
-          messageText: text.slice(0, 80),
-          betContent: plannedContent,
-          amount: plannedAmount,
-          timestamp: Date.now(),
-          status: "sent",
-          period: triggerPeriod,
-        });
+        betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: text.slice(0, 80), betContent: direction, amount, timestamp: Date.now(), status: "sent", period: triggerPeriod });
         if (betLog.length > 200) betLog.pop();
         pushEvent("bet:new", { bet: betLog[0] });
       } catch {
-        betLog.unshift({
-          id: String(Date.now()),
-          groupId: targetId,
-          groupTitle: group?.title ?? targetId,
-          messageText: text.slice(0, 80),
-          betContent: plannedContent,
-          amount: plannedAmount,
-          timestamp: Date.now(),
-          status: "failed",
-        });
+        betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: text.slice(0, 80), betContent: direction, amount, timestamp: Date.now(), status: "failed" });
         if (betLog.length > 200) betLog.pop();
       }
     })();
@@ -1196,311 +696,237 @@ function startWatching(session: TgSession) {
   session.client.addEventHandler(messageHandler, messageHandlerBuilder);
 }
 
-// ─── Send verification code ───────────────────────────────────────────────────
-router.post("/tg/send-code", async (req, res) => {
-  const { phone } = req.body as { phone?: string };
-  if (!phone) {
-    res.status(400).json({ error: "请输入手机号" });
-    return;
+// ─── KKPay listener ───────────────────────────────────────────────────────────
+
+async function startKkpayListener(session: TgSession): Promise<void> {
+  if (kkpayHandler && kkpayHandlerBuilder) {
+    try { session.client.removeEventHandler(kkpayHandler, kkpayHandlerBuilder); } catch { /* ok */ }
+    kkpayHandler = null; kkpayHandlerBuilder = null;
   }
 
-  const { apiId, apiHash } = getCredentials();
-  if (!apiId || !apiHash) {
-    res
-      .status(500)
-      .json({ error: "服务端未配置 Telegram API 凭证，请联系管理员" });
-    return;
-  }
-
+  const uname = session.kkpayUsername.replace(/^@/, "");
   try {
-    if (tgSession?.client?.connected) {
-      try {
-        await tgSession.client.disconnect();
-      } catch { /* ok */ }
+    const entity = await session.client.getEntity(uname);
+    session.kkpayEntityId = String((entity as unknown as { id: bigint | number }).id);
+  } catch { /* entity not found */ }
+
+  kkpayHandler = async (event: NewMessageEvent) => {
+    const msg = event.message;
+    if (msg.out) return;
+    const text = msg.message ?? "";
+    if (!text) return;
+    const chatId = String(msg.chatId ?? "");
+    const senderId = String(msg.senderId ?? "");
+    const eid = session.kkpayEntityId;
+    const wgid = session.watchGroupId;
+    const isFromKkpay = eid ? (senderId === eid || chatId === eid || `-100${chatId}` === eid) : false;
+    const inWatchGroup = wgid ? (chatId === wgid || `-100${chatId}` === wgid) : false;
+    if (!isFromKkpay && !inWatchGroup) return;
+
+    // Update balance from any KKCOIN message in watch group or from kkpay entity
+    if (isFromKkpay || (inWatchGroup && /KKCOIN/i.test(text))) {
+      updateBalance(session, text);
     }
 
-    const stringSession = new StringSession("");
-    const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
+    // Win/loss settlement
+    const hasWin = /(?<!未)中奖|✅/.test(text);
+    const hasLoss = /挂逼|未中|未赢|❌/.test(text);
+    const danjineM = text.match(/单金额\s*([+-]?\d[\d,]*(?:\.\d+)?)/);
+    let isWin = danjineM ? parseFloat(danjineM[1].replace(/,/g, "")) >= 0 : hasWin;
+    let isLoss = danjineM ? parseFloat(danjineM[1].replace(/,/g, "")) < 0 : (hasLoss && !hasWin);
+    const hasPeriodRef = /\d{5,}期/.test(text);
+    const isKkpayResult = isFromKkpay || (inWatchGroup && hasPeriodRef && (hasWin || hasLoss || danjineM !== null || /KKCOIN/i.test(text)));
 
-    await client.connect();
-    const result = await client.sendCode({ apiId, apiHash }, phone);
-
-    tgSession = {
-      client,
-      stringSession,
-      phone,
-      phoneCodeHash: result.phoneCodeHash,
-      groups: [],
-      cfg: { ...DEFAULT_CFG },
-      consecutiveLosses: 0,
-      sessionPnl: 0,
-      currentBet: DEFAULT_CFG.betAmount,
-      lastBetAt: 0,
-      currentLevel: 0,
-      algIndex: 0,
-      betPlacedThisCycle: false,
-      lastSeenLotteryPeriod: 0,
-      recentResults: [],
-      balance: 1000000,
-      todayPnl: 0,
-      todayResetAt: todayMidnight(),
-      kkpayUsername: "kkpay",
-      kkpayEntityId: undefined,
-      balanceSource: "manual",
-      balanceUpdatedAt: 0,
-    };
-
-    req.log.info({ phone }, "TG code sent");
-    res.json({ ok: true });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    req.log.error({ err, phone }, "send-code failed");
-    if (msg.includes("PHONE_NUMBER_INVALID")) {
-      res
-        .status(400)
-        .json({ error: "手机号格式错误（需含国家码，如 +8613800001234）" });
-    } else {
-      res.status(500).json({ error: msg });
+    if (isKkpayResult && (isWin || isLoss) && tgSession === session) {
+      const sentBet = betLog.find(b => b.status === "sent");
+      if (sentBet) {
+        const pnlM = text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ?? text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i) ?? danjineM;
+        const pnl = pnlM ? parseFloat(pnlM[1].replace(/,/g, "")) : undefined;
+        if (pnl !== undefined) { isWin = pnl >= 0; isLoss = pnl < 0; }
+        const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
+        const periodFromMsg = text.match(/第?(\d{6,10})期/)?.at(1);
+        settleBet(session, { won: isWin, pnl, result: rMatch?.[0], betId: sentBet.id, period: periodFromMsg ? parseInt(periodFromMsg) : undefined });
+        updateBalance(session, text);
+        saveSession();
+      }
     }
-  }
-});
+  };
 
-// ─── Verify code ─────────────────────────────────────────────────────────────
-router.post("/tg/verify-code", async (req, res) => {
-  const { code } = req.body as { code?: string };
-  if (!code) {
-    res.status(400).json({ error: "请输入验证码" });
-    return;
-  }
-  if (!tgSession) {
-    res.status(400).json({ error: "请先发送验证码" });
-    return;
-  }
+  kkpayHandlerBuilder = new NewMessage({});
+  session.client.addEventHandler(kkpayHandler, kkpayHandlerBuilder);
+}
 
-  const { apiId, apiHash } = getCredentials();
+// ─── Stats helper ─────────────────────────────────────────────────────────────
 
-  try {
-    const result = await tgSession.client.invoke(
-      new Api.auth.SignIn({
-        phoneNumber: tgSession.phone,
-        phoneCodeHash: tgSession.phoneCodeHash!,
-        phoneCode: code,
-      }),
-    );
-
-    const me = (result as Api.auth.Authorization).user as Api.User;
-    tgSession.me = me;
-    tgSession.groups = await fetchGroups(tgSession.client);
-    startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
-    saveSession();
-    startConnectionWatchdog(tgSession);
-
-    req.log.info({ username: me.username }, "TG sign-in success");
-    res.json({
-      ok: true,
-      me: {
-        id: me.id,
-        firstName: me.firstName,
-        lastName: me.lastName,
-        username: me.username,
-        phone: me.phone,
-      },
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("SESSION_PASSWORD_NEEDED")) {
-      res.json({ ok: false, needPassword: true });
-      return;
-    }
-    if (
-      msg.includes("PHONE_CODE_INVALID") ||
-      msg.includes("CODE_INVALID")
-    ) {
-      res.status(400).json({ error: "验证码错误" });
-      return;
-    }
-    if (msg.includes("PHONE_CODE_EXPIRED")) {
-      res.status(400).json({ error: "验证码已过期，请重新获取" });
-      return;
-    }
-    req.log.error({ err }, "verify-code failed");
-    res.status(500).json({ error: msg });
-  }
-});
-
-// ─── Verify 2FA password ──────────────────────────────────────────────────────
-router.post("/tg/verify-password", async (req, res) => {
-  const { password } = req.body as { password?: string };
-  if (!password) {
-    res.status(400).json({ error: "请输入二步验证密码" });
-    return;
-  }
-  if (!tgSession) {
-    res.status(400).json({ error: "会话已失效，请重新登录" });
-    return;
-  }
-
-  const { apiId, apiHash } = getCredentials();
-
-  try {
-    await tgSession.client.signInWithPassword(
-      { apiId, apiHash },
-      {
-        password: async () => password,
-        onError: async (err: Error) => {
-          throw err;
-        },
-      },
-    );
-
-    const me = (await tgSession.client.getMe()) as Api.User;
-    tgSession.me = me;
-    tgSession.groups = await fetchGroups(tgSession.client);
-    startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
-    saveSession();
-    startConnectionWatchdog(tgSession);
-
-    req.log.info({ username: me.username }, "TG 2FA success");
-    res.json({
-      ok: true,
-      me: {
-        id: me.id,
-        firstName: me.firstName,
-        lastName: me.lastName,
-        username: me.username,
-        phone: me.phone,
-      },
-    });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("PASSWORD_HASH_INVALID")) {
-      res.status(400).json({ error: "二步验证密码错误" });
-      return;
-    }
-    req.log.error({ err }, "verify-password failed");
-    res.status(500).json({ error: msg });
-  }
-});
-
-// ─── Status ───────────────────────────────────────────────────────────────────
-router.get("/tg/status", (req, res) => {
-  if (!tgSession?.me) {
-    res.json({ connected: false });
-    return;
-  }
-
-  // Reset todayPnl if a new day has started
-  const midnight = todayMidnight();
-  if (tgSession.todayResetAt < midnight) {
-    tgSession.todayPnl = 0;
-    tgSession.todayResetAt = midnight;
-  }
-
-  // Compute stats from betLog
+function buildStats() {
   const settled = betLog.filter(b => b.won !== undefined);
-  const totalBets = betLog.filter(b => b.status !== "failed").length;
-  const winsCount = settled.filter(b => b.won === true).length;
+  const wins = settled.filter(b => b.won === true).length;
   let maxStreak = 0, cur = 0;
   for (const b of [...betLog].reverse()) {
     if (b.won === true) { cur++; if (cur > maxStreak) maxStreak = cur; }
     else if (b.won === false) cur = 0;
   }
-  // winRate denominator = only settled bets, not pending "sent" ones
-  const winRate = settled.length > 0 ? ((winsCount / settled.length) * 100).toFixed(2) : "0.00";
+  return {
+    totalBets: betLog.filter(b => b.status !== "failed").length,
+    settled: settled.length,
+    wins,
+    maxStreak,
+    winRate: settled.length > 0 ? ((wins / settled.length) * 100).toFixed(2) : "0.00",
+  };
+}
 
-  const me = tgSession.me;
+// ─── Routes ───────────────────────────────────────────────────────────────────
+
+// Login routes (no card required — user must be authenticated but not yet have a card)
+router.post("/tg/send-code", requireAuth, async (req, res) => {
+  const { phone } = req.body as { phone?: string };
+  if (!phone) { res.status(400).json({ error: "请输入手机号" }); return; }
+  const { apiId, apiHash } = getCredentials();
+  if (!apiId || !apiHash) { res.status(500).json({ error: "服务端未配置 Telegram API 凭证" }); return; }
+  try {
+    if (tgSession?.client?.connected) {
+      try { await tgSession.client.disconnect(); } catch { /* ok */ }
+    }
+    const stringSession = new StringSession("");
+    const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
+    await client.connect();
+    const result = await client.sendCode({ apiId, apiHash }, phone);
+    tgSession = {
+      client, stringSession, phone,
+      phoneCodeHash: result.phoneCodeHash,
+      groups: [], cfg: { ...DEFAULT_CFG },
+      consecutiveLosses: 0, sessionPnl: 0,
+      currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
+      currentLevel: 0, algIndex: 0,
+      betPlacedThisCycle: false, lastSeenLotteryPeriod: 0,
+      recentResults: [], balance: 1000000,
+      todayPnl: 0, todayResetAt: todayMidnight(),
+      kkpayUsername: "kkpay", kkpayEntityId: undefined,
+      balanceSource: "manual", balanceUpdatedAt: 0,
+    };
+    res.json({ ok: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("PHONE_NUMBER_INVALID")) res.status(400).json({ error: "手机号格式错误（需含国家码，如 +8613800001234）" });
+    else res.status(500).json({ error: msg });
+  }
+});
+
+router.post("/tg/verify-code", requireAuth, async (req, res) => {
+  const { code } = req.body as { code?: string };
+  if (!code) { res.status(400).json({ error: "请输入验证码" }); return; }
+  if (!tgSession) { res.status(400).json({ error: "请先发送验证码" }); return; }
+  const { apiId, apiHash } = getCredentials();
+  try {
+    const result = await tgSession.client.invoke(new Api.auth.SignIn({
+      phoneNumber: tgSession.phone,
+      phoneCodeHash: tgSession.phoneCodeHash!,
+      phoneCode: code,
+    }));
+    const me = (result as Api.auth.Authorization).user as Api.User;
+    tgSession.me = me;
+    tgSession.groups = await fetchGroups(tgSession.client);
+    startKkpayListener(tgSession).catch(() => { /* ignore */ });
+    saveSession();
+    startWatchdog(tgSession);
+    res.json({ ok: true, me: { id: me.id, firstName: me.firstName, lastName: me.lastName, username: me.username, phone: me.phone } });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("SESSION_PASSWORD_NEEDED")) { res.json({ ok: false, needPassword: true }); return; }
+    if (msg.includes("PHONE_CODE_INVALID") || msg.includes("CODE_INVALID")) { res.status(400).json({ error: "验证码错误" }); return; }
+    if (msg.includes("PHONE_CODE_EXPIRED")) { res.status(400).json({ error: "验证码已过期，请重新获取" }); return; }
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.post("/tg/verify-password", requireAuth, async (req, res) => {
+  const { password } = req.body as { password?: string };
+  if (!password) { res.status(400).json({ error: "请输入二步验证密码" }); return; }
+  if (!tgSession) { res.status(400).json({ error: "会话已失效，请重新登录" }); return; }
+  const { apiId, apiHash } = getCredentials();
+  try {
+    await tgSession.client.signInWithPassword({ apiId, apiHash }, { password: async () => password, onError: async (e: Error) => { throw e; } });
+    const me = (await tgSession.client.getMe()) as Api.User;
+    tgSession.me = me;
+    tgSession.groups = await fetchGroups(tgSession.client);
+    startKkpayListener(tgSession).catch(() => { /* ignore */ });
+    saveSession();
+    startWatchdog(tgSession);
+    res.json({ ok: true, me: { id: me.id, firstName: me.firstName, lastName: me.lastName, username: me.username, phone: me.phone } });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("PASSWORD_HASH_INVALID")) { res.status(400).json({ error: "二步验证密码错误" }); return; }
+    res.status(500).json({ error: msg });
+  }
+});
+
+router.get("/tg/status", requireAuth, (req, res) => {
+  if (!tgSession?.me) { res.json({ connected: false }); return; }
+  const midnight = todayMidnight();
+  if (tgSession.todayResetAt < midnight) { tgSession.todayPnl = 0; tgSession.todayResetAt = midnight; }
+  const stats = buildStats();
   res.json({
     connected: true,
-    me: {
-      id: me.id,
-      firstName: me.firstName,
-      lastName: me.lastName,
-      username: me.username,
-      phone: me.phone,
-    },
+    me: { id: tgSession.me.id, firstName: tgSession.me.firstName, lastName: tgSession.me.lastName, username: tgSession.me.username, phone: tgSession.me.phone },
     watchGroupId: tgSession.watchGroupId,
-    watchGroupTitle: (() => {
-      const wgid = tgSession!.watchGroupId;
-      return tgSession!.groups.find((g) => g.id === wgid || `-100${g.id}` === wgid)?.title;
-    })(),
+    watchGroupTitle: (() => { const wgid = tgSession!.watchGroupId; return tgSession!.groups.find(g => g.id === wgid || `-100${g.id}` === wgid)?.title; })(),
     ...tgSession.cfg,
     consecutiveLosses: tgSession.consecutiveLosses,
     sessionPnl: tgSession.sessionPnl,
     currentBet: tgSession.currentBet,
     balance: tgSession.balance,
     todayPnl: tgSession.todayPnl,
-    totalBets,
-    wins: winsCount,
-    maxStreak,
-    winRate,
     balanceSource: tgSession.balanceSource,
     balanceUpdatedAt: tgSession.balanceUpdatedAt,
     kkpayUsername: tgSession.kkpayUsername,
     kkpayEntityId: tgSession.kkpayEntityId,
-    riskBlocked: !checkRiskLimits(tgSession).ok,
-    riskReason: checkRiskLimits(tgSession).reason,
+    riskBlocked: !checkRisk(tgSession).ok,
+    riskReason: checkRisk(tgSession).reason,
+    ...stats,
   });
 });
 
-// ─── KKPay wallet config ──────────────────────────────────────────────────────
-router.get("/tg/kkpay", (_req, res) => {
-  if (!tgSession) {
-    res.status(401).json({ error: "未登录" });
-    return;
-  }
-  res.json({
-    kkpayUsername: tgSession.kkpayUsername,
-    kkpayEntityId: tgSession.kkpayEntityId,
-    balanceSource: tgSession.balanceSource,
-    balanceUpdatedAt: tgSession.balanceUpdatedAt,
-    balance: tgSession.balance,
-  });
+router.get("/tg/groups", requireAuth, async (req, res) => {
+  if (!tgSession?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
+  tgSession.groups = await fetchGroups(tgSession.client);
+  res.json({ groups: tgSession.groups });
 });
 
-router.post("/tg/kkpay", async (req, res) => {
-  const { username } = req.body as { username?: string };
-  if (!tgSession) {
-    res.status(401).json({ error: "未登录" });
-    return;
+router.post("/tg/resolve-group", requireAuth, async (req, res) => {
+  if (!tgSession?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
+  const { link } = req.body as { link?: string };
+  if (!link) { res.status(400).json({ error: "请提供群链接" }); return; }
+  let uname = link.trim().replace(/^https?:\/\/t\.me\//i, "").replace(/^@/, "").replace(/\?.*$/, "");
+  try {
+    const entity = await tgSession.client.getEntity(uname);
+    const id = String((entity as unknown as { id: bigint | number }).id);
+    const title = (entity as { title?: string; firstName?: string }).title ?? (entity as { firstName?: string }).firstName ?? uname;
+    res.json({ ok: true, group: { id, title, type: "broadcast" in entity ? "channel" : "group" } });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("USERNAME_NOT_OCCUPIED") || msg.includes("Cannot find")) res.status(404).json({ error: "找不到该群" });
+    else res.status(500).json({ error: msg });
   }
-  if (username !== undefined) {
-    tgSession.kkpayUsername = username.replace(/^@/, "");
-    tgSession.kkpayEntityId = undefined;
-    tgSession.balanceSource = "manual";
-    await startKkpayWatcher(tgSession).catch(() => { /* ignore */ });
-  }
-  res.json({
-    ok: true,
-    kkpayUsername: tgSession.kkpayUsername,
-    kkpayEntityId: tgSession.kkpayEntityId,
-    linked: !!tgSession.kkpayEntityId,
-  });
 });
 
-
-// ─── Get / Set bet config ─────────────────────────────────────────────────────
-router.get("/tg/config", (_req, res) => {
-  if (!tgSession) {
-    res.json({ cfg: DEFAULT_CFG });
-    return;
-  }
-  res.json({
-    cfg: tgSession.cfg,
-    consecutiveLosses: tgSession.consecutiveLosses,
-    sessionPnl: tgSession.sessionPnl,
-    currentBet: tgSession.currentBet,
-  });
+router.post("/tg/set-group", requireAuth, (req, res) => {
+  if (!tgSession) { res.status(401).json({ error: "未连接 Telegram" }); return; }
+  const { groupId } = req.body as { groupId?: string };
+  if (groupId !== undefined) tgSession.watchGroupId = groupId;
+  if (tgSession.watchGroupId) startGroupListener(tgSession);
+  saveSession();
+  res.json({ ok: true });
 });
 
-router.post("/tg/config", (req, res) => {
+router.get("/tg/config", requireAuth, (_req, res) => {
+  if (!tgSession) { res.json({ cfg: DEFAULT_CFG }); return; }
+  res.json({ cfg: tgSession.cfg, consecutiveLosses: tgSession.consecutiveLosses, sessionPnl: tgSession.sessionPnl, currentBet: tgSession.currentBet });
+});
+
+router.post("/tg/config", requireAuth, (req, res) => {
+  if (!tgSession) { res.json({ ok: true }); return; }
   const body = req.body as Partial<BetCfg> & { startLevel?: number };
-
-  if (!tgSession) {
-    res.json({ ok: true, note: "no active session" });
-    return;
-  }
-
-  const prev = tgSession.cfg;
+  const prev = { ...tgSession.cfg };
   tgSession.cfg = {
     autoBet: body.autoBet ?? prev.autoBet,
     betAmount: body.betAmount ?? prev.betAmount,
@@ -1510,156 +936,54 @@ router.post("/tg/config", (req, res) => {
     stopLoss: body.stopLoss ?? prev.stopLoss,
     targetProfit: body.targetProfit ?? prev.targetProfit,
     cooldownSeconds: body.cooldownSeconds ?? prev.cooldownSeconds,
-    betType: body.betType ?? prev.betType,
     amountLevels: body.amountLevels ?? prev.amountLevels,
     stepBackOnWin: body.stepBackOnWin ?? prev.stepBackOnWin,
     betOptions: body.betOptions ?? prev.betOptions,
     algorithms: body.algorithms ?? prev.algorithms,
   };
 
-  // Reset level / bet when amounts or level changes
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
-    const startLvl = body.startLevel ?? 0;
-    tgSession.currentLevel = Math.min(startLvl, tgSession.cfg.amountLevels.length - 1);
-    tgSession.currentBet = tgSession.cfg.amountLevels[tgSession.currentLevel] ?? tgSession.cfg.betAmount;
+    const lvl = Math.min(body.startLevel ?? 0, tgSession.cfg.amountLevels.length - 1);
+    tgSession.currentLevel = lvl;
+    tgSession.currentBet = tgSession.cfg.amountLevels[lvl] ?? tgSession.cfg.betAmount;
     tgSession.consecutiveLosses = 0;
   }
+  if (body.algorithms !== undefined) tgSession.algIndex = 0;
+  if (tgSession.watchGroupId) startGroupListener(tgSession);
 
-  // Reset algorithm rotation when algorithms change
-  if (body.algorithms !== undefined) {
-    tgSession.algIndex = 0;
-  }
-
-  if (tgSession.watchGroupId) startWatching(tgSession);
-
-  // When autoBet is turned OFF — cancel timers and stop the lottery poller
-  if (body.autoBet === false && prev.autoBet) {
-    stopLotteryPoller(tgSession);
-  }
-
-  // When autoBet is turned ON — start lottery poller and do one immediate poll so the
-  // countdown scheduler is set up without waiting up to 20s for the next interval tick.
-  // Reset lastSeenLotteryPeriod so the immediate poll always triggers scheduling,
-  // even if the user stopped and re-enabled autoBet within the same period.
-  const wasOff = !prev.autoBet;
-  if (body.autoBet === true && wasOff && tgSession.watchGroupId) {
+  if (body.autoBet === false && prev.autoBet) stopPoller(tgSession);
+  if (body.autoBet === true && !prev.autoBet && tgSession.watchGroupId) {
     tgSession.betPlacedThisCycle = false;
     tgSession.lastSeenLotteryPeriod = 0;
-    startLotteryPoller(tgSession);
-    void pollLotteryDraw(tgSession);
+    startPoller(tgSession);
+    void pollLottery(tgSession);
   }
-
-  req.log.info({ cfg: tgSession.cfg }, "bet config updated");
+  saveSession();
   res.json({ ok: true, cfg: tgSession.cfg });
 });
 
-// ─── Report bet result (win/loss) to update martingale state ─────────────────
-router.post("/tg/bet-result", (req, res) => {
-  const { won, pnl, result, betId } = req.body as { won?: boolean; pnl?: number; result?: string; betId?: string };
-  if (!tgSession) {
-    res.status(401).json({ error: "未登录" });
-    return;
+router.post("/tg/kkpay", requireAuth, async (req, res) => {
+  if (!tgSession) { res.status(401).json({ error: "未连接" }); return; }
+  const { username } = req.body as { username?: string };
+  if (username !== undefined) {
+    tgSession.kkpayUsername = username.replace(/^@/, "");
+    tgSession.kkpayEntityId = undefined;
+    tgSession.balanceSource = "manual";
+    await startKkpayListener(tgSession).catch(() => { /* ignore */ });
   }
-
-  if (won !== undefined) {
-    settleBet(tgSession, { won, pnl, result, betId });
-  }
-
-  res.json({
-    ok: true,
-    consecutiveLosses: tgSession.consecutiveLosses,
-    sessionPnl: tgSession.sessionPnl,
-    currentBet: tgSession.currentBet,
-    currentLevel: tgSession.currentLevel,
-    balance: tgSession.balance,
-    todayPnl: tgSession.todayPnl,
-  });
+  res.json({ ok: true, kkpayUsername: tgSession.kkpayUsername, kkpayEntityId: tgSession.kkpayEntityId, linked: !!tgSession.kkpayEntityId });
 });
 
-// ─── Clear all bet records ────────────────────────────────────────────────────
-router.delete("/tg/bets", (_req, res) => {
+router.get("/tg/bets", requireAuth, (_req, res) => {
+  res.json({ bets: betLog.slice(0, 100) });
+});
+
+router.delete("/tg/bets", requireAuth, (_req, res) => {
   betLog.length = 0;
   res.json({ ok: true });
 });
 
-// ─── Groups ───────────────────────────────────────────────────────────────────
-router.get("/tg/groups", async (req, res) => {
-  if (!tgSession?.client) {
-    res.status(401).json({ error: "未登录" });
-    return;
-  }
-  tgSession.groups = await fetchGroups(tgSession.client);
-  res.json({ groups: tgSession.groups });
-});
-
-// ─── Resolve group by link/username ──────────────────────────────────────────
-router.post("/tg/resolve-group", async (req, res) => {
-  if (!tgSession?.client) {
-    res.status(401).json({ error: "未登录" });
-    return;
-  }
-  const { link } = req.body as { link?: string };
-  if (!link) {
-    res.status(400).json({ error: "请提供群链接" });
-    return;
-  }
-
-  let username = link.trim();
-  username = username.replace(/^https?:\/\/t\.me\//i, "");
-  username = username.replace(/^@/, "");
-  username = username.replace(/\?.*$/, "");
-
-  try {
-    const entity = await tgSession.client.getEntity(username);
-    const id = String(
-      (entity as unknown as { id: bigint | number }).id,
-    );
-    const title =
-      (entity as { title?: string; firstName?: string }).title ??
-      (entity as { firstName?: string }).firstName ??
-      username;
-    const isChannel = "broadcast" in entity;
-    const group: GroupInfo = {
-      id,
-      title,
-      type: isChannel ? "channel" : "group",
-    };
-    res.json({ ok: true, group });
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    req.log.error({ err, username }, "resolve-group failed");
-    if (
-      msg.includes("USERNAME_NOT_OCCUPIED") ||
-      msg.includes("Cannot find")
-    ) {
-      res.status(404).json({ error: "找不到该群，请检查链接是否正确" });
-    } else {
-      res.status(500).json({ error: msg });
-    }
-  }
-});
-
-// ─── Set watch group ──────────────────────────────────────────────────────────
-router.post("/tg/set-group", (req, res) => {
-  const { groupId } = req.body as { groupId?: string };
-  if (!tgSession) {
-    res.status(401).json({ error: "未登录" });
-    return;
-  }
-
-  if (groupId !== undefined) tgSession.watchGroupId = groupId;
-  if (tgSession.watchGroupId) startWatching(tgSession);
-
-  res.json({ ok: true });
-});
-
-// ─── Bet log ──────────────────────────────────────────────────────────────────
-router.get("/tg/bets", (_req, res) => {
-  res.json({ bets: betLog.slice(0, 50) });
-});
-
-// ─── SSE event stream ─────────────────────────────────────────────────────────
-router.get("/tg/events", (req, res) => {
+router.get("/tg/events", requireAuth, (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -1667,21 +991,13 @@ router.get("/tg/events", (req, res) => {
   res.flushHeaders();
   res.write(": connected\n\n");
   sseClients.add(res);
-
-  const heartbeat = setInterval(() => {
-    try { res.write(": ping\n\n"); } catch { /* ignore */ }
-  }, 20000);
-
-  req.on("close", () => {
-    clearInterval(heartbeat);
-    sseClients.delete(res);
-  });
+  const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
+  req.on("close", () => { clearInterval(hb); sseClients.delete(res); });
 });
 
-// ─── Disconnect ───────────────────────────────────────────────────────────────
-router.post("/tg/disconnect", async (_req, res) => {
+router.post("/tg/disconnect", requireAuth, async (_req, res) => {
   if (tgSession) {
-    stopWatchdog(tgSession);
+    stopAllTimers(tgSession);
     try { await tgSession.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
     try { await tgSession.client.disconnect(); } catch { /* ok */ }
   }
