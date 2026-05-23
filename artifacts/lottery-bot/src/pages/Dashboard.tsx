@@ -729,25 +729,15 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              <div className="flex gap-2 items-center">
-                <div className="flex-1">
-                  <label className="text-xs text-slate-500 mb-1 block">当前注额</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="number" value={betAmountInput} onChange={e => setBetAmountInput(e.target.value)}
-                      className="flex-1 bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
-                      min="1"
-                    />
-                    <button onClick={() => void api.tg.config({ betAmount: Number(betAmountInput) }).then(() => void fetchStatus())}
-                      className="bg-[#252a3d] hover:bg-[#30375a] text-white text-sm px-3 rounded-xl transition">
-                      设置
-                    </button>
-                  </div>
-                </div>
-                <div className="text-right">
-                  <div className="text-xs text-slate-500 mb-1">本次注额</div>
-                  <div className="text-white font-bold text-lg">{status.currentBet ?? status.betAmount ?? 100}</div>
-                </div>
+              <div>
+                <label className="text-xs text-slate-500 mb-1 block">当前注额</label>
+                <input
+                  type="number" value={betAmountInput}
+                  onChange={e => setBetAmountInput(e.target.value)}
+                  onBlur={() => void api.tg.config({ betAmount: Number(betAmountInput) }).then(() => void fetchStatus())}
+                  className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                  min="1"
+                />
               </div>
 
               <div className="mt-3 flex gap-2">
