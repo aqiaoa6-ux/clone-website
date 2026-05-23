@@ -6,7 +6,7 @@ import { NewMessage, NewMessageEvent } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
-import { requireAuth, requireCard } from "../middleware/requireAuth";
+import { requireAuth, requireAdmin, requireCard } from "../middleware/requireAuth";
 
 const router = Router();
 
@@ -894,7 +894,7 @@ function buildStats() {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 // Login routes (no card required — user must be authenticated but not yet have a card)
-router.post("/tg/send-code", requireAuth, async (req, res) => {
+router.post("/tg/send-code", requireAdmin, async (req, res) => {
   const { phone } = req.body as { phone?: string };
   if (!phone) { res.status(400).json({ error: "请输入手机号" }); return; }
   const { apiId, apiHash } = getCredentials();
@@ -928,7 +928,7 @@ router.post("/tg/send-code", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/tg/verify-code", requireAuth, async (req, res) => {
+router.post("/tg/verify-code", requireAdmin, async (req, res) => {
   const { code } = req.body as { code?: string };
   if (!code) { res.status(400).json({ error: "请输入验证码" }); return; }
   if (!tgSession) { res.status(400).json({ error: "请先发送验证码" }); return; }
@@ -955,7 +955,7 @@ router.post("/tg/verify-code", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/tg/verify-password", requireAuth, async (req, res) => {
+router.post("/tg/verify-password", requireAdmin, async (req, res) => {
   const { password } = req.body as { password?: string };
   if (!password) { res.status(400).json({ error: "请输入二步验证密码" }); return; }
   if (!tgSession) { res.status(400).json({ error: "会话已失效，请重新登录" }); return; }
@@ -976,7 +976,7 @@ router.post("/tg/verify-password", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/tg/status", requireAuth, (req, res) => {
+router.get("/tg/status", requireAdmin, (req, res) => {
   if (!tgSession?.me) { res.json({ connected: false }); return; }
   const midnight = todayMidnight();
   if (tgSession.todayResetAt < midnight) { tgSession.todayPnl = 0; tgSession.todayResetAt = midnight; }
@@ -1002,13 +1002,13 @@ router.get("/tg/status", requireAuth, (req, res) => {
   });
 });
 
-router.get("/tg/groups", requireAuth, async (req, res) => {
+router.get("/tg/groups", requireAdmin, async (req, res) => {
   if (!tgSession?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   tgSession.groups = await fetchGroups(tgSession.client);
   res.json({ groups: tgSession.groups });
 });
 
-router.post("/tg/resolve-group", requireAuth, async (req, res) => {
+router.post("/tg/resolve-group", requireAdmin, async (req, res) => {
   if (!tgSession?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   const { link } = req.body as { link?: string };
   if (!link) { res.status(400).json({ error: "请提供群链接" }); return; }
@@ -1025,7 +1025,7 @@ router.post("/tg/resolve-group", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/tg/set-group", requireAuth, (req, res) => {
+router.post("/tg/set-group", requireAdmin, (req, res) => {
   if (!tgSession) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   const { groupId } = req.body as { groupId?: string };
   if (groupId !== undefined) tgSession.watchGroupId = groupId;
@@ -1034,12 +1034,12 @@ router.post("/tg/set-group", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-router.get("/tg/config", requireAuth, (_req, res) => {
+router.get("/tg/config", requireAdmin, (_req, res) => {
   if (!tgSession) { res.json({ cfg: DEFAULT_CFG }); return; }
   res.json({ cfg: tgSession.cfg, consecutiveLosses: tgSession.consecutiveLosses, sessionPnl: tgSession.sessionPnl, currentBet: tgSession.currentBet });
 });
 
-router.post("/tg/config", requireAuth, (req, res) => {
+router.post("/tg/config", requireAdmin, (req, res) => {
   if (!tgSession) { res.json({ ok: true }); return; }
   const body = req.body as Partial<BetCfg> & { startLevel?: number };
   const prev = { ...tgSession.cfg };
@@ -1078,7 +1078,7 @@ router.post("/tg/config", requireAuth, (req, res) => {
   res.json({ ok: true, cfg: tgSession.cfg });
 });
 
-router.post("/tg/kkpay", requireAuth, async (req, res) => {
+router.post("/tg/kkpay", requireAdmin, async (req, res) => {
   if (!tgSession) { res.status(401).json({ error: "未连接" }); return; }
   const { username } = req.body as { username?: string };
   if (username !== undefined) {
@@ -1090,16 +1090,16 @@ router.post("/tg/kkpay", requireAuth, async (req, res) => {
   res.json({ ok: true, kkpayUsername: tgSession.kkpayUsername, kkpayEntityId: tgSession.kkpayEntityId, linked: !!tgSession.kkpayEntityId });
 });
 
-router.get("/tg/bets", requireAuth, (_req, res) => {
+router.get("/tg/bets", requireAdmin, (_req, res) => {
   res.json({ bets: betLog.slice(0, 100) });
 });
 
-router.delete("/tg/bets", requireAuth, (_req, res) => {
+router.delete("/tg/bets", requireAdmin, (_req, res) => {
   betLog.length = 0;
   res.json({ ok: true });
 });
 
-router.get("/tg/events", requireAuth, (req, res) => {
+router.get("/tg/events", requireAdmin, (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
@@ -1111,7 +1111,7 @@ router.get("/tg/events", requireAuth, (req, res) => {
   req.on("close", () => { clearInterval(hb); sseClients.delete(res); });
 });
 
-router.post("/tg/disconnect", requireAuth, async (_req, res) => {
+router.post("/tg/disconnect", requireAdmin, async (_req, res) => {
   if (tgSession) {
     stopAllTimers(tgSession);
     try { await tgSession.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
