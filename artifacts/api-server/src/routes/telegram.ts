@@ -723,7 +723,8 @@ async function runAutoBet(session: TgSession): Promise<void> {
   const { betLog } = session;
   const nowMs = Date.now();
   for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) stale.status = "lost";
-  if (betLog.some(b => b.status === "sent")) return;
+  // Chase bets are settled separately; only block on un-settled main bets
+  if (betLog.some(b => b.status === "sent" && !b.isChase)) return;
   if (session.betPlacedThisCycle) return;
 
   if (session.currentCloseTimeMs > 0) {
@@ -961,6 +962,13 @@ async function startKkpayListener(session: TgSession): Promise<void> {
         const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
         const periodFromMsg = text.match(/第?(\d{6,10})期/)?.at(1);
         settleBet(session, { won: isWin, pnl, result: rMatch?.[0], betId: sentBet.id, period: periodFromMsg ? parseInt(periodFromMsg) : undefined });
+        // Chase bets cannot be determined from kkpay message (need actual sum); mark lost to unblock next cycle
+        const chasePending = session.betLog.filter(b => b.status === "sent" && b.isChase);
+        for (const cb of chasePending) {
+          cb.status = "lost";
+          cb.won = false;
+          pushEvent(session, "bet:update", { bet: cb });
+        }
         updateBalance(session, text);
         saveSession(session);
       }
