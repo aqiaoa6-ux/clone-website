@@ -31,6 +31,7 @@ interface BetCfg {
   betOptions: BetOption[];
   algorithms: AlgorithmId[];
   odds: number;
+  chaseNumbers: Array<{ num: number; amount: number }>;
 }
 
 interface GroupInfo {
@@ -53,6 +54,7 @@ interface BetRecord {
   pnl?: number;
   lotteryResult?: string;
   period?: number;
+  isChase?: boolean;
 }
 
 interface TgSession {
@@ -132,6 +134,7 @@ const DEFAULT_CFG: BetCfg = {
   betOptions: ["big", "small"],
   algorithms: ["signal_follow"],
   odds: 1.98,
+  chaseNumbers: [],
 };
 
 const BET_OPTION_LABELS: Record<BetOption, string> = {
@@ -633,6 +636,28 @@ function decideAI(session: TgSession): string | null {
 
 // ─── Auto-bet engine ──────────────────────────────────────────────────────────
 
+async function placeChaseNumberBets(session: TgSession): Promise<void> {
+  if (!session.cfg.chaseNumbers.length || !session.watchGroupId) return;
+  const targetId = session.watchGroupId;
+  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
+  for (const { num, amount } of session.cfg.chaseNumbers) {
+    if (amount <= 0) continue;
+    const msg = `${num} ${amount}`;
+    try {
+      await session.client.sendMessage(targetId, { message: msg });
+      const rec: BetRecord = { id: `chase-${num}-${Date.now()}`, groupId: targetId, groupTitle, messageText: "[追号]", betContent: String(num), amount, timestamp: Date.now(), status: "sent", isChase: true };
+      session.betLog.unshift(rec);
+      if (session.betLog.length > 200) session.betLog.pop();
+      pushEvent(session, "bet:new", { bet: rec });
+    } catch {
+      const rec: BetRecord = { id: `chase-${num}-${Date.now()}`, groupId: targetId, groupTitle, messageText: "[追号]", betContent: String(num), amount, timestamp: Date.now(), status: "failed", isChase: true };
+      session.betLog.unshift(rec);
+      if (session.betLog.length > 200) session.betLog.pop();
+      pushEvent(session, "bet:new", { bet: rec });
+    }
+  }
+}
+
 async function placeBet(session: TgSession, direction: string): Promise<void> {
   const { betLog } = session;
   const targetId = session.watchGroupId!;
@@ -673,6 +698,7 @@ async function runAutoBet(session: TgSession): Promise<void> {
   const direction = decideBetAuto(session);
   if (!direction) return;
   await placeBet(session, direction);
+  await placeChaseNumberBets(session);
 }
 
 function scheduleNextBet(session: TgSession, closeTimeMs: number, cycleMs: number): void {
@@ -717,7 +743,8 @@ async function pollLottery(session: TgSession): Promise<void> {
     if (latest.term <= session.lastSeenLotteryPeriod) return;
 
     if (latest.r3) {
-      const pending = session.betLog.find(b => b.status === "sent");
+      // Settle main directional bet
+      const pending = session.betLog.find(b => b.status === "sent" && !b.isChase);
       if (pending) {
         const bet = pending.betContent.trim();
         let won = bet === latest.r3;
@@ -729,6 +756,16 @@ async function pollLottery(session: TgSession): Promise<void> {
         }
         const winPnl = Math.round(pending.amount * (session.cfg.odds - 1) * 100) / 100;
         settleBet(session, { won, pnl: won ? winPnl : -pending.amount, result: latest.r3, betId: pending.id, period: latest.term });
+      }
+
+      // Settle chase number bets by sum value
+      const sum = (latest.sum1 ?? 0) + (latest.sum2 ?? 0) + (latest.sum3 ?? 0);
+      const chasePending = session.betLog.filter(b => b.status === "sent" && b.isChase);
+      for (const cb of chasePending) {
+        const targetNum = parseInt(cb.betContent, 10);
+        const won = !isNaN(targetNum) && targetNum === sum;
+        const winPnl = Math.round(cb.amount * (session.cfg.odds - 1) * 100) / 100;
+        settleBet(session, { won, pnl: won ? winPnl : -cb.amount, result: latest.r3, betId: cb.id, period: latest.term });
       }
     }
 
@@ -873,7 +910,7 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     const isKkpayResult = isFromKkpay || (inWatchGroup && hasPeriodRef && (hasWin || hasLoss || danjineM !== null || /KKCOIN/i.test(text)));
 
     if (isKkpayResult && (isWin || isLoss)) {
-      const sentBet = session.betLog.find(b => b.status === "sent");
+      const sentBet = session.betLog.find(b => b.status === "sent" && !b.isChase);
       if (sentBet) {
         const pnlM = text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ?? text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i) ?? danjineM;
         const pnlRaw = pnlM ? parseFloat(pnlM[1].replace(/,/g, "")) : undefined;
@@ -1097,6 +1134,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     betOptions: body.betOptions ?? prev.betOptions,
     algorithms: body.algorithms ?? prev.algorithms,
     odds: body.odds ?? prev.odds,
+    chaseNumbers: body.chaseNumbers ?? prev.chaseNumbers,
   };
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {

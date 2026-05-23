@@ -122,6 +122,7 @@ export interface BetCfg {
   betOptions: string[];
   algorithms: string[];
   odds: number;
+  chaseNumbers: Array<{ num: number; amount: number }>;
 }
 
 export interface TgStatus {
@@ -142,6 +143,7 @@ export interface TgStatus {
   betOptions?: string[];
   algorithms?: string[];
   odds?: number;
+  chaseNumbers?: Array<{ num: number; amount: number }>;
   consecutiveLosses?: number;
   sessionPnl?: number;
   currentBet?: number;
@@ -173,6 +175,7 @@ export interface BetRecord {
   lotteryResult?: string;
   pnl?: number;
   won?: boolean;
+  isChase?: boolean;
 }
 
 export interface LotteryData {

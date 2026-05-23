@@ -254,7 +254,15 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [levels, setLevels] = useState<string[]>(initLevels.map(String));
   const [stepBackOnWin, setStepBackOnWin] = useState(status.stepBackOnWin ?? true);
   const [odds, setOdds] = useState(String(status.odds ?? 1.98));
+  const [chaseNumbers, setChaseNumbers] = useState<Array<{ num: string; amount: string }>>(
+    (status.chaseNumbers ?? []).map(c => ({ num: String(c.num), amount: String(c.amount) }))
+  );
   const [saving, setSaving] = useState(false);
+
+  const addChase = () => setChaseNumbers(prev => [...prev, { num: "", amount: "" }]);
+  const removeChase = (i: number) => setChaseNumbers(prev => prev.filter((_, idx) => idx !== i));
+  const setChaseField = (i: number, field: "num" | "amount", val: string) =>
+    setChaseNumbers(prev => prev.map((c, idx) => idx === i ? { ...c, [field]: val } : c));
 
   const toggleAlgo = (a: string) => setAlgos(prev => prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a]);
   const toggleOpt = (o: string) => setBetOpts(prev => prev.includes(o) ? prev.filter(x => x !== o) : [...prev, o]);
@@ -271,6 +279,10 @@ function SettingsDrawer({ status, onClose, onSave }: {
         amountLevels: levels.map(Number),
         stepBackOnWin,
         odds: Number(odds),
+        chaseNumbers: chaseNumbers
+          .filter(c => c.num !== "" && c.amount !== "")
+          .map(c => ({ num: Number(c.num), amount: Number(c.amount) }))
+          .filter(c => c.num >= 0 && c.num <= 27 && c.amount > 0),
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
       onClose();
@@ -374,6 +386,45 @@ function SettingsDrawer({ status, onClose, onSave }: {
                 <input type="number" value={cooldown} onChange={e => setCooldown(e.target.value)} className={inputCls} min="0" />
               </div>
             </div>
+          </div>
+
+          <div className={sectionCls}>
+            <h4 className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-2">自动追号（随自动投注同步下注）</h4>
+            <p className="text-[10px] text-slate-600 -mt-1 mb-2">号码范围 0–27，每期自动随主注一起发送</p>
+            <div className="space-y-2">
+              {chaseNumbers.map((c, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <input
+                      type="number" placeholder="号码 0-27"
+                      value={c.num}
+                      onChange={e => setChaseField(i, "num", e.target.value)}
+                      min="0" max="27"
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <input
+                      type="number" placeholder="金额"
+                      value={c.amount}
+                      onChange={e => setChaseField(i, "amount", e.target.value)}
+                      min="1"
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                  <button
+                    onClick={() => removeChase(i)}
+                    className="text-slate-500 hover:text-rose-400 transition text-lg leading-none px-1 flex-shrink-0"
+                  >×</button>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={addChase}
+              className="mt-2 w-full border border-dashed border-[#252a3d] hover:border-blue-500/50 rounded-xl py-2 text-xs text-slate-500 hover:text-blue-400 transition"
+            >
+              + 添加追号
+            </button>
           </div>
 
           <div className="pb-4">
