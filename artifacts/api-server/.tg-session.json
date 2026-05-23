@@ -1,12 +1,12 @@
 {
   "sessionString": "1AQAOMTQ5LjE1NC4xNzUuNjABux2kXvL2s9+6fpoAM5Sf7CcBADft80ALsJ4s3P5ZprkWp6tCMiV1t5YukU2+tWBRZLlTA7OjaWp6N12+Rjbp9zFg1BLKAoPBzk3q/sdJ6BaDRPeWSD3R/eAPaaD7XQ7TrP4IBzN1MrvflS4sqZhbKbTziCxxbfd7aevUanzMN2lJ7PLq2w5d0qI79JdoMWUr9Sco84OmbdVCLG5uIVQaZikmva8WkTUUIOtEsCdSNTlonHPdimrERC/f2CaM+rBanNgYl3BsLzkyce74bgH/YXMKoRzsRL5UeEsjSV4GtzzEgCT6wo+QGBV+EN9QTR7CFTuMIwMw/MjlAk3qHYVDOm4=",
   "phone": "19089542124",
-  "balance": 677473.65,
-  "todayPnl": -30200,
+  "balance": 9498535.61,
+  "todayPnl": -30400,
   "todayResetAt": 1779494400000,
-  "sessionPnl": 0,
+  "sessionPnl": -200,
   "kkpayUsername": "kkpay",
-  "balanceSource": "manual",
+  "balanceSource": "kkpay",
   "watchGroupId": "-1003858203119",
   "cfg": {
     "autoBet": false,
@@ -25,12 +25,14 @@
     ],
     "stepBackOnWin": true,
     "betOptions": [
-      "big",
-      "small"
+      "big-odd",
+      "big-even",
+      "small-odd",
+      "small-even"
     ],
     "algorithms": [
-      "signal_follow"
-    ],
-    "betType": "follow"
+      "ai_trend",
+      "streak_follow"
+    ]
   }
 }
