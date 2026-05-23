@@ -378,7 +378,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
           </div>
         </div>
 
-        <div className="p-5 border-t border-[#252a3d] sticky bottom-0 bg-[#0f1220]">
+        <div className="p-5 pb-20 border-t border-[#252a3d] sticky bottom-0 bg-[#0f1220]">
           <button onClick={() => void save()} disabled={saving}
             className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-xl py-3 transition">
             {saving ? "保存中..." : "保存设置"}
