@@ -121,6 +121,7 @@ export interface BetCfg {
   stepBackOnWin: boolean;
   betOptions: string[];
   algorithms: string[];
+  odds: number;
 }
 
 export interface TgStatus {
@@ -140,6 +141,7 @@ export interface TgStatus {
   stepBackOnWin?: boolean;
   betOptions?: string[];
   algorithms?: string[];
+  odds?: number;
   consecutiveLosses?: number;
   sessionPnl?: number;
   currentBet?: number;

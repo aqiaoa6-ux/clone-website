@@ -253,6 +253,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [kkpay, setKkpay] = useState(status.kkpayUsername ?? "kkpay");
   const [levels, setLevels] = useState<string[]>(initLevels.map(String));
   const [stepBackOnWin, setStepBackOnWin] = useState(status.stepBackOnWin ?? true);
+  const [odds, setOdds] = useState(String(status.odds ?? 1.98));
   const [saving, setSaving] = useState(false);
 
   const toggleAlgo = (a: string) => setAlgos(prev => prev.includes(a) ? prev.filter(x => x !== a) : [...prev, a]);
@@ -269,6 +270,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
         algorithms: algos, betOptions: betOpts,
         amountLevels: levels.map(Number),
         stepBackOnWin,
+        odds: Number(odds),
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
       onClose();
@@ -323,6 +325,11 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   </div>
                 ))}
               </div>
+            </div>
+            <div>
+              <label className={labelCls}>赔率（含本金，如 1.998）</label>
+              <input type="number" value={odds} onChange={e => setOdds(e.target.value)}
+                className={inputCls} min="1.01" step="0.001" />
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-slate-400">中后回首注</span>

@@ -30,6 +30,7 @@ interface BetCfg {
   stepBackOnWin: boolean;
   betOptions: BetOption[];
   algorithms: AlgorithmId[];
+  odds: number;
 }
 
 interface GroupInfo {
@@ -130,6 +131,7 @@ const DEFAULT_CFG: BetCfg = {
   stepBackOnWin: true,
   betOptions: ["big", "small"],
   algorithms: ["signal_follow"],
+  odds: 1.98,
 };
 
 const BET_OPTION_LABELS: Record<BetOption, string> = {
@@ -725,7 +727,8 @@ async function pollLottery(session: TgSession): Promise<void> {
                 (bet === "单" && latest.r3.endsWith("单")) ||
                 (bet === "双" && latest.r3.endsWith("双"));
         }
-        settleBet(session, { won, pnl: won ? pending.amount : -pending.amount, result: latest.r3, betId: pending.id, period: latest.term });
+        const winPnl = Math.round(pending.amount * (session.cfg.odds - 1) * 100) / 100;
+        settleBet(session, { won, pnl: won ? winPnl : -pending.amount, result: latest.r3, betId: pending.id, period: latest.term });
       }
     }
 
@@ -873,7 +876,10 @@ async function startKkpayListener(session: TgSession): Promise<void> {
       const sentBet = session.betLog.find(b => b.status === "sent");
       if (sentBet) {
         const pnlM = text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ?? text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i) ?? danjineM;
-        const pnl = pnlM ? parseFloat(pnlM[1].replace(/,/g, "")) : undefined;
+        const pnlRaw = pnlM ? parseFloat(pnlM[1].replace(/,/g, "")) : undefined;
+        const pnl = pnlRaw ?? (isWin
+          ? Math.round(sentBet.amount * (session.cfg.odds - 1) * 100) / 100
+          : -sentBet.amount);
         if (pnl !== undefined) { isWin = pnl >= 0; isLoss = pnl < 0; }
         const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
         const periodFromMsg = text.match(/第?(\d{6,10})期/)?.at(1);
@@ -1090,6 +1096,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     stepBackOnWin: body.stepBackOnWin ?? prev.stepBackOnWin,
     betOptions: body.betOptions ?? prev.betOptions,
     algorithms: body.algorithms ?? prev.algorithms,
+    odds: body.odds ?? prev.odds,
   };
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
