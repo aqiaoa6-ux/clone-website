@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
+import BottomNav from "../components/BottomNav";
 
 const CARD_TYPES = [
   { key: "daily", label: "天卡", desc: "有效期 1 天", color: "from-green-600 to-emerald-500", icon: "☀️" },
@@ -116,6 +117,7 @@ export default function CardKeyPage() {
           </>
         )}
       </div>
+      <BottomNav />
     </div>
   );
 }

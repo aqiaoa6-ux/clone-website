@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api, type AdminCard } from "../lib/api";
+import BottomNav from "../components/BottomNav";
 
 const TYPE_LABELS: Record<string, { label: string; color: string }> = {
   daily: { label: "天卡", color: "text-green-400 bg-green-500/10 border-green-500/30" },
@@ -214,6 +215,7 @@ export default function AdminPage() {
           </div>
         </div>
       </div>
+      <BottomNav />
     </div>
   );
 }

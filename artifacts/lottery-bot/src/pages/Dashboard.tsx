@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api, type TgStatus, type BetRecord, type TgGroup } from "../lib/api";
+import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type TgStep = "phone" | "code" | "password" | "done";
@@ -536,16 +537,13 @@ export default function Dashboard() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            {user?.isAdmin && (
-              <button onClick={() => setLocation("/admin")} className="text-slate-400 hover:text-slate-200 text-xs px-2 py-1 rounded-lg hover:bg-white/5 transition">管理</button>
-            )}
             <span className="text-slate-500 text-xs">{user?.username}</span>
             <button onClick={() => void logout()} className="text-slate-500 hover:text-slate-300 text-xs transition">退出</button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-lg mx-auto px-4 py-4 space-y-3 pb-20">
+      <div className="max-w-lg mx-auto px-4 py-4 space-y-3 pb-24">
 
         {/* TG Login */}
         {tgStep === "login" && <TgLoginCard onDone={() => void fetchStatus()} />}
@@ -772,6 +770,7 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      <BottomNav />
     </div>
   );
 }
