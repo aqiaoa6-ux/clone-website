@@ -78,8 +78,11 @@ interface TgSession {
   // watchdog timers
   watchdogTimer?: ReturnType<typeof setInterval>;
   saveTimer?: ReturnType<typeof setInterval>;
-  // 30-second post-result auto-bet timer
+  // 50-second post-draw auto-bet timer
   autoNextBetTimer?: ReturnType<typeof setTimeout>;
+  // lottery draw poller — fires scheduleAutoNextBet when a new draw is detected
+  lotteryPollTimer?: ReturnType<typeof setInterval>;
+  lastSeenLotteryPeriod: number;
 }
 
 // ─── Session persistence ──────────────────────────────────────────────────────
@@ -209,6 +212,7 @@ function stopWatchdog(session: TgSession): void {
   if (session.watchdogTimer) { clearInterval(session.watchdogTimer); session.watchdogTimer = undefined; }
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
+  if (session.lotteryPollTimer) { clearInterval(session.lotteryPollTimer); session.lotteryPollTimer = undefined; }
 }
 
 function startConnectionWatchdog(session: TgSession): void {
@@ -273,6 +277,7 @@ async function restoreSession(): Promise<void> {
       currentLevel: 0,
       algIndex: 0,
       betPlacedThisCycle: false,
+      lastSeenLotteryPeriod: 0,
       recentResults: [],
       balance: data.balance ?? 1000000,
       todayPnl: data.todayPnl ?? 0,
@@ -510,9 +515,7 @@ async function startKkpayWatcher(session: TgSession): Promise<void> {
           betId: sentBet.id,
           period: periodFromMsg,
         });
-
-        // Schedule next auto-bet 50 seconds after result
-        scheduleAutoNextBet(session);
+        // kkpay handles P&L settlement only — draw timing is driven by the lottery poller
 
         // Update absolute balance if kkpay includes it in the result message
         const absBal = parseBalanceFromKkpay(text);
@@ -676,7 +679,7 @@ async function autoPlaceBet(session: TgSession): Promise<void> {
   }
 }
 
-// ─── Schedule 50-second auto-bet after a result ───────────────────────────────
+// ─── Schedule 50-second auto-bet after a draw ─────────────────────────────────
 function scheduleAutoNextBet(session: TgSession): void {
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (!session.cfg.autoBet || !session.watchGroupId) return;
@@ -686,6 +689,42 @@ function scheduleAutoNextBet(session: TgSession): void {
     session.betPlacedThisCycle = false;
     void autoPlaceBet(session);
   }, 50 * 1000);
+}
+
+// ─── Lottery draw poller — triggers betting 50s after each new draw ────────────
+async function pollLotteryDraw(session: TgSession): Promise<void> {
+  try {
+    const r = await fetch("http://pc20.net/api/fengpan", {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Referer": "http://pc20.net/",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return;
+    const data = await r.json() as { message?: { all?: { keno28?: { data?: { term: number }[] } } } };
+    const latest = data?.message?.all?.keno28?.data?.[0];
+    if (!latest?.term) return;
+
+    // New draw detected — start the 50s bet timer
+    if (latest.term > session.lastSeenLotteryPeriod) {
+      session.lastSeenLotteryPeriod = latest.term;
+      if (session.cfg.autoBet && session.watchGroupId) {
+        scheduleAutoNextBet(session);
+      }
+    }
+  } catch { /* network errors are silently ignored */ }
+}
+
+function startLotteryPoller(session: TgSession): void {
+  if (session.lotteryPollTimer) return; // already running
+  // Poll every 20 seconds — fine-grained enough to catch each ~210-second draw
+  session.lotteryPollTimer = setInterval(() => { void pollLotteryDraw(session); }, 20 * 1000);
+}
+
+function stopLotteryPoller(session: TgSession): void {
+  if (session.lotteryPollTimer) { clearInterval(session.lotteryPollTimer); session.lotteryPollTimer = undefined; }
+  if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
 }
 
 function computeNextBet(session: TgSession, won: boolean): number {
@@ -902,6 +941,7 @@ router.post("/tg/send-code", async (req, res) => {
       currentLevel: 0,
       algIndex: 0,
       betPlacedThisCycle: false,
+      lastSeenLotteryPeriod: 0,
       recentResults: [],
       balance: 1000000,
       todayPnl: 0,
@@ -1193,18 +1233,16 @@ router.post("/tg/config", (req, res) => {
 
   if (tgSession.watchGroupId) startWatching(tgSession);
 
-  // When autoBet is turned OFF — cancel any pending auto-bet timer immediately
+  // When autoBet is turned OFF — cancel timers and stop the lottery poller
   if (body.autoBet === false && prev.autoBet) {
-    if (tgSession.autoNextBetTimer) {
-      clearTimeout(tgSession.autoNextBetTimer);
-      tgSession.autoNextBetTimer = undefined;
-    }
+    stopLotteryPoller(tgSession);
   }
 
-  // When autoBet is turned ON — reset cycle lock and immediately fire first bet
+  // When autoBet is turned ON — start lottery poller, reset lock, fire first bet immediately
   const wasOff = !prev.autoBet;
   if (body.autoBet === true && wasOff && tgSession.watchGroupId) {
     tgSession.betPlacedThisCycle = false;
+    startLotteryPoller(tgSession);
     void autoPlaceBet(tgSession);
   }
 
