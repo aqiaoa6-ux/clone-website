@@ -75,7 +75,12 @@ export default function Dashboard() {
   const [betConfig, setBetConfig] = useState<Partial<BetConfig>>({ betAmount: 100, autoBet: false, strategy: 'normal' });
   const [trendOpen, setTrendOpen] = useState(false);
   const [betSetupOpen, setBetSetupOpen] = useState(false);
-  const [betSetupConfig, setBetSetupConfig] = useState<Partial<BetSetupConfig>>({});
+  const [betSetupConfig, setBetSetupConfig] = useState<BetSetupConfig>({
+    stopLoss: 5000,
+    targetProfit: 3000,
+    maxConsecutiveLosses: 5,
+    cooldownSeconds: 0,
+  });
   const [allItems, setAllItems] = useState<TrendTerm[]>([]);
   // live data
   const [records, setRecords] = useState<BetRecord[]>([]);
@@ -357,8 +362,8 @@ export default function Dashboard() {
 
     if (next) setRiskBlockReason(null);
 
-    // When starting: ensure the watch group is set — use betSetupConfig or fall back to watchGroup
-    const groupIdToSet = betSetupConfig.groupId ?? watchGroup?.id;
+    // When starting: set the watch group if one is known
+    const groupIdToSet = watchGroup?.id;
     if (next && groupIdToSet) {
       await fetch('/api/tg/set-group', {
         method: 'POST',
@@ -368,13 +373,6 @@ export default function Dashboard() {
     }
 
     const body: Record<string, unknown> = { autoBet: next };
-    if (next && betSetupConfig.algorithms) {
-      body.algorithms    = betSetupConfig.algorithms;
-      body.betOptions    = betSetupConfig.betOptions ?? ['big', 'small'];
-      body.amountLevels  = betSetupConfig.amountLevels;
-      body.stepBackOnWin = betSetupConfig.stepBackOnWin;
-      body.startLevel    = betSetupConfig.startLevel;
-    }
     await fetch('/api/tg/config', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -783,15 +781,8 @@ export default function Dashboard() {
         <BetSetupPanel
           isOpen={betSetupOpen}
           onClose={() => setBetSetupOpen(false)}
-          onSave={(cfg) => {
-            setBetSetupConfig(cfg);
-            if (cfg.groupId && cfg.groupTitle) {
-              setWatchGroup({ id: cfg.groupId, title: cfg.groupTitle, type: 'group' });
-            }
-          }}
+          onSave={(cfg) => setBetSetupConfig(cfg)}
           initialConfig={betSetupConfig}
-          tgConnected={!!tgMe}
-          currentGroupId={watchGroup?.id}
         />
       </div>
     </div>
