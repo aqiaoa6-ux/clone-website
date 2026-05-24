@@ -1038,7 +1038,8 @@ function startGroupListener(session: TgSession): void {
     const text = msg.message ?? "";
     if (!session.cfg.autoBet) return;
     if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
-    if (session.betLog.some(b => b.status === "sent")) return;
+    // Only block on unsettled main bets — chase bets (isChase=true) must not block main bet placement
+    if (session.betLog.some(b => b.status === "sent" && !b.isChase)) return;
     if (session.betPlacedThisCycle) return;
     const periodInMsg = text.match(/第?(\d{6,10})期/)?.at(1);
     const triggerPeriod = periodInMsg ? parseInt(periodInMsg) : undefined;
@@ -1057,22 +1058,9 @@ function startGroupListener(session: TgSession): void {
     const direction = decideBet(session, text);
     if (!direction) return;
     if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
-    session.betPlacedThisCycle = true;
     if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
-    const amount = session.currentBet;
-    const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
-    void (async () => {
-      try {
-        await session.client.sendMessage(targetId, { message: `${direction}${amount}` });
-        session.lastBetAt = Date.now();
-        session.betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: text.slice(0, 80), betContent: direction, amount, timestamp: Date.now(), status: "sent", period: triggerPeriod });
-        if (session.betLog.length > 200) session.betLog.pop();
-        pushEvent(session, "bet:new", { bet: session.betLog[0] });
-      } catch {
-        session.betLog.unshift({ id: String(Date.now()), groupId: targetId, groupTitle, messageText: text.slice(0, 80), betContent: direction, amount, timestamp: Date.now(), status: "failed" });
-        if (session.betLog.length > 200) session.betLog.pop();
-      }
-    })();
+    // Use placeAllBets so chase numbers are included in the same message
+    void placeAllBets(session, direction);
   };
 
   session.messageHandlerBuilder = new NewMessage({});
