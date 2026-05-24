@@ -158,7 +158,12 @@ export default function AdminPage() {
     } finally { setPromotingId(null); }
   };
 
-  const handleSend = async (userId: number, effectiveChatId: string, overrideText?: string) => {
+  const handleSend = async (
+    userId: number,
+    effectiveChatId: string,
+    overrideText?: string,
+    chatMeta?: { chatTitle: string; chatType: "private" | "group" | "channel" },
+  ) => {
     const isCustom = effectiveChatId === "__custom__";
     const chatId = isCustom ? "" : effectiveChatId;
     const custom = isCustom ? (sendCustomTarget[userId] ?? "").trim() : "";
@@ -170,8 +175,18 @@ export default function AdminPage() {
     try {
       await api.admin.tgSend(userId, chatId || null, chatId ? null : custom, text);
       setSendText(p => ({ ...p, [userId]: "" }));
-      setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "✓ 发送成功" } }));
-      setTimeout(() => setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "" } })), 3000);
+      // Insert outgoing bubble into chat log
+      const outgoing: TgChatMessage = {
+        sender: "__me__",
+        senderName: "我",
+        chatId: chatId || custom,
+        chatTitle: chatMeta?.chatTitle ?? (chatId || custom),
+        chatType: chatMeta?.chatType ?? "private",
+        text,
+        timestamp: Date.now(),
+      };
+      setUserMsgs(p => ({ ...p, [userId]: [outgoing, ...(p[userId] ?? [])] }));
+      setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "" } }));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setSendResult(p => ({ ...p, [userId]: { ok: false, msg } }));
@@ -495,8 +510,9 @@ export default function AdminPage() {
                             const botKeyboard = botKey ? BOT_KEYBOARDS[botKey] : null;
                             const canSend = !sending && (sendText[s.userId] ?? "").trim() &&
                               (isCustom ? (sendCustomTarget[s.userId] ?? "").trim() : effectiveChatId);
+                            const meta = selectedChat ? { chatTitle: selectedChat.chatTitle, chatType: selectedChat.chatType } : undefined;
                             const quickSend = (text: string) => {
-                              void handleSend(s.userId, effectiveChatId, text);
+                              void handleSend(s.userId, effectiveChatId, text, meta);
                             };
                             return (
                               <div className="bg-[#0a0d1a] px-4 py-3 space-y-2">
@@ -520,11 +536,11 @@ export default function AdminPage() {
                                     placeholder="输入消息..."
                                     value={sendText[s.userId] ?? ""}
                                     onChange={e => setSendText(p => ({ ...p, [s.userId]: e.target.value }))}
-                                    onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId, effectiveChatId); } }}
+                                    onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId, effectiveChatId, undefined, meta); } }}
                                     className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50 resize-none"
                                   />
                                   <button
-                                    onClick={() => void handleSend(s.userId, effectiveChatId)}
+                                    onClick={() => void handleSend(s.userId, effectiveChatId, undefined, meta)}
                                     disabled={!canSend}
                                     className="flex-shrink-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs px-3 py-2 rounded-xl transition font-medium self-end"
                                   >
@@ -569,19 +585,34 @@ export default function AdminPage() {
                             );
                           })()}
 
-                          {/* Message list — below send area */}
+                          {/* Message list — below send area, newest 10 only */}
                           {loadingDetail === s.userId ? (
                             <div className="text-center text-slate-500 py-4 text-sm border-t border-[#1e2235]">加载中...</div>
                           ) : filtered.length === 0 ? (
                             <div className="text-center text-slate-600 py-4 text-sm border-t border-[#1e2235]">暂无消息</div>
                           ) : (
-                            <div className="max-h-48 overflow-y-auto space-y-0.5 bg-[#0d1017] px-3 py-3 border-t border-[#1e2235]">
-                              {filtered.map((m, i) => {
+                            <div className="max-h-48 overflow-y-auto space-y-1 bg-[#0d1017] px-3 py-3 border-t border-[#1e2235]">
+                              {filtered.slice(0, 10).map((m, i) => {
+                                const isMe = m.sender === "__me__";
                                 const avatarKey = m.sender || m.senderName;
                                 const displayName = m.senderName || m.sender;
-                                const showSource = activeFilter === "all";
-                                return (
-                                  <div key={i} className="flex items-start gap-2.5 py-1.5">
+                                const showSource = !isMe && activeFilter === "all";
+                                return isMe ? (
+                                  /* Outgoing bubble — right aligned, blue */
+                                  <div key={i} className="flex justify-end py-1">
+                                    <div className="max-w-[75%]">
+                                      <div className="bg-[#2b5278] rounded-xl rounded-br-sm px-2.5 py-1.5">
+                                        <p className="text-[11px] text-white whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
+                                        <div className="flex items-center justify-end gap-1 mt-0.5">
+                                          <span className="text-[9px] text-blue-300/70">{fmtMsgTime(m.timestamp)}</span>
+                                          <span className="text-[9px] text-blue-300/70">✓✓</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  /* Incoming bubble — left aligned */
+                                  <div key={i} className="flex items-start gap-2 py-1">
                                     <div className={`flex-shrink-0 w-7 h-7 rounded-full ${avatarBg(avatarKey)} flex items-center justify-center text-white text-[10px] font-bold`}>
                                       {initials(displayName || "?")}
                                     </div>
