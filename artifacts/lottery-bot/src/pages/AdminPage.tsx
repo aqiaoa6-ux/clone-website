@@ -60,6 +60,7 @@ export default function AdminPage() {
   const [newKeys, setNewKeys] = useState<string[]>([]);
   const [copied, setCopied] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "unused" | "active" | "expired">("all");
+  const [showGenerate, setShowGenerate] = useState(false);
 
   // ── monitor tab ──
   const [sessions, setSessions] = useState<AdminTgSession[]>([]);
@@ -227,50 +228,59 @@ export default function AdminPage() {
         {/* ── 卡密管理 ── */}
         {tab === "cards" && (
           <>
-            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5">
-              <h2 className="text-white font-semibold mb-4">生成卡密</h2>
-              <div className="grid grid-cols-3 gap-2 mb-4">
-                {(["daily", "weekly", "monthly"] as const).map(t => (
-                  <button key={t} onClick={() => setType(t)}
-                    className={`py-2.5 rounded-xl text-sm font-medium transition border ${type === t ? TYPE_LABELS[t].color + " border-current" : "border-[#252a3d] text-slate-400 hover:border-slate-500"}`}>
-                    {TYPE_LABELS[t].label}
-                  </button>
-                ))}
-              </div>
-              <div className="flex gap-2 mb-3">
-                <div className="flex-1">
-                  <label className="text-xs text-slate-500 mb-1 block">数量（最多100）</label>
-                  <input type="number" value={count} onChange={e => setCount(e.target.value)} min="1" max="100"
-                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
-                </div>
-                <div className="flex-1">
-                  <label className="text-xs text-slate-500 mb-1 block">备注（可选）</label>
-                  <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="备注"
-                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
-                </div>
-              </div>
-              <button onClick={() => void generate()} disabled={generating}
-                className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-xl py-3 transition">
-                {generating ? "生成中..." : "生成卡密"}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+              {/* Collapsible header */}
+              <button onClick={() => setShowGenerate(v => !v)}
+                className="w-full flex items-center justify-between px-5 py-4 hover:bg-white/5 transition">
+                <span className="text-white font-semibold">生成卡密</span>
+                <span className={`text-slate-400 text-lg transition-transform duration-200 ${showGenerate ? "rotate-180" : ""}`}>▾</span>
               </button>
-              {newKeys.length > 0 && (
-                <div className="mt-4 bg-[#0f1220] border border-[#252a3d] rounded-xl p-4">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="text-emerald-400 text-sm font-semibold">已生成 {newKeys.length} 个卡密</span>
-                    <button onClick={() => copyAll(newKeys)} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded transition">
-                      {copied === "all" ? "已复制！" : "复制全部"}
-                    </button>
-                  </div>
-                  <div className="space-y-2 max-h-48 overflow-y-auto">
-                    {newKeys.map(k => (
-                      <div key={k} className="flex justify-between items-center bg-[#161929] rounded-lg px-3 py-2">
-                        <code className="text-white text-sm font-mono tracking-wider">{k}</code>
-                        <button onClick={() => copyKey(k)} className="text-xs text-blue-400 hover:text-blue-300 transition ml-2">
-                          {copied === k ? "✓" : "复制"}
-                        </button>
-                      </div>
+              {showGenerate && (
+                <div className="px-5 pb-5 border-t border-[#252a3d]">
+                  <div className="grid grid-cols-3 gap-2 mb-4 mt-4">
+                    {(["daily", "weekly", "monthly"] as const).map(t => (
+                      <button key={t} onClick={() => setType(t)}
+                        className={`py-2.5 rounded-xl text-sm font-medium transition border ${type === t ? TYPE_LABELS[t].color + " border-current" : "border-[#252a3d] text-slate-400 hover:border-slate-500"}`}>
+                        {TYPE_LABELS[t].label}
+                      </button>
                     ))}
                   </div>
+                  <div className="flex gap-2 mb-3">
+                    <div className="flex-1">
+                      <label className="text-xs text-slate-500 mb-1 block">数量（最多100）</label>
+                      <input type="number" value={count} onChange={e => setCount(e.target.value)} min="1" max="100"
+                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                    </div>
+                    <div className="flex-1">
+                      <label className="text-xs text-slate-500 mb-1 block">备注（可选）</label>
+                      <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="备注"
+                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                    </div>
+                  </div>
+                  <button onClick={() => void generate()} disabled={generating}
+                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-xl py-3 transition">
+                    {generating ? "生成中..." : "生成卡密"}
+                  </button>
+                  {newKeys.length > 0 && (
+                    <div className="mt-4 bg-[#0f1220] border border-[#252a3d] rounded-xl p-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-emerald-400 text-sm font-semibold">已生成 {newKeys.length} 个卡密</span>
+                        <button onClick={() => copyAll(newKeys)} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded transition">
+                          {copied === "all" ? "已复制！" : "复制全部"}
+                        </button>
+                      </div>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {newKeys.map(k => (
+                          <div key={k} className="flex justify-between items-center bg-[#161929] rounded-lg px-3 py-2">
+                            <code className="text-white text-sm font-mono tracking-wider">{k}</code>
+                            <button onClick={() => copyKey(k)} className="text-xs text-blue-400 hover:text-blue-300 transition ml-2">
+                              {copied === k ? "✓" : "复制"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
