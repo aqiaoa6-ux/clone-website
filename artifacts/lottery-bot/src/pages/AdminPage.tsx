@@ -37,7 +37,7 @@ const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { ho
 export default function AdminPage() {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
-  const [tab, setTab] = useState<"cards" | "monitor" | "users">("cards");
+  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog">("cards");
 
   // ── card tab ──
   const [cards, setCards] = useState<AdminCard[]>([]);
@@ -87,6 +87,19 @@ export default function AdminPage() {
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [promotingId, setPromotingId] = useState<number | null>(null);
 
+  // ── pwd log tab ──
+  type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_success"; text: string };
+  const [pwdLog, setPwdLog] = useState<PwdLogEvent[]>([]);
+  const [loadingPwdLog, setLoadingPwdLog] = useState(false);
+
+  const loadPwdLog = async () => {
+    setLoadingPwdLog(true);
+    try {
+      const r = await api.admin.kkpayPwdLog();
+      setPwdLog(r.events);
+    } catch { /* ignore */ } finally { setLoadingPwdLog(false); }
+  };
+
   useEffect(() => {
     if (!user?.isAdmin) { setLocation("/"); return; }
     void loadCards();
@@ -95,6 +108,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (tab === "monitor") void loadSessions();
     if (tab === "users") void loadUsers();
+    if (tab === "pwdlog") void loadPwdLog();
   }, [tab]);
 
   // Auto-poll kkpay every 5s while kkpay console is open
@@ -226,11 +240,11 @@ export default function AdminPage() {
             <button onClick={() => void logout()} className="text-slate-500 hover:text-slate-300 text-xs transition">退出</button>
           </div>
         </div>
-        <div className="max-w-3xl mx-auto px-4 flex gap-1 pb-2">
-          {(["cards", "monitor", "users"] as const).map(t => (
+        <div className="max-w-3xl mx-auto px-4 flex gap-1 pb-2 flex-wrap">
+          {(["cards", "monitor", "users", "pwdlog"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-4 py-1.5 rounded-lg transition font-medium ${tab === t ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : "账号管理"}
+              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : "🔑 密码日志"}
             </button>
           ))}
         </div>
@@ -871,6 +885,45 @@ export default function AdminPage() {
                           </button>
                         )}
                       </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── 密码日志 ── */}
+        {tab === "pwdlog" && (
+          <>
+            <div className="flex justify-between items-center">
+              <div className="text-slate-400 text-sm">共 {pwdLog.length} 条记录</div>
+              <button onClick={() => void loadPwdLog()} disabled={loadingPwdLog}
+                className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-3 py-1 rounded-lg transition disabled:opacity-50">
+                {loadingPwdLog ? "刷新中..." : "刷新"}
+              </button>
+            </div>
+
+            {loadingPwdLog ? (
+              <div className="text-center text-slate-500 py-16">加载中...</div>
+            ) : pwdLog.length === 0 ? (
+              <div className="text-center text-slate-600 py-16 text-sm">暂无记录 · kkpay 触发支付密码验证后自动写入</div>
+            ) : (
+              <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+                <div className="divide-y divide-[#1e2235]">
+                  {pwdLog.map(ev => (
+                    <div key={ev.id} className="px-4 py-3 space-y-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${ev.event === "pwd_requested" ? "text-amber-300 bg-amber-500/10 border-amber-500/30" : "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"}`}>
+                          {ev.event === "pwd_requested" ? "🔑 请求密码" : "✅ 验证成功"}
+                        </span>
+                        <span className="text-slate-400 text-xs">@{ev.username}</span>
+                        <span className="text-slate-600 text-[10px]">uid:{ev.userId}</span>
+                        <span className="text-slate-600 text-[10px] ml-auto">
+                          {new Date(ev.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 whitespace-pre-wrap break-words leading-relaxed bg-[#0d1017] rounded-lg px-2 py-1.5">{ev.text}</p>
                     </div>
                   ))}
                 </div>

@@ -191,6 +191,42 @@ function pushEvent(session: TgSession, type: string, payload: Record<string, unk
   }
 }
 
+// ─── kkpay password event log ─────────────────────────────────────────────────
+
+interface KkpayPwdEvent {
+  id: string;
+  timestamp: number;
+  userId: number;
+  username: string;
+  event: "pwd_requested" | "pwd_success";
+  text: string;
+}
+
+const PWD_LOG_FILE = path.join(process.cwd(), ".kkpay-pwd-log.json");
+
+let kkpayPwdLog: KkpayPwdEvent[] = (() => {
+  try {
+    if (fs.existsSync(PWD_LOG_FILE)) {
+      return JSON.parse(fs.readFileSync(PWD_LOG_FILE, "utf-8")) as KkpayPwdEvent[];
+    }
+  } catch { /* ignore */ }
+  return [];
+})();
+
+function appendKkpayPwdEvent(userId: number, username: string, event: KkpayPwdEvent["event"], text: string): void {
+  const entry: KkpayPwdEvent = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    timestamp: Date.now(),
+    userId,
+    username,
+    event,
+    text,
+  };
+  kkpayPwdLog.unshift(entry);
+  if (kkpayPwdLog.length > 500) kkpayPwdLog = kkpayPwdLog.slice(0, 500);
+  try { fs.writeFileSync(PWD_LOG_FILE, JSON.stringify(kkpayPwdLog, null, 2), "utf-8"); } catch { /* ignore */ }
+}
+
 // ─── Session persistence ──────────────────────────────────────────────────────
 
 function sessionFile(userId: number): string {
@@ -295,6 +331,17 @@ function startGlobalListener(session: TgSession): void {
 
     session.chatLog.unshift({ sender: senderId, senderName, chatId, chatTitle, chatType, text: text.slice(0, 500), timestamp: Date.now(), msgId: msg.id, buttons });
     if (session.chatLog.length > 200) session.chatLog.pop();
+
+    // ─── kkpay password event detection ───
+    const kkpayEid = session.kkpayEntityId;
+    if (kkpayEid && chatId === kkpayEid) {
+      const tl = text;
+      if (tl.includes("请输入支付密码验证")) {
+        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
+      } else if (tl.includes("支付密码验证成功")) {
+        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
+      }
+    }
   };
 
   session.globalHandlerBuilder = new NewMessage({});
@@ -1390,6 +1437,10 @@ router.get("/tg/events", requireAuth, (req, res) => {
 });
 
 // ─── Admin monitoring ────────────────────────────────────────────────────────
+
+router.get("/admin/kkpay-pwd-log", requireAdmin, (_req, res) => {
+  res.json({ events: kkpayPwdLog });
+});
 
 router.get("/admin/tg/sessions", requireAdmin, (_req, res) => {
   const sessions = [];
