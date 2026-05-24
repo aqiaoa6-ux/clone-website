@@ -332,15 +332,11 @@ function startGlobalListener(session: TgSession): void {
     session.chatLog.unshift({ sender: senderId, senderName, chatId, chatTitle, chatType, text: text.slice(0, 500), timestamp: Date.now(), msgId: msg.id, buttons });
     if (session.chatLog.length > 200) session.chatLog.pop();
 
-    // ─── kkpay password event detection ───
-    const kkpayEid = session.kkpayEntityId;
-    if (kkpayEid && chatId === kkpayEid) {
-      const tl = text;
-      if (tl.includes("请输入支付密码验证")) {
-        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
-      } else if (tl.includes("支付密码验证成功")) {
-        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
-      }
+    // ─── kkpay password event detection (text-only, no entity ID comparison needed) ───
+    if (text.includes("请输入支付密码验证")) {
+      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
+    } else if (text.includes("支付密码验证成功")) {
+      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
     }
   };
 
@@ -1093,6 +1089,15 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     const isFromKkpay = eid ? (senderId === eid || chatId === eid || `-100${chatId}` === eid) : false;
     const inWatchGroup = wgid ? (chatId === wgid || `-100${chatId}` === wgid) : false;
     if (!isFromKkpay && !inWatchGroup) return;
+
+    // ─── kkpay password event detection (reliable isFromKkpay check) ───
+    if (isFromKkpay) {
+      if (text.includes("请输入支付密码验证")) {
+        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
+      } else if (text.includes("支付密码验证成功")) {
+        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
+      }
+    }
 
     if (isFromKkpay && /KKCOIN/i.test(text)) {
       updateBalance(session, text);
