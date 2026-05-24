@@ -1,5 +1,13 @@
 [
   {
+    "id": "1779641050235-rq60x",
+    "timestamp": 1779641050235,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_success",
+    "text": "✅ 支付密码验证成功"
+  },
+  {
     "id": "1779640687227-hih80",
     "timestamp": 1779640687227,
     "userId": 2,
