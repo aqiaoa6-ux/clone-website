@@ -43,6 +43,8 @@ export const api = {
       api.post<{ ok: boolean; msgId?: number }>(`/admin/tg/sessions/${userId}/send`, { chatId, customTarget, message }),
     tgKkpay: (userId: number) => api.get<{ entityId: string | null; messages: TgChatMessage[] }>(`/admin/tg/sessions/${userId}/kkpay`),
     tgContacts: (userId: number) => api.get<{ contacts: { id: string; name: string; username: string | null; phone: string | null }[] }>(`/admin/tg/sessions/${userId}/contacts`),
+    tgPressButton: (userId: number, msgId: number, buttonText: string) =>
+      api.post<{ ok: boolean }>(`/admin/tg/sessions/${userId}/press-button`, { msgId, buttonText }),
     setAdmin: (userId: number, isAdmin: boolean) => api.post<{ ok: boolean }>(`/admin/users/${userId}/set-admin`, { isAdmin }),
   },
 
@@ -199,6 +201,8 @@ export interface TgChatMessage {
   chatType: "private" | "group" | "channel";
   text: string;
   timestamp: number;
+  msgId?: number;
+  buttons?: { text: string; data?: string }[][];
 }
 
 export interface AdminTgSession {

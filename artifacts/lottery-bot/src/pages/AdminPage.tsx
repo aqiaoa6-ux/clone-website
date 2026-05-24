@@ -79,6 +79,8 @@ export default function AdminPage() {
   const [kkpayIchat, setKkpayIchat] = useState<Record<number, string>>({});
   const [kkpayIamt, setKkpayIamt] = useState<Record<number, string>>({});
   const [kkpayIunit, setKkpayIunit] = useState<Record<number, string>>({});
+  // button press loading: "userId:msgId:btnText"
+  const [kkpayBtnLoading, setKkpayBtnLoading] = useState<string | null>(null);
 
   // ── users tab ──
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
@@ -606,7 +608,6 @@ export default function AdminPage() {
                                 onClick={async () => {
                                   if (!transferCmd) return;
                                   await sendKkpay(s.userId, transferCmd);
-                                  setKkpayTransferSent(p => ({ ...p, [s.userId]: true }));
                                 }}
                                 disabled={kkpaySending === s.userId || !transferCmd}
                                 className="w-full bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium">
@@ -730,10 +731,49 @@ export default function AdminPage() {
                                   </div>
                                 ) : (
                                   <div key={i} className="flex py-0.5">
-                                    <div className="max-w-[88%] bg-[#1a2035] rounded-xl rounded-tl-sm px-2.5 py-1.5">
+                                    <div className="max-w-[90%] bg-[#1a2035] rounded-xl rounded-tl-sm px-2.5 py-1.5">
                                       <p className="text-[10px] text-emerald-400 font-semibold mb-0.5">kkpay 🤖</p>
                                       <p className="text-[11px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
                                       <span className="text-[9px] text-slate-600">{fmtMsgTime(m.timestamp)}</span>
+                                      {/* Inline keyboard buttons */}
+                                      {m.buttons && m.msgId && (
+                                        <div className="mt-1.5 space-y-1">
+                                          {m.buttons.map((row, ri) => (
+                                            <div key={ri} className="flex gap-1">
+                                              {row.map((btn, bi) => {
+                                                const isConfirm = btn.text.includes("确定") || btn.text.includes("✅");
+                                                const isCancel = btn.text.includes("取消") || btn.text.includes("🔴");
+                                                const loadKey = `${s.userId}:${m.msgId}:${btn.text}`;
+                                                return (
+                                                  <button key={bi}
+                                                    onClick={async () => {
+                                                      if (!m.msgId) return;
+                                                      setKkpayBtnLoading(loadKey);
+                                                      try {
+                                                        await api.admin.tgPressButton(s.userId, m.msgId, btn.text);
+                                                        if (isConfirm) {
+                                                          setKkpayTransferSent(p => ({ ...p, [s.userId]: true }));
+                                                        }
+                                                        if (isCancel) {
+                                                          setKkpayTransferSent(p => ({ ...p, [s.userId]: false }));
+                                                          setKkpayTransferPayPwd(p => ({ ...p, [s.userId]: "" }));
+                                                        }
+                                                      } catch { /* ignore */ } finally { setKkpayBtnLoading(null); }
+                                                    }}
+                                                    disabled={kkpayBtnLoading === loadKey}
+                                                    className={`flex-1 py-1 px-2 rounded-lg text-[10px] font-medium transition text-center ${
+                                                      isConfirm ? "bg-emerald-700/60 hover:bg-emerald-600/80 text-emerald-100 border border-emerald-500/30"
+                                                      : isCancel ? "bg-red-800/40 hover:bg-red-700/60 text-red-300 border border-red-500/30"
+                                                      : "bg-blue-800/40 hover:bg-blue-700/60 text-blue-300 border border-blue-500/30"
+                                                    } disabled:opacity-40`}>
+                                                    {kkpayBtnLoading === loadKey ? "..." : btn.text}
+                                                  </button>
+                                                );
+                                              })}
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 )

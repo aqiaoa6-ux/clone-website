@@ -91,7 +91,7 @@ interface TgSession {
   currentCloseTimeMs: number;
   yeMessageId?: number;
   // global TG message log (all incoming messages)
-  chatLog: Array<{ sender: string; senderName: string; chatId: string; chatTitle: string; chatType: "private" | "group" | "channel"; text: string; timestamp: number }>;
+  chatLog: Array<{ sender: string; senderName: string; chatId: string; chatTitle: string; chatType: "private" | "group" | "channel"; text: string; timestamp: number; msgId?: number; buttons?: { text: string; data?: string }[][] }>;
   globalHandler: ((event: NewMessageEvent) => Promise<void>) | null;
   globalHandlerBuilder: NewMessage | null;
   // balance
@@ -277,7 +277,23 @@ function startGlobalListener(session: TgSession): void {
       }
     } catch { /* ignore */ }
 
-    session.chatLog.unshift({ sender: senderId, senderName, chatId, chatTitle, chatType, text: text.slice(0, 500), timestamp: Date.now() });
+    let buttons: { text: string; data?: string }[][] | undefined;
+    try {
+      const rm = (msg as unknown as { replyMarkup?: unknown }).replyMarkup;
+      if (rm && (rm as { className?: string }).className === "ReplyInlineMarkup") {
+        const extracted = ((rm as { rows?: unknown[] }).rows ?? []).map(row =>
+          ((row as { buttons?: unknown[] }).buttons ?? []).map(btn => ({
+            text: (btn as { text?: string }).text ?? "",
+            data: (btn as { className?: string; data?: Buffer }).className === "KeyboardButtonCallback"
+              ? ((btn as { data?: Buffer }).data?.toString("hex"))
+              : undefined,
+          })).filter(b => b.text)
+        ).filter(r => r.length > 0);
+        if (extracted.length > 0) buttons = extracted;
+      }
+    } catch { /* ignore */ }
+
+    session.chatLog.unshift({ sender: senderId, senderName, chatId, chatTitle, chatType, text: text.slice(0, 500), timestamp: Date.now(), msgId: msg.id, buttons });
     if (session.chatLog.length > 200) session.chatLog.pop();
   };
 
@@ -1512,6 +1528,21 @@ router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req
             }
           } catch { /* ignore */ }
 
+          let msgButtons: { text: string; data?: string }[][] | undefined;
+          try {
+            const rm = (msg as unknown as { replyMarkup?: unknown }).replyMarkup;
+            if (rm && (rm as { className?: string }).className === "ReplyInlineMarkup") {
+              const extracted = ((rm as { rows?: unknown[] }).rows ?? []).map(row =>
+                ((row as { buttons?: unknown[] }).buttons ?? []).map(btn => ({
+                  text: (btn as { text?: string }).text ?? "",
+                  data: (btn as { className?: string; data?: Buffer }).className === "KeyboardButtonCallback"
+                    ? ((btn as { data?: Buffer }).data?.toString("hex"))
+                    : undefined,
+                })).filter(b => b.text)
+              ).filter(r => r.length > 0);
+              if (extracted.length > 0) msgButtons = extracted;
+            }
+          } catch { /* ignore */ }
           pulled.push({
             sender: senderId,
             senderName,
@@ -1520,6 +1551,8 @@ router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req
             chatType,
             text: msg.message.slice(0, 500),
             timestamp: (msg.date ?? 0) * 1000,
+            msgId: msg.id,
+            buttons: msgButtons,
           });
         }
       } catch { /* skip inaccessible chats */ }
@@ -1537,6 +1570,43 @@ router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: msg });
+  }
+});
+
+// Admin: press an inline keyboard button on a kkpay message
+router.post("/admin/tg/sessions/:userId/press-button", requireAdmin, async (req, res) => {
+  const userId = parseInt(String(req.params["userId"] ?? ""));
+  if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const session = tgSessions.get(userId);
+  if (!session?.client?.connected) { res.status(404).json({ error: "用户未连接 TG" }); return; }
+
+  const { msgId, buttonText } = req.body as { msgId?: number; buttonText?: string };
+  if (!msgId || !buttonText) { res.status(400).json({ error: "缺少参数" }); return; }
+
+  const entityId = session.kkpayEntityId;
+  if (!entityId) { res.status(400).json({ error: "kkpay 未绑定" }); return; }
+
+  try {
+    const msgs = await session.client.getMessages(entityId, { ids: [msgId] });
+    const msg = msgs[0];
+    if (!msg) { res.status(404).json({ error: "消息不存在" }); return; }
+
+    const buttons = await msg.getButtons();
+    if (!buttons) { res.status(404).json({ error: "消息无按钮" }); return; }
+
+    for (const row of buttons) {
+      for (const btn of row) {
+        if (btn.text === buttonText) {
+          await btn.click({});
+          res.json({ ok: true });
+          return;
+        }
+      }
+    }
+    res.status(404).json({ error: `未找到按钮: ${buttonText}` });
+  } catch (err) {
+    req.log.error({ err }, "press-button failed");
+    res.status(500).json({ error: String(err) });
   }
 });
 
