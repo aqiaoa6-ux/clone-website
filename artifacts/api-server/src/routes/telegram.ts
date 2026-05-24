@@ -87,6 +87,7 @@ interface TgSession {
   currentPattern?: MarketPattern;
   recentResults: string[];
   betPlacedThisCycle: boolean;
+  chasePlacedThisCycle: boolean;
   lastBetPeriod?: number;
   currentCloseTimeMs: number;
   yeMessageId?: number;
@@ -405,6 +406,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       currentLevel: 0,
       algIndex: 0,
       betPlacedThisCycle: false,
+      chasePlacedThisCycle: false,
       lastSeenLotteryPeriod: 0,
       currentCloseTimeMs: 0,
       recentResults: [],
@@ -833,6 +835,40 @@ function decideAI(session: TgSession): string | null {
 // ─── Auto-bet engine ──────────────────────────────────────────────────────────
 
 /**
+ * 只发追号部分（主注被风控屏蔽时使用）。
+ * 格式示例: "0/100  27/100"
+ */
+async function placeChaseOnly(session: TgSession): Promise<void> {
+  if (!session.cfg.enableChase || session.chasePlacedThisCycle) return;
+  const chaseEntries = session.cfg.chaseNumbers.filter(c => c.amount > 0);
+  if (chaseEntries.length === 0) return;
+
+  const targetId = session.watchGroupId!;
+  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
+  const message = chaseEntries.map(c => `${c.num}/${c.amount}`).join("  ");
+  const now = Date.now();
+  let succeeded = false;
+  try {
+    await session.client.sendMessage(targetId, { message });
+    session.lastBetAt = now;
+    succeeded = true;
+  } catch { /* fall through */ }
+
+  session.chasePlacedThisCycle = true;
+  const status = succeeded ? "sent" : "failed";
+  for (const { num, amount } of chaseEntries) {
+    const rec: BetRecord = {
+      id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
+      messageText: message, betContent: String(num), amount,
+      timestamp: now, status, isChase: true,
+    };
+    session.betLog.unshift(rec);
+    pushEvent(session, "bet:new", { bet: rec });
+  }
+  if (session.betLog.length > 200) session.betLog.length = 200;
+}
+
+/**
  * 将主注 + 所有追号合并为一条消息发出。
  * 格式示例: "0/100  27/100  大 100"
  * 各部分仍作为独立 BetRecord 入库，以便分别结算。
@@ -844,9 +880,10 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
   session.betPlacedThisCycle = true;
 
-  // Build active chase entries
-  const chaseEntries = (session.cfg.enableChase ? session.cfg.chaseNumbers : [])
+  // Only include chase entries if not already sent this cycle
+  const chaseEntries = (!session.chasePlacedThisCycle && session.cfg.enableChase ? session.cfg.chaseNumbers : [])
     .filter(c => c.amount > 0);
+  session.chasePlacedThisCycle = true;
 
   // Compose single message: "0/100  27/100  大 100"
   const parts: string[] = [
@@ -906,7 +943,13 @@ async function runAutoBet(session: TgSession): Promise<void> {
   }
 
   const risk = checkRisk(session);
-  if (!risk.ok) return;
+  if (!risk.ok) {
+    // Risk blocked main bet — chase numbers still go out every period
+    if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
+      await placeChaseOnly(session);
+    }
+    return;
+  }
   const direction = decideBetAuto(session);
   if (!direction) return;
   await placeAllBets(session, direction);
@@ -996,6 +1039,7 @@ async function pollLottery(session: TgSession): Promise<void> {
     });
 
     session.betPlacedThisCycle = false;
+    session.chasePlacedThisCycle = false;
     session.currentCloseTimeMs = nextCloseMs > nowMs ? nextCloseMs : nowMs + cycleMs;
     if (session.cfg.autoBet && session.watchGroupId) {
       scheduleNextBet(session, session.currentCloseTimeMs, cycleMs);
@@ -1050,7 +1094,13 @@ function startGroupListener(session: TgSession): void {
     }
 
     const risk = checkRisk(session);
-    if (!risk.ok) return;
+    if (!risk.ok) {
+      // Risk blocked main bet — chase numbers still go out every period
+      if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
+        void placeChaseOnly(session);
+      }
+      return;
+    }
     const direction = decideBet(session, text);
     if (!direction) return;
     if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
@@ -1194,7 +1244,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       consecutiveLosses: 0, sessionPnl: 0,
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
-      betPlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0,
+      betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0,
       recentResults: [], chatLog: [],
       globalHandler: null, globalHandlerBuilder: null,
       balance: 1000000,
