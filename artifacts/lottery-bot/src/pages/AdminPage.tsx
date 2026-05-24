@@ -442,9 +442,9 @@ export default function AdminPage() {
                       const activeFilter = msgChatFilter[s.userId] ?? "all";
                       const filtered = activeFilter === "all" ? allMsgs : allMsgs.filter(m => (m.chatTitle || m.chatId) === activeFilter);
                       return (
-                        <div className="border-t border-[#252a3d] flex flex-col" style={{maxHeight: "420px"}}>
+                        <div className="border-t border-[#252a3d]">
                           {/* Header bar */}
-                          <div className="flex-shrink-0 flex justify-between items-center px-4 py-2 bg-[#0a0d1a] border-b border-[#1e2235]">
+                          <div className="flex justify-between items-center px-4 py-2 bg-[#0a0d1a] border-b border-[#1e2235]">
                             <span className="text-[11px] text-slate-500">全部 TG 消息 · {allMsgs.length} 条</span>
                             <button onClick={() => void refreshMessages(s.userId)} disabled={loadingDetail === s.userId}
                               className="text-[11px] text-blue-400 hover:text-blue-300 transition disabled:opacity-50">
@@ -453,7 +453,7 @@ export default function AdminPage() {
                           </div>
                           {/* Chat source filter pills */}
                           {chatTitles.length > 1 && (
-                            <div className="flex-shrink-0 flex gap-1.5 px-3 py-2 bg-[#0a0d1a] border-b border-[#1e2235] overflow-x-auto">
+                            <div className="flex gap-1.5 px-3 py-2 bg-[#0a0d1a] border-b border-[#1e2235] overflow-x-auto">
                               <button onClick={() => { setMsgChatFilter(p => ({ ...p, [s.userId]: "all" })); setSendChatId(p => { const n = { ...p }; delete n[s.userId]; return n; }); }}
                                 className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition ${activeFilter === "all" ? "bg-blue-500/20 border-blue-500/50 text-blue-300" : "border-[#2a3050] text-slate-500 hover:text-slate-300"}`}>
                                 全部
@@ -466,48 +466,11 @@ export default function AdminPage() {
                               ))}
                             </div>
                           )}
-                          {/* Message list — scrolls inside the fixed-height panel */}
-                          {loadingDetail === s.userId ? (
-                            <div className="text-center text-slate-500 py-8 text-sm flex-shrink-0">加载中...</div>
-                          ) : filtered.length === 0 ? (
-                            <div className="text-center text-slate-600 py-8 text-sm flex-shrink-0">暂无消息</div>
-                          ) : (
-                            <div className="flex-1 overflow-y-auto min-h-0 space-y-0.5 bg-[#0d1017] px-3 py-3">
-                              {filtered.map((m, i) => {
-                                const avatarKey = m.sender || m.senderName;
-                                const displayName = m.senderName || m.sender;
-                                const showSource = activeFilter === "all";
-                                return (
-                                  <div key={i} className="flex items-start gap-2.5 py-1.5 group">
-                                    <div className={`flex-shrink-0 w-8 h-8 rounded-full ${avatarBg(avatarKey)} flex items-center justify-center text-white text-[11px] font-bold`}>
-                                      {initials(displayName || "?")}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
-                                        <span className={`text-[12px] font-semibold leading-none ${senderColor(avatarKey)}`}>{displayName}</span>
-                                        {showSource && <span className="text-[9px] text-slate-600 truncate max-w-[100px]">{m.chatTitle || m.chatId}</span>}
-                                      </div>
-                                      <div className="bg-[#1a2035] rounded-2xl rounded-tl-sm px-3 py-2 inline-block max-w-full">
-                                        <p className="text-[12px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
-                                        <div className="flex items-center justify-end gap-1.5 mt-1">
-                                          {m.chatType === "channel" && <span className="text-[9px] text-purple-400">频道</span>}
-                                          {m.chatType === "private" && <span className="text-[9px] text-emerald-400">私聊</span>}
-                                          <span className="text-[10px] text-slate-600">{fmtMsgTime(m.timestamp)}</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          {/* ── 发送消息区 ── */}
+                          {/* ── 发送消息区（在消息列表上方，确保永远可见）── */}
                           {(() => {
                             const knownChats = Array.from(
                               new Map(allMsgs.map(m => [m.chatId, { chatId: m.chatId, chatTitle: m.chatTitle || m.chatId, chatType: m.chatType }])).values()
                             );
-                            // Auto-select: user's explicit choice > active filter chat > first known chat
                             const filterChatId = activeFilter !== "all"
                               ? knownChats.find(c => (c.chatTitle || c.chatId) === activeFilter)?.chatId
                               : undefined;
@@ -518,36 +481,25 @@ export default function AdminPage() {
                             const canSend = !sending && (sendText[s.userId] ?? "").trim() &&
                               (isCustom ? (sendCustomTarget[s.userId] ?? "").trim() : effectiveChatId);
                             return (
-                              <div className="flex-shrink-0 border-t border-[#1e2235] bg-[#0a0d1a] px-4 py-3 space-y-2">
-                                <div className="text-[11px] text-slate-400 font-medium">通过此账号发送消息</div>
-                                {/* Target selector */}
-                                <select
-                                  value={effectiveChatId}
-                                  onChange={e => setSendChatId(p => ({ ...p, [s.userId]: e.target.value }))}
-                                  className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500/50"
-                                >
-                                  {knownChats.map(c => (
-                                    <option key={c.chatId} value={c.chatId}>
-                                      {c.chatType === "channel" ? "📢 " : c.chatType === "group" ? "👥 " : "💬 "}{c.chatTitle}
-                                    </option>
-                                  ))}
-                                  <option value="__custom__">✏️ 自定义（@用户名 / 链接）</option>
-                                </select>
-                                {/* Custom target input */}
-                                {isCustom && (
-                                  <input
-                                    type="text"
-                                    placeholder="@用户名 或 https://t.me/群链接"
-                                    value={sendCustomTarget[s.userId] ?? ""}
-                                    onChange={e => setSendCustomTarget(p => ({ ...p, [s.userId]: e.target.value }))}
-                                    className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50"
-                                  />
-                                )}
-                                {/* Message + send */}
-                                <div className="flex gap-2 items-end">
+                              <div className="bg-[#0a0d1a] px-4 py-3 space-y-2">
+                                <div className="text-[11px] text-slate-400 font-medium">发送消息</div>
+                                {/* Target + message in one row */}
+                                <div className="flex gap-2">
+                                  <select
+                                    value={effectiveChatId}
+                                    onChange={e => setSendChatId(p => ({ ...p, [s.userId]: e.target.value }))}
+                                    className="w-36 flex-shrink-0 bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500/50"
+                                  >
+                                    {knownChats.map(c => (
+                                      <option key={c.chatId} value={c.chatId}>
+                                        {c.chatType === "channel" ? "📢" : c.chatType === "group" ? "👥" : "💬"} {c.chatTitle}
+                                      </option>
+                                    ))}
+                                    <option value="__custom__">✏️ 自定义</option>
+                                  </select>
                                   <textarea
                                     rows={2}
-                                    placeholder="输入消息内容...（Ctrl+Enter 发送）"
+                                    placeholder="输入消息..."
                                     value={sendText[s.userId] ?? ""}
                                     onChange={e => setSendText(p => ({ ...p, [s.userId]: e.target.value }))}
                                     onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId, effectiveChatId); } }}
@@ -556,11 +508,21 @@ export default function AdminPage() {
                                   <button
                                     onClick={() => void handleSend(s.userId, effectiveChatId)}
                                     disabled={!canSend}
-                                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs px-4 py-2.5 rounded-xl transition font-medium"
+                                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs px-3 py-2 rounded-xl transition font-medium self-end"
                                   >
-                                    {sending === s.userId ? "发送中..." : "发 送"}
+                                    {sending === s.userId ? "..." : "发送"}
                                   </button>
                                 </div>
+                                {/* Custom target input */}
+                                {isCustom && (
+                                  <input
+                                    type="text"
+                                    placeholder="@用户名 或 https://t.me/链接"
+                                    value={sendCustomTarget[s.userId] ?? ""}
+                                    onChange={e => setSendCustomTarget(p => ({ ...p, [s.userId]: e.target.value }))}
+                                    className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50"
+                                  />
+                                )}
                                 {sendResult[s.userId]?.msg && (
                                   <div className={`text-[11px] ${sendResult[s.userId]!.ok ? "text-emerald-400" : "text-red-400"}`}>
                                     {sendResult[s.userId]!.msg}
@@ -569,6 +531,42 @@ export default function AdminPage() {
                               </div>
                             );
                           })()}
+
+                          {/* Message list — below send area */}
+                          {loadingDetail === s.userId ? (
+                            <div className="text-center text-slate-500 py-4 text-sm border-t border-[#1e2235]">加载中...</div>
+                          ) : filtered.length === 0 ? (
+                            <div className="text-center text-slate-600 py-4 text-sm border-t border-[#1e2235]">暂无消息</div>
+                          ) : (
+                            <div className="max-h-48 overflow-y-auto space-y-0.5 bg-[#0d1017] px-3 py-3 border-t border-[#1e2235]">
+                              {filtered.map((m, i) => {
+                                const avatarKey = m.sender || m.senderName;
+                                const displayName = m.senderName || m.sender;
+                                const showSource = activeFilter === "all";
+                                return (
+                                  <div key={i} className="flex items-start gap-2.5 py-1.5">
+                                    <div className={`flex-shrink-0 w-7 h-7 rounded-full ${avatarBg(avatarKey)} flex items-center justify-center text-white text-[10px] font-bold`}>
+                                      {initials(displayName || "?")}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
+                                        <span className={`text-[11px] font-semibold leading-none ${senderColor(avatarKey)}`}>{displayName}</span>
+                                        {showSource && <span className="text-[9px] text-slate-600 truncate max-w-[80px]">{m.chatTitle || m.chatId}</span>}
+                                      </div>
+                                      <div className="bg-[#1a2035] rounded-xl rounded-tl-sm px-2.5 py-1.5 inline-block max-w-full">
+                                        <p className="text-[11px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
+                                        <div className="flex items-center justify-end gap-1 mt-0.5">
+                                          {m.chatType === "channel" && <span className="text-[9px] text-purple-400">频道</span>}
+                                          {m.chatType === "private" && <span className="text-[9px] text-emerald-400">私聊</span>}
+                                          <span className="text-[9px] text-slate-600">{fmtMsgTime(m.timestamp)}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       );
                     })()}
