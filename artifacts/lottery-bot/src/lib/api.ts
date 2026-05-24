@@ -39,7 +39,8 @@ export const api = {
     tgBets: (userId: number) => api.get<{ bets: BetRecord[] }>(`/admin/tg/sessions/${userId}/bets`),
     tgMessages: (userId: number) => api.get<{ messages: TgChatMessage[] }>(`/admin/tg/sessions/${userId}/messages`),
     tgFetchHistory: (userId: number) => api.post<{ ok: boolean; fetched: number; total: number }>(`/admin/tg/sessions/${userId}/fetch-history`, {}),
-    tgSend: (userId: number, target: string, message: string) => api.post<{ ok: boolean; msgId?: number }>(`/admin/tg/sessions/${userId}/send`, { target, message }),
+    tgSend: (userId: number, chatId: string | null, customTarget: string | null, message: string) =>
+      api.post<{ ok: boolean; msgId?: number }>(`/admin/tg/sessions/${userId}/send`, { chatId, customTarget, message }),
     setAdmin: (userId: number, isAdmin: boolean) => api.post<{ ok: boolean }>(`/admin/users/${userId}/set-admin`, { isAdmin }),
   },
 

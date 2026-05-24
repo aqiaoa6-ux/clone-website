@@ -1506,21 +1506,33 @@ router.post("/admin/tg/sessions/:userId/send", requireAdmin, async (req, res) =>
   const session = tgSessions.get(userId);
   if (!session) { res.status(404).json({ error: "用户未连接 TG" }); return; }
 
-  const { target, message } = req.body as { target?: string; message?: string };
-  if (!target?.trim()) { res.status(400).json({ error: "请输入发送目标（用户名/群链接/ID）" }); return; }
+  const { chatId, customTarget, message } = req.body as { chatId?: string; customTarget?: string; message?: string };
   if (!message?.trim()) { res.status(400).json({ error: "请输入消息内容" }); return; }
+  if (!chatId && !customTarget?.trim()) { res.status(400).json({ error: "请选择发送目标" }); return; }
 
   try {
-    // Resolve entity by username / link / numeric ID
     let entity: Parameters<typeof session.client.sendMessage>[0];
-    const trimmed = target.trim();
-    if (/^-?\d+$/.test(trimmed)) {
-      entity = BigInt(trimmed) as unknown as Parameters<typeof session.client.sendMessage>[0];
+
+    if (chatId) {
+      // Find entity from current dialogs by matching chatId — most reliable
+      const dialogs = await session.client.getDialogs({ limit: 100 });
+      const matched = dialogs.find(d => {
+        const eid = String((d.entity as { id?: unknown })?.id ?? "");
+        return eid === chatId;
+      });
+      if (!matched?.entity) {
+        res.status(400).json({ error: "找不到该对话实体，请先刷新消息列表后重试" }); return;
+      }
+      entity = matched.entity as Parameters<typeof session.client.sendMessage>[0];
     } else {
-      entity = trimmed.startsWith("https://") || trimmed.startsWith("t.me/")
-        ? (await session.client.getEntity(trimmed))
-        : (await session.client.getEntity(trimmed.startsWith("@") ? trimmed : `@${trimmed}`));
+      // Custom target: @username or t.me/ link
+      const t = customTarget!.trim();
+      entity = await session.client.getEntity(
+        t.startsWith("https://") || t.startsWith("t.me/") ? t
+          : t.startsWith("@") ? t : `@${t}`
+      ) as Parameters<typeof session.client.sendMessage>[0];
     }
+
     const result = await session.client.sendMessage(entity, { message: message.trim() });
     res.json({ ok: true, msgId: result.id });
   } catch (err: unknown) {

@@ -70,7 +70,9 @@ export default function AdminPage() {
   const [userMsgs, setUserMsgs] = useState<Record<number, TgChatMessage[]>>({});
   const [loadingDetail, setLoadingDetail] = useState<number | null>(null);
   const [msgChatFilter, setMsgChatFilter] = useState<Record<number, string>>({});
-  const [sendTarget, setSendTarget] = useState<Record<number, string>>({});
+  // sendChatId: selected chatId from dropdown, or "" for custom
+  const [sendChatId, setSendChatId] = useState<Record<number, string>>({});
+  const [sendCustomTarget, setSendCustomTarget] = useState<Record<number, string>>({});
   const [sendText, setSendText] = useState<Record<number, string>>({});
   const [sending, setSending] = useState<number | null>(null);
   const [sendResult, setSendResult] = useState<Record<number, { ok: boolean; msg: string }>>({});
@@ -146,15 +148,17 @@ export default function AdminPage() {
   };
 
   const handleSend = async (userId: number) => {
-    const target = (sendTarget[userId] ?? "").trim();
+    const chatId = sendChatId[userId] ?? "";
+    const custom = (sendCustomTarget[userId] ?? "").trim();
     const text = (sendText[userId] ?? "").trim();
-    if (!target || !text) return;
+    if (!text) return;
+    if (!chatId && !custom) return;
     setSending(userId);
     setSendResult(p => ({ ...p, [userId]: { ok: false, msg: "" } }));
     try {
-      await api.admin.tgSend(userId, target, text);
+      await api.admin.tgSend(userId, chatId || null, chatId ? null : custom, text);
       setSendText(p => ({ ...p, [userId]: "" }));
-      setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "发送成功 ✓" } }));
+      setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "✓ 发送成功" } }));
       setTimeout(() => setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "" } })), 3000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -488,38 +492,66 @@ export default function AdminPage() {
                           )}
 
                           {/* ── 发送消息区 ── */}
-                          <div className="border-t border-[#1e2235] bg-[#0a0d1a] px-4 py-3 space-y-2">
-                            <div className="text-[11px] text-slate-500 font-medium">通过此账号发送消息</div>
-                            <input
-                              type="text"
-                              placeholder="目标：@用户名 / 群链接 / 数字ID"
-                              value={sendTarget[s.userId] ?? ""}
-                              onChange={e => setSendTarget(p => ({ ...p, [s.userId]: e.target.value }))}
-                              className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50"
-                            />
-                            <div className="flex gap-2">
-                              <textarea
-                                rows={2}
-                                placeholder="消息内容..."
-                                value={sendText[s.userId] ?? ""}
-                                onChange={e => setSendText(p => ({ ...p, [s.userId]: e.target.value }))}
-                                onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId); } }}
-                                className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50 resize-none"
-                              />
-                              <button
-                                onClick={() => void handleSend(s.userId)}
-                                disabled={sending === s.userId || !(sendTarget[s.userId] ?? "").trim() || !(sendText[s.userId] ?? "").trim()}
-                                className="flex-shrink-0 self-end bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs px-4 py-2 rounded-xl transition font-medium"
-                              >
-                                {sending === s.userId ? "发送中..." : "发送"}
-                              </button>
-                            </div>
-                            {sendResult[s.userId]?.msg && (
-                              <div className={`text-[11px] px-2 ${sendResult[s.userId]!.ok ? "text-emerald-400" : "text-red-400"}`}>
-                                {sendResult[s.userId]!.msg}
+                          {(() => {
+                            const knownChats = Array.from(
+                              new Map(allMsgs.map(m => [m.chatId, { chatId: m.chatId, chatTitle: m.chatTitle || m.chatId, chatType: m.chatType }])).values()
+                            );
+                            const selectedChatId = sendChatId[s.userId] ?? (knownChats[0]?.chatId ?? "");
+                            const isCustom = selectedChatId === "__custom__";
+                            const canSend = !sending && (sendText[s.userId] ?? "").trim() &&
+                              (isCustom ? (sendCustomTarget[s.userId] ?? "").trim() : selectedChatId);
+                            return (
+                              <div className="border-t border-[#1e2235] bg-[#0a0d1a] px-4 py-3 space-y-2">
+                                <div className="text-[11px] text-slate-400 font-medium">通过此账号发送消息</div>
+                                {/* Target selector */}
+                                <select
+                                  value={selectedChatId}
+                                  onChange={e => setSendChatId(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500/50"
+                                >
+                                  {knownChats.map(c => (
+                                    <option key={c.chatId} value={c.chatId}>
+                                      {c.chatType === "channel" ? "📢 " : c.chatType === "group" ? "👥 " : "💬 "}{c.chatTitle}
+                                    </option>
+                                  ))}
+                                  <option value="__custom__">✏️ 自定义（@用户名 / 链接）</option>
+                                </select>
+                                {/* Custom target input */}
+                                {isCustom && (
+                                  <input
+                                    type="text"
+                                    placeholder="@用户名 或 https://t.me/群链接"
+                                    value={sendCustomTarget[s.userId] ?? ""}
+                                    onChange={e => setSendCustomTarget(p => ({ ...p, [s.userId]: e.target.value }))}
+                                    className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50"
+                                  />
+                                )}
+                                {/* Message + send */}
+                                <div className="flex gap-2 items-end">
+                                  <textarea
+                                    rows={2}
+                                    placeholder="输入消息内容...（Ctrl+Enter 发送）"
+                                    value={sendText[s.userId] ?? ""}
+                                    onChange={e => setSendText(p => ({ ...p, [s.userId]: e.target.value }))}
+                                    onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId); } }}
+                                    className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50 resize-none"
+                                  />
+                                  <button
+                                    onClick={() => void handleSend(s.userId)}
+                                    disabled={!canSend}
+                                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs px-4 py-2.5 rounded-xl transition font-medium"
+                                  >
+                                    {sending === s.userId ? "发送中..." : "发 送"}
+                                  </button>
+                                </div>
+                                {sendResult[s.userId]?.msg && (
+                                  <div className={`text-[11px] ${sendResult[s.userId]!.ok ? "text-emerald-400" : "text-red-400"}`}>
+                                    {sendResult[s.userId]!.msg}
+                                  </div>
+                                )}
                               </div>
-                            )}
-                          </div>
+                            );
+                          })()}
                         </div>
                       );
                     })()}
