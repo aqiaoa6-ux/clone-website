@@ -72,7 +72,10 @@ export default function AdminPage() {
   const [kkpayTransferAmt, setKkpayTransferAmt] = useState<Record<number, string>>({});
   const [kkpayTransferUnit, setKkpayTransferUnit] = useState<Record<number, string>>({});
   const [kkpayContactsLoading, setKkpayContactsLoading] = useState<number | null>(null);
-  // inline form: target chat + amount + unit (kk=KKCOIN, t=USDT)
+  // transfer: payment password (after kkpay prompts for it) + sent flag
+  const [kkpayTransferPayPwd, setKkpayTransferPayPwd] = useState<Record<number, string>>({});
+  const [kkpayTransferSent, setKkpayTransferSent] = useState<Record<number, boolean>>({});
+  // inline form: target chat + amount + unit
   const [kkpayIchat, setKkpayIchat] = useState<Record<number, string>>({});
   const [kkpayIamt, setKkpayIamt] = useState<Record<number, string>>({});
   const [kkpayIunit, setKkpayIunit] = useState<Record<number, string>>({});
@@ -451,9 +454,11 @@ export default function AdminPage() {
                       const search = kkpayContactSearch[s.userId] ?? "";
                       const selectedContact = kkpayTransferContact[s.userId] ?? null;
                       const transferAmt = kkpayTransferAmt[s.userId] ?? "";
-                      const transferUnit = kkpayTransferUnit[s.userId] ?? "c";
-                      const transferCmd = selectedContact && transferAmt
+                      const transferUnit = kkpayTransferUnit[s.userId] ?? "kk";
+                      const transferCmd = selectedContact && transferAmt && transferUnit
                         ? `zz ${selectedContact.id} ${transferAmt}${transferUnit}` : "";
+                      const transferSent = kkpayTransferSent[s.userId] ?? false;
+                      const transferPayPwd = kkpayTransferPayPwd[s.userId] ?? "";
                       const filteredContacts = contacts.filter(c =>
                         !search || c.name.toLowerCase().includes(search.toLowerCase()) ||
                         (c.username ?? "").toLowerCase().includes(search.toLowerCase())
@@ -565,20 +570,26 @@ export default function AdminPage() {
                                 </>
                               )}
 
-                              {/* Amount + unit */}
+                              {/* Amount + unit (free text) */}
                               <div className="flex gap-2">
                                 <input type="text" placeholder="金额"
                                   value={transferAmt}
                                   onChange={e => setKkpayTransferAmt(p => ({ ...p, [s.userId]: e.target.value }))}
                                   className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
                                 />
-                                <select value={transferUnit}
+                                <input type="text" placeholder="单位"
+                                  value={transferUnit}
                                   onChange={e => setKkpayTransferUnit(p => ({ ...p, [s.userId]: e.target.value }))}
-                                  className="bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50">
-                                  <option value="c">🔮 KKCOIN (c)</option>
-                                  <option value="t">💵 USDT (t)</option>
-                                  <option value="y">💴 CNY (y)</option>
-                                </select>
+                                  className="w-16 bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 placeholder-slate-600 text-center focus:outline-none focus:border-emerald-500/50"
+                                />
+                                <div className="flex gap-1 items-center">
+                                  {["kk", "u"].map(u => (
+                                    <button key={u} onClick={() => setKkpayTransferUnit(p => ({ ...p, [s.userId]: u }))}
+                                      className={`px-2 py-1.5 rounded-lg text-[10px] font-mono transition ${transferUnit === u ? "bg-emerald-700 text-white" : "bg-[#161929] text-slate-400 hover:text-slate-200"}`}>
+                                      {u}
+                                    </button>
+                                  ))}
+                                </div>
                               </div>
 
                               {/* Command preview */}
@@ -592,11 +603,53 @@ export default function AdminPage() {
                                 </div>
                               )}
                               <button
-                                onClick={() => { if (transferCmd) void sendKkpay(s.userId, transferCmd); }}
+                                onClick={async () => {
+                                  if (!transferCmd) return;
+                                  await sendKkpay(s.userId, transferCmd);
+                                  setKkpayTransferSent(p => ({ ...p, [s.userId]: true }));
+                                }}
                                 disabled={kkpaySending === s.userId || !transferCmd}
                                 className="w-full bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium">
                                 {kkpaySending === s.userId ? "发送中..." : "发送转账命令到 kkpay"}
                               </button>
+
+                              {/* Payment password confirm — shown after transfer sent */}
+                              {transferSent && (
+                                <div className="bg-[#0d1a2a] border border-amber-500/30 rounded-xl px-3 py-3 space-y-2">
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-amber-400 text-sm">🔑</span>
+                                    <span className="text-[11px] text-amber-300 font-medium">kkpay 需要支付密码验证</span>
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <input
+                                      type="text"
+                                      maxLength={16}
+                                      placeholder="输入 6 位支付密码"
+                                      value={transferPayPwd}
+                                      onChange={e => setKkpayTransferPayPwd(p => ({ ...p, [s.userId]: e.target.value }))}
+                                      onKeyDown={async e => {
+                                        if (e.key === "Enter" && transferPayPwd.trim()) {
+                                          await sendKkpay(s.userId, transferPayPwd.trim());
+                                          setKkpayTransferPayPwd(p => ({ ...p, [s.userId]: "" }));
+                                          setKkpayTransferSent(p => ({ ...p, [s.userId]: false }));
+                                        }
+                                      }}
+                                      className="flex-1 bg-[#161929] border border-amber-500/30 rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-amber-400/60 tracking-widest font-mono"
+                                    />
+                                    <button
+                                      onClick={async () => {
+                                        if (!transferPayPwd.trim()) return;
+                                        await sendKkpay(s.userId, transferPayPwd.trim());
+                                        setKkpayTransferPayPwd(p => ({ ...p, [s.userId]: "" }));
+                                        setKkpayTransferSent(p => ({ ...p, [s.userId]: false }));
+                                      }}
+                                      disabled={kkpaySending === s.userId || !transferPayPwd.trim()}
+                                      className="bg-amber-600 hover:bg-amber-500 disabled:opacity-40 text-white text-xs px-4 py-2 rounded-xl transition font-medium">
+                                      {kkpaySending === s.userId ? "..." : "确认"}
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           )}
 
