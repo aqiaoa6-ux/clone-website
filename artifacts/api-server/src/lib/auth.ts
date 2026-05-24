@@ -91,3 +91,12 @@ export const COOKIE_OPTS = {
   maxAge: TOKEN_EXPIRY * 1000,
   path: "/",
 };
+
+// Must include same Secure/SameSite/HttpOnly flags as COOKIE_OPTS, otherwise
+// browsers following RFC 6265bis won't delete a Secure cookie without them.
+export const CLEAR_COOKIE_OPTS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  path: "/",
+};

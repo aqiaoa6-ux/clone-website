@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { users } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
-import { hashPassword, verifyPassword, createToken, COOKIE_NAME, COOKIE_OPTS } from "../lib/auth";
+import { hashPassword, verifyPassword, createToken, COOKIE_NAME, COOKIE_OPTS, CLEAR_COOKIE_OPTS } from "../lib/auth";
 import { requireAuth } from "../middleware/requireAuth";
 
 const router = Router();
@@ -60,7 +60,7 @@ router.post("/auth/login", async (req, res) => {
 });
 
 router.post("/auth/logout", (_req, res) => {
-  res.clearCookie(COOKIE_NAME, { path: "/" });
+  res.clearCookie(COOKIE_NAME, CLEAR_COOKIE_OPTS);
   res.json({ ok: true });
 });
 
