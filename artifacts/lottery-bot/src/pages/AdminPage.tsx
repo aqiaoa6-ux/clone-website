@@ -103,6 +103,15 @@ export default function AdminPage() {
     if (tab === "users") void loadUsers();
   }, [tab]);
 
+  // Auto-poll messages every 4s while message panel is open
+  useEffect(() => {
+    if (!expandedUser || expandedView !== "messages") return;
+    const uid = expandedUser;
+    const id = setInterval(() => { void silentRefresh(uid); }, 4000);
+    return () => clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedUser, expandedView]);
+
   const loadCards = async () => {
     setLoadingCards(true);
     try { const { cards: c } = await api.admin.listCards(); setCards(c); }
