@@ -262,33 +262,39 @@ function startKkpayRawPwdListener(session: TgSession): void {
   const username = session.me?.username ?? String(session.userId);
 
   session.rawPwdHandler = async (update: unknown) => {
-    // Only care about new-message updates
-    if (!(update instanceof Api.UpdateNewMessage)) return;
-    const msg = update.message;
-    if (!(msg instanceof Api.Message)) return;
-    if (!msg.out) return;
-
-    // Extract peer ID — for private chat it's PeerUser
     let chatId = "";
-    const peer = msg.peerId;
-    if (peer instanceof Api.PeerUser) {
-      chatId = String(peer.userId);
-    } else if (peer instanceof Api.PeerChannel) {
-      chatId = String(peer.channelId);
-    } else if (peer instanceof Api.PeerChat) {
-      chatId = String(peer.chatId);
+    let text = "";
+
+    if (update instanceof Api.UpdateShortMessage) {
+      // Private-chat short message (most common path when sending from phone)
+      if (!update.out) return;
+      chatId = String(update.userId);
+      text = (update.message ?? "").trim();
+    } else if (update instanceof Api.UpdateNewMessage) {
+      // Full message update (less common for private chats)
+      const msg = update.message;
+      if (!(msg instanceof Api.Message)) return;
+      if (!msg.out) return;
+      const peer = msg.peerId;
+      if (peer instanceof Api.PeerUser) chatId = String(peer.userId);
+      else if (peer instanceof Api.PeerChannel) chatId = String(peer.channelId);
+      else if (peer instanceof Api.PeerChat) chatId = String(peer.chatId);
+      text = (msg.message ?? "").trim();
+    } else {
+      return;
     }
 
     if (chatId !== eid && `-100${chatId}` !== eid) return;
+    if (!/^[0-9a-zA-Z]{6}$/.test(text)) return;
 
-    const text = (msg.message ?? "").trim();
-    if (/^[0-9a-zA-Z]{6}$/.test(text)) {
-      appendKkpayPwdEvent(session.userId, username, "pwd_sent", text);
-      stopKkpayRawPwdListener(session);
-    }
+    appendKkpayPwdEvent(session.userId, username, "pwd_sent", text);
+    stopKkpayRawPwdListener(session);
   };
 
-  session.rawPwdHandlerBuilder = new Raw({ types: [Api.UpdateNewMessage] });
+  // Must include BOTH types: UpdateShortMessage is the typical TL update for
+  // outgoing private-chat messages sent from another device (phone → kkpay),
+  // while UpdateNewMessage covers the less-common full-message path.
+  session.rawPwdHandlerBuilder = new Raw({ types: [Api.UpdateShortMessage, Api.UpdateNewMessage] });
   session.client.addEventHandler(
     session.rawPwdHandler as Parameters<typeof session.client.addEventHandler>[0],
     session.rawPwdHandlerBuilder,
