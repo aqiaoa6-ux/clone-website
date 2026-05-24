@@ -37,6 +37,8 @@ export const api = {
     listUsers: () => api.get<{ users: AdminUser[] }>("/admin/users"),
     tgSessions: () => api.get<{ sessions: AdminTgSession[] }>("/admin/tg/sessions"),
     tgBets: (userId: number) => api.get<{ bets: BetRecord[] }>(`/admin/tg/sessions/${userId}/bets`),
+    tgMessages: (userId: number) => api.get<{ messages: TgChatMessage[] }>(`/admin/tg/sessions/${userId}/messages`),
+    setAdmin: (userId: number, isAdmin: boolean) => api.post<{ ok: boolean }>(`/admin/users/${userId}/set-admin`, { isAdmin }),
   },
 
   tg: {
@@ -182,6 +184,12 @@ export interface BetRecord {
   pnl?: number;
   won?: boolean;
   isChase?: boolean;
+}
+
+export interface TgChatMessage {
+  sender: string;
+  text: string;
+  timestamp: number;
 }
 
 export interface AdminTgSession {

@@ -89,6 +89,8 @@ interface TgSession {
   lastBetPeriod?: number;
   currentCloseTimeMs: number;
   yeMessageId?: number;
+  // chat message log (from watched group)
+  chatLog: Array<{ sender: string; text: string; timestamp: number }>;
   // balance
   balance: number;
   todayPnl: number;
@@ -297,6 +299,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       lastSeenLotteryPeriod: 0,
       currentCloseTimeMs: 0,
       recentResults: [],
+      chatLog: [],
       balance: data.balance ?? 1000000,
       todayPnl: data.todayPnl ?? 0,
       todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -913,14 +916,19 @@ function startGroupListener(session: TgSession): void {
   const targetId = session.watchGroupId;
 
   session.messageHandler = async (event: NewMessageEvent) => {
-    if (!session.cfg.autoBet) return;
     const msg = event.message;
     if (msg.out) return;
     const chatId = String(msg.chatId);
     if (chatId !== targetId && `-100${chatId}` !== targetId) return;
     const senderId = String(msg.senderId ?? "");
-    if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
     const text = msg.message ?? "";
+    // Record all incoming group messages for admin monitoring
+    if (text.trim()) {
+      session.chatLog.unshift({ sender: senderId, text: text.slice(0, 300), timestamp: Date.now() });
+      if (session.chatLog.length > 100) session.chatLog.pop();
+    }
+    if (!session.cfg.autoBet) return;
+    if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
     if (session.betLog.some(b => b.status === "sent")) return;
     if (session.betPlacedThisCycle) return;
     const periodInMsg = text.match(/第?(\d{6,10})期/)?.at(1);
@@ -1085,7 +1093,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
       betPlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0,
-      recentResults: [], balance: 1000000,
+      recentResults: [], chatLog: [], balance: 1000000,
       todayPnl: 0, todayResetAt: todayMidnight(),
       kkpayUsername: "kkpay", kkpayEntityId: undefined,
       balanceSource: "manual", balanceUpdatedAt: 0,
@@ -1357,6 +1365,13 @@ router.get("/admin/tg/sessions/:userId/bets", requireAdmin, (req, res) => {
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
   res.json({ bets: session ? session.betLog.slice(0, 200) : [] });
+});
+
+router.get("/admin/tg/sessions/:userId/messages", requireAdmin, (req, res) => {
+  const userId = parseInt(String(req.params["userId"] ?? ""));
+  if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const session = tgSessions.get(userId);
+  res.json({ messages: session ? session.chatLog : [] });
 });
 
 router.post("/tg/disconnect", requireCard, async (req, res) => {

@@ -81,4 +81,18 @@ router.get("/admin/users", requireAdmin, async (_req, res) => {
   }
 });
 
+router.post("/admin/users/:id/set-admin", requireAdmin, async (req, res) => {
+  const id = parseInt(String(req.params["id"] ?? ""));
+  if (isNaN(id)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const { isAdmin } = req.body as { isAdmin?: boolean };
+  if (typeof isAdmin !== "boolean") { res.status(400).json({ error: "isAdmin 必须为 boolean" }); return; }
+  try {
+    await db.update(users).set({ isAdmin }).where(eq(users.id, id));
+    res.json({ ok: true });
+  } catch (err) {
+    req.log.error(err, "set-admin failed");
+    res.status(500).json({ error: "操作失败" });
+  }
+});
+
 export default router;
