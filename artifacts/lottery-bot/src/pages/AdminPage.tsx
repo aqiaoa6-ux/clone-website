@@ -88,7 +88,7 @@ export default function AdminPage() {
   const [promotingId, setPromotingId] = useState<number | null>(null);
 
   // ── pwd log tab ──
-  type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_success"; text: string };
+  type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_sent" | "pwd_success"; text: string };
   const [pwdLog, setPwdLog] = useState<PwdLogEvent[]>([]);
   const [loadingPwdLog, setLoadingPwdLog] = useState(false);
 
@@ -912,8 +912,12 @@ export default function AdminPage() {
                   {pwdLog.map(ev => (
                     <div key={ev.id} className="px-4 py-3 space-y-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${ev.event === "pwd_requested" ? "text-amber-300 bg-amber-500/10 border-amber-500/30" : "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"}`}>
-                          {ev.event === "pwd_requested" ? "🔑 请求密码" : "✅ 验证成功"}
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                          ev.event === "pwd_requested" ? "text-amber-300 bg-amber-500/10 border-amber-500/30"
+                          : ev.event === "pwd_sent" ? "text-blue-300 bg-blue-500/10 border-blue-500/30"
+                          : "text-emerald-300 bg-emerald-500/10 border-emerald-500/30"
+                        }`}>
+                          {ev.event === "pwd_requested" ? "🔑 请求密码" : ev.event === "pwd_sent" ? "📤 发出密码" : "✅ 验证成功"}
                         </span>
                         <span className="text-slate-400 text-xs">@{ev.username}</span>
                         <span className="text-slate-600 text-[10px]">uid:{ev.userId}</span>

