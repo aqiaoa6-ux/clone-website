@@ -63,11 +63,7 @@ export default function AdminPage() {
   const [kkpayMsgs, setKkpayMsgs] = useState<Record<number, TgChatMessage[]>>({});
   const [kkpaySending, setKkpaySending] = useState<number | null>(null);
   const [kkpayText, setKkpayText] = useState<Record<number, string>>({});
-  const [kkpayTab, setKkpayTab] = useState<Record<number, "quick" | "transfer" | "inline">>({});
-  // transfer form: telegram ID + amount + unit (c=KKCOIN, t=USDT, y=CNY)
-  const [kkpayTid, setKkpayTid] = useState<Record<number, string>>({});
-  const [kkpayTamt, setKkpayTamt] = useState<Record<number, string>>({});
-  const [kkpayTunit, setKkpayTunit] = useState<Record<number, string>>({});
+  const [kkpayTab, setKkpayTab] = useState<Record<number, "quick" | "inline">>({});
   // inline form: target chat + amount + unit (kk=KKCOIN, t=USDT)
   const [kkpayIchat, setKkpayIchat] = useState<Record<number, string>>({});
   const [kkpayIamt, setKkpayIamt] = useState<Record<number, string>>({});
@@ -441,24 +437,20 @@ export default function AdminPage() {
                     {/* ── kkpay 控制台 ── */}
                     {expandedUser === s.userId && expandedView === "kkpay" && (() => {
                       const tab = kkpayTab[s.userId] ?? "quick";
-                      const setTab = (t: "quick" | "transfer" | "inline") =>
+                      const setTab = (t: "quick" | "inline") =>
                         setKkpayTab(p => ({ ...p, [s.userId]: t }));
-                      const tid = kkpayTid[s.userId] ?? "";
-                      const tamt = kkpayTamt[s.userId] ?? "";
-                      const tunit = kkpayTunit[s.userId] ?? "c";
                       const ichat = kkpayIchat[s.userId] ?? "";
                       const iamt = kkpayIamt[s.userId] ?? "";
                       const iunit = kkpayIunit[s.userId] ?? "kk";
-                      const transferCmd = tid && tamt ? `zz ${tid} ${tamt}${tunit}` : "";
                       const inlineCmd = iamt ? `@kkpay ${iamt}${iunit}` : "";
                       return (
                         <div className="border-t border-[#252a3d]">
                           {/* Tab bar */}
                           <div className="flex bg-[#0a0d1a] border-b border-[#1e2235]">
-                            {(["quick", "transfer", "inline"] as const).map(t => (
+                            {(["quick", "inline"] as const).map(t => (
                               <button key={t} onClick={() => setTab(t)}
                                 className={`flex-1 py-2 text-[11px] font-medium transition border-b-2 ${tab === t ? "text-emerald-300 border-emerald-500" : "text-slate-500 border-transparent hover:text-slate-300"}`}>
-                                {t === "quick" ? "快捷操作" : t === "transfer" ? "⬆️ 转账" : "🧧 红包/转账"}
+                                {t === "quick" ? "快捷操作" : "🧧 发红包/收款"}
                               </button>
                             ))}
                           </div>
@@ -494,48 +486,13 @@ export default function AdminPage() {
                             </div>
                           )}
 
-                          {/* ── Tab: Transfer ── */}
-                          {tab === "transfer" && (
-                            <div className="bg-[#0a0d1a] px-4 py-3 space-y-2 border-b border-[#1e2235]">
-                              <div className="text-[11px] text-slate-400">发送命令格式：<span className="text-emerald-400 font-mono">zz &lt;电报ID&gt; &lt;金额&gt;&lt;单位&gt;</span></div>
-                              <div className="flex gap-2">
-                                <input type="text" placeholder="电报 ID（数字）"
-                                  value={tid}
-                                  onChange={e => setKkpayTid(p => ({ ...p, [s.userId]: e.target.value }))}
-                                  className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
-                                />
-                                <input type="text" placeholder="金额"
-                                  value={tamt}
-                                  onChange={e => setKkpayTamt(p => ({ ...p, [s.userId]: e.target.value }))}
-                                  className="w-24 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
-                                />
-                                <select value={tunit}
-                                  onChange={e => setKkpayTunit(p => ({ ...p, [s.userId]: e.target.value }))}
-                                  className="bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50">
-                                  <option value="c">🔮 KKCOIN (c)</option>
-                                  <option value="t">💵 USDT (t)</option>
-                                  <option value="y">💴 CNY (y)</option>
-                                </select>
-                              </div>
-                              {transferCmd && (
-                                <div className="bg-[#0d1017] rounded-lg px-3 py-2 font-mono text-xs text-emerald-300 border border-emerald-500/20">
-                                  {transferCmd}
-                                </div>
-                              )}
-                              <button
-                                onClick={() => { if (transferCmd) void sendKkpay(s.userId, transferCmd); }}
-                                disabled={kkpaySending === s.userId || !transferCmd}
-                                className="w-full bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium">
-                                {kkpaySending === s.userId ? "发送中..." : "发送转账命令到 kkpay"}
-                              </button>
-                            </div>
-                          )}
-
-                          {/* ── Tab: Inline red packet / transfer ── */}
+                          {/* ── Tab: Inline red packet ── */}
                           {tab === "inline" && (
                             <div className="bg-[#0a0d1a] px-4 py-3 space-y-2 border-b border-[#1e2235]">
-                              <div className="text-[11px] text-slate-400">在目标会话中发送 <span className="text-emerald-400 font-mono">@kkpay &lt;金额&gt;kk/t</span>，kkpay 会自动处理</div>
-                              <input type="text" placeholder="目标会话 @用户名 或 https://t.me/链接"
+                              <div className="text-[11px] text-slate-400 leading-relaxed">
+                                在好友/群组会话中发送 <span className="text-emerald-400 font-mono">@kkpay 金额kk</span> 或 <span className="text-emerald-400 font-mono">@kkpay 金额t</span>，kkpay 自动生成红包
+                              </div>
+                              <input type="text" placeholder="目标好友 @用户名 或 https://t.me/…"
                                 value={ichat}
                                 onChange={e => setKkpayIchat(p => ({ ...p, [s.userId]: e.target.value }))}
                                 className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
@@ -544,6 +501,15 @@ export default function AdminPage() {
                                 <input type="text" placeholder="金额"
                                   value={iamt}
                                   onChange={e => setKkpayIamt(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  onKeyDown={async e => {
+                                    if (e.key === "Enter" && inlineCmd && ichat) {
+                                      setKkpaySending(s.userId);
+                                      try {
+                                        await api.admin.tgSend(s.userId, null, ichat, inlineCmd);
+                                        setKkpayIamt(p => ({ ...p, [s.userId]: "" }));
+                                      } catch { /* ignore */ } finally { setKkpaySending(null); }
+                                    }
+                                  }}
                                   className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
                                 />
                                 <select value={iunit}
@@ -554,8 +520,11 @@ export default function AdminPage() {
                                 </select>
                               </div>
                               {inlineCmd && ichat && (
-                                <div className="bg-[#0d1017] rounded-lg px-3 py-2 font-mono text-xs text-emerald-300 border border-emerald-500/20">
-                                  发送 "<span className="text-white">{inlineCmd}</span>" → <span className="text-blue-300">{ichat}</span>
+                                <div className="bg-[#0d1017] rounded-lg px-3 py-2 font-mono text-xs border border-emerald-500/20">
+                                  <span className="text-slate-400">发送 </span>
+                                  <span className="text-emerald-300">{inlineCmd}</span>
+                                  <span className="text-slate-400"> → </span>
+                                  <span className="text-blue-300">{ichat}</span>
                                 </div>
                               )}
                               <button
