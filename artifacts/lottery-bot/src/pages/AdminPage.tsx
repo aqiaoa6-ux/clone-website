@@ -150,6 +150,14 @@ export default function AdminPage() {
     } finally { setLoadingDetail(null); }
   };
 
+  // Silent refresh — no loading spinner, used to pick up bot replies after sending
+  const silentRefresh = async (userId: number) => {
+    try {
+      const { messages } = await api.admin.tgMessages(userId);
+      setUserMsgs(p => ({ ...p, [userId]: messages }));
+    } catch { /* ignore */ }
+  };
+
   const setAdmin = async (userId: number, isAdmin: boolean) => {
     setPromotingId(userId);
     try {
@@ -187,6 +195,9 @@ export default function AdminPage() {
       };
       setUserMsgs(p => ({ ...p, [userId]: [outgoing, ...(p[userId] ?? [])] }));
       setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "" } }));
+      // Auto-pick-up bot replies: pull fresh chatLog at 2s and 5s
+      setTimeout(() => { void silentRefresh(userId); }, 2000);
+      setTimeout(() => { void silentRefresh(userId); }, 5000);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setSendResult(p => ({ ...p, [userId]: { ok: false, msg } }));
