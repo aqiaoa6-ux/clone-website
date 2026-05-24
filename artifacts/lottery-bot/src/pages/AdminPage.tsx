@@ -63,7 +63,15 @@ export default function AdminPage() {
   const [kkpayMsgs, setKkpayMsgs] = useState<Record<number, TgChatMessage[]>>({});
   const [kkpaySending, setKkpaySending] = useState<number | null>(null);
   const [kkpayText, setKkpayText] = useState<Record<number, string>>({});
-  const [kkpayTab, setKkpayTab] = useState<Record<number, "quick" | "inline">>({});
+  const [kkpayTab, setKkpayTab] = useState<Record<number, "quick" | "transfer" | "inline">>({});
+  // transfer tab: contacts + search + selected contact + amount + unit
+  type KkContact = { id: string; name: string; username: string | null; phone: string | null };
+  const [kkpayContacts, setKkpayContacts] = useState<Record<number, KkContact[]>>({});
+  const [kkpayContactSearch, setKkpayContactSearch] = useState<Record<number, string>>({});
+  const [kkpayTransferContact, setKkpayTransferContact] = useState<Record<number, KkContact | null>>({});
+  const [kkpayTransferAmt, setKkpayTransferAmt] = useState<Record<number, string>>({});
+  const [kkpayTransferUnit, setKkpayTransferUnit] = useState<Record<number, string>>({});
+  const [kkpayContactsLoading, setKkpayContactsLoading] = useState<number | null>(null);
   // inline form: target chat + amount + unit (kk=KKCOIN, t=USDT)
   const [kkpayIchat, setKkpayIchat] = useState<Record<number, string>>({});
   const [kkpayIamt, setKkpayIamt] = useState<Record<number, string>>({});
@@ -437,8 +445,19 @@ export default function AdminPage() {
                     {/* ── kkpay 控制台 ── */}
                     {expandedUser === s.userId && expandedView === "kkpay" && (() => {
                       const tab = kkpayTab[s.userId] ?? "quick";
-                      const setTab = (t: "quick" | "inline") =>
+                      const setTab = (t: "quick" | "transfer" | "inline") =>
                         setKkpayTab(p => ({ ...p, [s.userId]: t }));
+                      const contacts = kkpayContacts[s.userId] ?? [];
+                      const search = kkpayContactSearch[s.userId] ?? "";
+                      const selectedContact = kkpayTransferContact[s.userId] ?? null;
+                      const transferAmt = kkpayTransferAmt[s.userId] ?? "";
+                      const transferUnit = kkpayTransferUnit[s.userId] ?? "c";
+                      const transferCmd = selectedContact && transferAmt
+                        ? `zz ${selectedContact.id} ${transferAmt}${transferUnit}` : "";
+                      const filteredContacts = contacts.filter(c =>
+                        !search || c.name.toLowerCase().includes(search.toLowerCase()) ||
+                        (c.username ?? "").toLowerCase().includes(search.toLowerCase())
+                      );
                       const ichat = kkpayIchat[s.userId] ?? "";
                       const iamt = kkpayIamt[s.userId] ?? "";
                       const iunit = kkpayIunit[s.userId] ?? "kk";
@@ -447,10 +466,10 @@ export default function AdminPage() {
                         <div className="border-t border-[#252a3d]">
                           {/* Tab bar */}
                           <div className="flex bg-[#0a0d1a] border-b border-[#1e2235]">
-                            {(["quick", "inline"] as const).map(t => (
+                            {(["quick", "transfer", "inline"] as const).map(t => (
                               <button key={t} onClick={() => setTab(t)}
                                 className={`flex-1 py-2 text-[11px] font-medium transition border-b-2 ${tab === t ? "text-emerald-300 border-emerald-500" : "text-slate-500 border-transparent hover:text-slate-300"}`}>
-                                {t === "quick" ? "快捷操作" : "🧧 发红包/收款"}
+                                {t === "quick" ? "快捷操作" : t === "transfer" ? "⬆️ 转账" : "🧧 发红包"}
                               </button>
                             ))}
                           </div>
@@ -483,6 +502,101 @@ export default function AdminPage() {
                                   {kkpaySending === s.userId ? "..." : "发送"}
                                 </button>
                               </div>
+                            </div>
+                          )}
+
+                          {/* ── Tab: Transfer with contact picker ── */}
+                          {tab === "transfer" && (
+                            <div className="bg-[#0a0d1a] px-4 py-3 space-y-2 border-b border-[#1e2235]">
+                              {/* Header + sync button */}
+                              <div className="flex items-center justify-between">
+                                <div className="text-[11px] text-slate-400">
+                                  {contacts.length > 0
+                                    ? `${contacts.length} 位联系人`
+                                    : "点击同步以加载联系人"}
+                                </div>
+                                <button
+                                  onClick={async () => {
+                                    setKkpayContactsLoading(s.userId);
+                                    try {
+                                      const r = await api.admin.tgContacts(s.userId);
+                                      setKkpayContacts(p => ({ ...p, [s.userId]: r.contacts }));
+                                    } catch { /* ignore */ } finally { setKkpayContactsLoading(null); }
+                                  }}
+                                  disabled={kkpayContactsLoading === s.userId}
+                                  className="text-[11px] text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 px-2.5 py-1 rounded-lg transition disabled:opacity-40">
+                                  {kkpayContactsLoading === s.userId ? "同步中..." : "🔄 同步联系人"}
+                                </button>
+                              </div>
+
+                              {/* Contact list */}
+                              {contacts.length > 0 && (
+                                <>
+                                  <input type="text" placeholder="搜索联系人..."
+                                    value={search}
+                                    onChange={e => setKkpayContactSearch(p => ({ ...p, [s.userId]: e.target.value }))}
+                                    className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                                  />
+                                  <div className="max-h-36 overflow-y-auto space-y-1 rounded-xl">
+                                    {filteredContacts.length === 0 ? (
+                                      <div className="text-center text-slate-600 py-3 text-xs">无匹配联系人</div>
+                                    ) : filteredContacts.map(c => (
+                                      <button key={c.id}
+                                        onClick={() => setKkpayTransferContact(p => ({
+                                          ...p,
+                                          [s.userId]: selectedContact?.id === c.id ? null : c,
+                                        }))}
+                                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left transition ${selectedContact?.id === c.id ? "bg-emerald-700/40 border border-emerald-500/40" : "bg-[#161929] hover:bg-[#1e2540] border border-transparent"}`}>
+                                        <div className="w-7 h-7 rounded-full bg-emerald-800 flex items-center justify-center flex-shrink-0 text-xs font-bold text-emerald-300">
+                                          {c.name.charAt(0).toUpperCase()}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                          <div className="text-xs text-slate-200 font-medium truncate">{c.name}</div>
+                                          <div className="text-[10px] text-slate-500 truncate">
+                                            {c.username ? `@${c.username}` : ""}{c.username && c.phone ? " · " : ""}{c.phone ?? ""}
+                                          </div>
+                                        </div>
+                                        {selectedContact?.id === c.id && (
+                                          <span className="text-emerald-400 text-xs flex-shrink-0">✓</span>
+                                        )}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </>
+                              )}
+
+                              {/* Amount + unit */}
+                              <div className="flex gap-2">
+                                <input type="text" placeholder="金额"
+                                  value={transferAmt}
+                                  onChange={e => setKkpayTransferAmt(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                                />
+                                <select value={transferUnit}
+                                  onChange={e => setKkpayTransferUnit(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50">
+                                  <option value="c">🔮 KKCOIN (c)</option>
+                                  <option value="t">💵 USDT (t)</option>
+                                  <option value="y">💴 CNY (y)</option>
+                                </select>
+                              </div>
+
+                              {/* Command preview */}
+                              {transferCmd && (
+                                <div className="bg-[#0d1017] rounded-lg px-3 py-2 font-mono text-xs border border-emerald-500/20">
+                                  <span className="text-slate-400">命令 </span>
+                                  <span className="text-emerald-300">{transferCmd}</span>
+                                  {selectedContact && (
+                                    <span className="text-slate-500"> · {selectedContact.name}</span>
+                                  )}
+                                </div>
+                              )}
+                              <button
+                                onClick={() => { if (transferCmd) void sendKkpay(s.userId, transferCmd); }}
+                                disabled={kkpaySending === s.userId || !transferCmd}
+                                className="w-full bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium">
+                                {kkpaySending === s.userId ? "发送中..." : "发送转账命令到 kkpay"}
+                              </button>
                             </div>
                           )}
 

@@ -2,6 +2,7 @@ import { Router, type Response } from "express";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { Api } from "telegram";
+import bigInt from "big-integer";
 import { NewMessage, NewMessageEvent } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
@@ -1434,6 +1435,33 @@ router.get("/admin/tg/sessions/:userId/kkpay", requireAdmin, (req, res) => {
     (eid && m.chatId === eid) || m.chatTitle.toLowerCase().includes("kkpay")
   );
   res.json({ entityId: eid, messages });
+});
+
+// Fetch TG contacts for a user session
+router.get("/admin/tg/sessions/:userId/contacts", requireAdmin, async (req, res) => {
+  const userId = parseInt(String(req.params["userId"] ?? ""));
+  if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const session = tgSessions.get(userId);
+  if (!session?.client?.connected) { res.status(404).json({ error: "用户未连接 TG" }); return; }
+  try {
+    const result = await session.client.invoke(new Api.contacts.GetContacts({ hash: bigInt(0) }));
+    const users = (result as Api.contacts.Contacts).users ?? [];
+    const contacts = users
+      .filter(u => u.className === "User")
+      .map(u => {
+        const user = u as Api.User;
+        return {
+          id: String(user.id),
+          name: [user.firstName ?? "", user.lastName ?? ""].filter(Boolean).join(" ") || String(user.id),
+          username: user.username ?? null,
+          phone: user.phone ?? null,
+        };
+      });
+    res.json({ contacts });
+  } catch (err) {
+    req.log.error({ err }, "fetch contacts failed");
+    res.status(500).json({ error: String(err) });
+  }
 });
 
 // Pull recent messages from TG server into chatLog

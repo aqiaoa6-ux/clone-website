@@ -12,6 +12,7 @@
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
+    "big-integer": "^1.6.52",
     "bufferutil": "^4.1.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
