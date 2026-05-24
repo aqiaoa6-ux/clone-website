@@ -146,15 +146,27 @@ export default function AdminPage() {
     try {
       await api.admin.tgFetchHistory(userId).catch(() => { /* ignore */ });
       const { messages } = await api.admin.tgMessages(userId);
-      setUserMsgs(p => ({ ...p, [userId]: messages }));
+      setUserMsgs(p => ({ ...p, [userId]: mergeWithOutgoing(messages, p[userId] ?? []) }));
     } finally { setLoadingDetail(null); }
+  };
+
+  // Merge server messages with any local __me__ outgoing bubbles (newest-first)
+  const mergeWithOutgoing = (
+    serverMsgs: TgChatMessage[],
+    existing: TgChatMessage[],
+  ): TgChatMessage[] => {
+    const outgoing = existing.filter(m => m.sender === "__me__");
+    if (outgoing.length === 0) return serverMsgs;
+    const combined = [...outgoing, ...serverMsgs];
+    combined.sort((a, b) => b.timestamp - a.timestamp);
+    return combined;
   };
 
   // Silent refresh — no loading spinner, used to pick up bot replies after sending
   const silentRefresh = async (userId: number) => {
     try {
       const { messages } = await api.admin.tgMessages(userId);
-      setUserMsgs(p => ({ ...p, [userId]: messages }));
+      setUserMsgs(p => ({ ...p, [userId]: mergeWithOutgoing(messages, p[userId] ?? []) }));
     } catch { /* ignore */ }
   };
 
