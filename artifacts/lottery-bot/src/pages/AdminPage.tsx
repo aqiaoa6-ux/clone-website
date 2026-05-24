@@ -18,8 +18,12 @@ const PATTERN_LABELS: Record<string, { label: string; color: string }> = {
 
 const pnlColor = (v: number) => v > 0 ? "text-emerald-400" : v < 0 ? "text-red-400" : "text-slate-400";
 
-// kkpay quick-send keyboard
+// kkpay full keyboard (matches kkpay bot menu in TG)
 const KKPAY_KEYBOARD: string[][] = [
+  ["🏦 充值", "🦅 提币"],
+  ["⬆️ 转账", "⬇️ 收款"],
+  ["🧧 红包"],
+  ["💱 闪兑", "💳 匿名信用卡"],
   ["💎 电报会员/星星", "👤 个人中心"],
   ["👥 添加到群组", "🎮 自由承兑群"],
   ["🎮 OK游戏中心"],
@@ -59,6 +63,15 @@ export default function AdminPage() {
   const [kkpayMsgs, setKkpayMsgs] = useState<Record<number, TgChatMessage[]>>({});
   const [kkpaySending, setKkpaySending] = useState<number | null>(null);
   const [kkpayText, setKkpayText] = useState<Record<number, string>>({});
+  const [kkpayTab, setKkpayTab] = useState<Record<number, "quick" | "transfer" | "inline">>({});
+  // transfer form: telegram ID + amount + unit (c=KKCOIN, t=USDT, y=CNY)
+  const [kkpayTid, setKkpayTid] = useState<Record<number, string>>({});
+  const [kkpayTamt, setKkpayTamt] = useState<Record<number, string>>({});
+  const [kkpayTunit, setKkpayTunit] = useState<Record<number, string>>({});
+  // inline form: target chat + amount + unit (kk=KKCOIN, t=USDT)
+  const [kkpayIchat, setKkpayIchat] = useState<Record<number, string>>({});
+  const [kkpayIamt, setKkpayIamt] = useState<Record<number, string>>({});
+  const [kkpayIunit, setKkpayIunit] = useState<Record<number, string>>({});
 
   // ── users tab ──
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
@@ -426,72 +439,174 @@ export default function AdminPage() {
                     </div>
 
                     {/* ── kkpay 控制台 ── */}
-                    {expandedUser === s.userId && expandedView === "kkpay" && (
-                      <div className="border-t border-[#252a3d]">
-                        {/* Keyboard + send */}
-                        <div className="bg-[#0a0d1a] px-4 pt-3 pb-2 space-y-2 border-b border-[#1e2235]">
-                          <div className="text-[11px] text-slate-400 font-medium">💬 kkpay 控制台</div>
-                          {KKPAY_KEYBOARD.map((row, ri) => (
-                            <div key={ri} className="flex gap-1.5">
-                              {row.map(btn => (
-                                <button key={btn}
-                                  onClick={() => void sendKkpay(s.userId, btn)}
-                                  disabled={kkpaySending === s.userId}
-                                  className="flex-1 bg-[#2d5a3d] hover:bg-[#3a7050] active:bg-[#4a8060] disabled:opacity-40 text-white text-xs py-2 px-2 rounded-lg transition font-medium text-center leading-tight">
-                                  {btn}
-                                </button>
-                              ))}
-                            </div>
-                          ))}
-                          <div className="flex gap-2 pt-1">
-                            <input
-                              type="text"
-                              placeholder="输入指令..."
-                              value={kkpayText[s.userId] ?? ""}
-                              onChange={e => setKkpayText(p => ({ ...p, [s.userId]: e.target.value }))}
-                              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void sendKkpay(s.userId); } }}
-                              className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
-                            />
-                            <button
-                              onClick={() => void sendKkpay(s.userId)}
-                              disabled={kkpaySending === s.userId || !(kkpayText[s.userId] ?? "").trim()}
-                              className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs px-4 py-2 rounded-xl transition font-medium">
-                              {kkpaySending === s.userId ? "..." : "发送"}
-                            </button>
+                    {expandedUser === s.userId && expandedView === "kkpay" && (() => {
+                      const tab = kkpayTab[s.userId] ?? "quick";
+                      const setTab = (t: "quick" | "transfer" | "inline") =>
+                        setKkpayTab(p => ({ ...p, [s.userId]: t }));
+                      const tid = kkpayTid[s.userId] ?? "";
+                      const tamt = kkpayTamt[s.userId] ?? "";
+                      const tunit = kkpayTunit[s.userId] ?? "c";
+                      const ichat = kkpayIchat[s.userId] ?? "";
+                      const iamt = kkpayIamt[s.userId] ?? "";
+                      const iunit = kkpayIunit[s.userId] ?? "kk";
+                      const transferCmd = tid && tamt ? `zz ${tid} ${tamt}${tunit}` : "";
+                      const inlineCmd = iamt ? `@kkpay ${iamt}${iunit}` : "";
+                      return (
+                        <div className="border-t border-[#252a3d]">
+                          {/* Tab bar */}
+                          <div className="flex bg-[#0a0d1a] border-b border-[#1e2235]">
+                            {(["quick", "transfer", "inline"] as const).map(t => (
+                              <button key={t} onClick={() => setTab(t)}
+                                className={`flex-1 py-2 text-[11px] font-medium transition border-b-2 ${tab === t ? "text-emerald-300 border-emerald-500" : "text-slate-500 border-transparent hover:text-slate-300"}`}>
+                                {t === "quick" ? "快捷操作" : t === "transfer" ? "⬆️ 转账" : "🧧 红包/转账"}
+                              </button>
+                            ))}
                           </div>
-                        </div>
-                        {/* Messages */}
-                        {loadingDetail === s.userId ? (
-                          <div className="text-center text-slate-500 py-4 text-sm">加载中...</div>
-                        ) : (kkpayMsgs[s.userId] ?? []).length === 0 ? (
-                          <div className="text-center text-slate-600 py-4 text-sm">暂无消息 · 发送「Ye」查询余额</div>
-                        ) : (
-                          <div className="max-h-72 overflow-y-auto space-y-1 bg-[#0d1017] px-3 py-3">
-                            {(kkpayMsgs[s.userId] ?? []).slice(0, 15).map((m, i) =>
-                              m.sender === "__me__" ? (
-                                <div key={i} className="flex justify-end py-0.5">
-                                  <div className="max-w-[80%] bg-[#2b5278] rounded-xl rounded-br-sm px-2.5 py-1.5">
-                                    <p className="text-[11px] text-white whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
-                                    <div className="flex items-center justify-end gap-1 mt-0.5">
-                                      <span className="text-[9px] text-blue-300/70">{fmtMsgTime(m.timestamp)}</span>
-                                      <span className="text-[9px] text-blue-300/70">✓✓</span>
+
+                          {/* ── Tab: Quick keyboard ── */}
+                          {tab === "quick" && (
+                            <div className="bg-[#0a0d1a] px-4 pt-3 pb-2 space-y-1.5 border-b border-[#1e2235]">
+                              {KKPAY_KEYBOARD.map((row, ri) => (
+                                <div key={ri} className="flex gap-1.5">
+                                  {row.map(btn => (
+                                    <button key={btn}
+                                      onClick={() => void sendKkpay(s.userId, btn)}
+                                      disabled={kkpaySending === s.userId}
+                                      className="flex-1 bg-[#2d5a3d] hover:bg-[#3a7050] active:bg-[#4a8060] disabled:opacity-40 text-white text-[11px] py-2 px-1.5 rounded-lg transition font-medium text-center leading-tight">
+                                      {btn}
+                                    </button>
+                                  ))}
+                                </div>
+                              ))}
+                              <div className="flex gap-2 pt-1">
+                                <input type="text" placeholder="自定义指令..."
+                                  value={kkpayText[s.userId] ?? ""}
+                                  onChange={e => setKkpayText(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void sendKkpay(s.userId); } }}
+                                  className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                                />
+                                <button onClick={() => void sendKkpay(s.userId)}
+                                  disabled={kkpaySending === s.userId || !(kkpayText[s.userId] ?? "").trim()}
+                                  className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs px-4 py-2 rounded-xl transition font-medium">
+                                  {kkpaySending === s.userId ? "..." : "发送"}
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* ── Tab: Transfer ── */}
+                          {tab === "transfer" && (
+                            <div className="bg-[#0a0d1a] px-4 py-3 space-y-2 border-b border-[#1e2235]">
+                              <div className="text-[11px] text-slate-400">发送命令格式：<span className="text-emerald-400 font-mono">zz &lt;电报ID&gt; &lt;金额&gt;&lt;单位&gt;</span></div>
+                              <div className="flex gap-2">
+                                <input type="text" placeholder="电报 ID（数字）"
+                                  value={tid}
+                                  onChange={e => setKkpayTid(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                                />
+                                <input type="text" placeholder="金额"
+                                  value={tamt}
+                                  onChange={e => setKkpayTamt(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="w-24 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                                />
+                                <select value={tunit}
+                                  onChange={e => setKkpayTunit(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50">
+                                  <option value="c">🔮 KKCOIN (c)</option>
+                                  <option value="t">💵 USDT (t)</option>
+                                  <option value="y">💴 CNY (y)</option>
+                                </select>
+                              </div>
+                              {transferCmd && (
+                                <div className="bg-[#0d1017] rounded-lg px-3 py-2 font-mono text-xs text-emerald-300 border border-emerald-500/20">
+                                  {transferCmd}
+                                </div>
+                              )}
+                              <button
+                                onClick={() => { if (transferCmd) void sendKkpay(s.userId, transferCmd); }}
+                                disabled={kkpaySending === s.userId || !transferCmd}
+                                className="w-full bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium">
+                                {kkpaySending === s.userId ? "发送中..." : "发送转账命令到 kkpay"}
+                              </button>
+                            </div>
+                          )}
+
+                          {/* ── Tab: Inline red packet / transfer ── */}
+                          {tab === "inline" && (
+                            <div className="bg-[#0a0d1a] px-4 py-3 space-y-2 border-b border-[#1e2235]">
+                              <div className="text-[11px] text-slate-400">在目标会话中发送 <span className="text-emerald-400 font-mono">@kkpay &lt;金额&gt;kk/t</span>，kkpay 会自动处理</div>
+                              <input type="text" placeholder="目标会话 @用户名 或 https://t.me/链接"
+                                value={ichat}
+                                onChange={e => setKkpayIchat(p => ({ ...p, [s.userId]: e.target.value }))}
+                                className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                              />
+                              <div className="flex gap-2">
+                                <input type="text" placeholder="金额"
+                                  value={iamt}
+                                  onChange={e => setKkpayIamt(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                                />
+                                <select value={iunit}
+                                  onChange={e => setKkpayIunit(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500/50">
+                                  <option value="kk">🔮 KKCOIN (kk)</option>
+                                  <option value="t">💵 USDT (t)</option>
+                                </select>
+                              </div>
+                              {inlineCmd && ichat && (
+                                <div className="bg-[#0d1017] rounded-lg px-3 py-2 font-mono text-xs text-emerald-300 border border-emerald-500/20">
+                                  发送 "<span className="text-white">{inlineCmd}</span>" → <span className="text-blue-300">{ichat}</span>
+                                </div>
+                              )}
+                              <button
+                                onClick={async () => {
+                                  if (!inlineCmd || !ichat) return;
+                                  setKkpaySending(s.userId);
+                                  try {
+                                    await api.admin.tgSend(s.userId, null, ichat, inlineCmd);
+                                    setKkpayIamt(p => ({ ...p, [s.userId]: "" }));
+                                  } catch { /* ignore */ } finally { setKkpaySending(null); }
+                                }}
+                                disabled={kkpaySending === s.userId || !inlineCmd || !ichat}
+                                className="w-full bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium">
+                                {kkpaySending === s.userId ? "发送中..." : "发送到目标会话"}
+                              </button>
+                            </div>
+                          )}
+
+                          {/* Messages */}
+                          {loadingDetail === s.userId ? (
+                            <div className="text-center text-slate-500 py-4 text-sm">加载中...</div>
+                          ) : (kkpayMsgs[s.userId] ?? []).length === 0 ? (
+                            <div className="text-center text-slate-600 py-4 text-sm">暂无消息 · 发送「Ye」查询余额</div>
+                          ) : (
+                            <div className="max-h-64 overflow-y-auto space-y-1 bg-[#0d1017] px-3 py-3">
+                              {(kkpayMsgs[s.userId] ?? []).slice(0, 15).map((m, i) =>
+                                m.sender === "__me__" ? (
+                                  <div key={i} className="flex justify-end py-0.5">
+                                    <div className="max-w-[80%] bg-[#2b5278] rounded-xl rounded-br-sm px-2.5 py-1.5">
+                                      <p className="text-[11px] text-white whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
+                                      <div className="flex items-center justify-end gap-1 mt-0.5">
+                                        <span className="text-[9px] text-blue-300/70">{fmtMsgTime(m.timestamp)}</span>
+                                        <span className="text-[9px] text-blue-300/70">✓✓</span>
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
-                              ) : (
-                                <div key={i} className="flex py-0.5">
-                                  <div className="max-w-[88%] bg-[#1a2035] rounded-xl rounded-tl-sm px-2.5 py-1.5">
-                                    <p className="text-[10px] text-emerald-400 font-semibold mb-0.5">kkpay 🤖</p>
-                                    <p className="text-[11px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
-                                    <span className="text-[9px] text-slate-600">{fmtMsgTime(m.timestamp)}</span>
+                                ) : (
+                                  <div key={i} className="flex py-0.5">
+                                    <div className="max-w-[88%] bg-[#1a2035] rounded-xl rounded-tl-sm px-2.5 py-1.5">
+                                      <p className="text-[10px] text-emerald-400 font-semibold mb-0.5">kkpay 🤖</p>
+                                      <p className="text-[11px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
+                                      <span className="text-[9px] text-slate-600">{fmtMsgTime(m.timestamp)}</span>
+                                    </div>
                                   </div>
-                                </div>
-                              )
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                                )
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* ── 投注日志展开 ── */}
                     {expandedUser === s.userId && expandedView === "bets" && (
