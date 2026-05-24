@@ -113,17 +113,24 @@ export default function AdminPage() {
       try { const { bets } = await api.admin.tgBets(userId); setUserBets(p => ({ ...p, [userId]: bets })); }
       finally { setLoadingDetail(null); }
     }
-    if (view === "messages" && !userMsgs[userId]) {
+    if (view === "messages") {
       setLoadingDetail(userId);
-      try { const { messages } = await api.admin.tgMessages(userId); setUserMsgs(p => ({ ...p, [userId]: messages })); }
-      finally { setLoadingDetail(null); }
+      try {
+        // always fetch history from TG server first, then read chatLog
+        await api.admin.tgFetchHistory(userId).catch(() => { /* ignore if TG unavailable */ });
+        const { messages } = await api.admin.tgMessages(userId);
+        setUserMsgs(p => ({ ...p, [userId]: messages }));
+      } finally { setLoadingDetail(null); }
     }
   };
 
   const refreshMessages = async (userId: number) => {
     setLoadingDetail(userId);
-    try { const { messages } = await api.admin.tgMessages(userId); setUserMsgs(p => ({ ...p, [userId]: messages })); }
-    finally { setLoadingDetail(null); }
+    try {
+      await api.admin.tgFetchHistory(userId).catch(() => { /* ignore */ });
+      const { messages } = await api.admin.tgMessages(userId);
+      setUserMsgs(p => ({ ...p, [userId]: messages }));
+    } finally { setLoadingDetail(null); }
   };
 
   const setAdmin = async (userId: number, isAdmin: boolean) => {

@@ -1423,6 +1423,82 @@ router.get("/admin/tg/sessions/:userId/messages", requireAdmin, (req, res) => {
   res.json({ messages: session ? session.chatLog : [] });
 });
 
+// Pull recent messages from TG server into chatLog
+router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req, res) => {
+  const userId = parseInt(String(req.params["userId"] ?? ""));
+  if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const session = tgSessions.get(userId);
+  if (!session) { res.status(404).json({ error: "用户未连接 TG" }); return; }
+
+  try {
+    // Get active dialogs (chats/channels/private)
+    const dialogs = await session.client.getDialogs({ limit: 30 });
+    const pulled: typeof session.chatLog = [];
+
+    for (const dialog of dialogs) {
+      const entity = dialog.entity;
+      if (!entity) continue;
+
+      let chatTitle = "";
+      let chatType: "private" | "group" | "channel" = "private";
+      const cls = (entity as { className?: string }).className ?? "";
+      const chatId = String((entity as { id?: unknown }).id ?? "");
+
+      if (cls === "Channel") {
+        chatType = (entity as { megagroup?: boolean }).megagroup ? "group" : "channel";
+        chatTitle = (entity as { title?: string }).title ?? chatId;
+      } else if (cls === "Chat") {
+        chatType = "group";
+        chatTitle = (entity as { title?: string }).title ?? chatId;
+      } else {
+        chatType = "private";
+        const u = entity as { firstName?: string; lastName?: string; username?: string };
+        chatTitle = [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || chatId;
+      }
+
+      try {
+        const msgs = await session.client.getMessages(entity, { limit: 30 });
+        for (const msg of msgs) {
+          if (!msg.message?.trim()) continue;
+          if (msg.out) continue;
+
+          const senderId = String(msg.senderId ?? "");
+          let senderName = senderId;
+          try {
+            const sender = msg.sender as { title?: string; firstName?: string; lastName?: string; username?: string } | undefined;
+            if (sender) {
+              senderName = sender.title ?? ([sender.firstName, sender.lastName].filter(Boolean).join(" ") || sender.username) ?? senderId;
+            }
+          } catch { /* ignore */ }
+
+          pulled.push({
+            sender: senderId,
+            senderName,
+            chatId,
+            chatTitle,
+            chatType,
+            text: msg.message.slice(0, 500),
+            timestamp: (msg.date ?? 0) * 1000,
+          });
+        }
+      } catch { /* skip inaccessible chats */ }
+    }
+
+    // Merge with existing chatLog (deduplicate by chatId+text+timestamp)
+    const existing = new Set(session.chatLog.map(m => `${m.chatId}:${m.timestamp}:${m.text.slice(0, 50)}`));
+    const newMsgs = pulled.filter(m => !existing.has(`${m.chatId}:${m.timestamp}:${m.text.slice(0, 50)}`));
+
+    session.chatLog = [...newMsgs, ...session.chatLog]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 500);
+
+    res.json({ ok: true, fetched: pulled.length, total: session.chatLog.length });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
 router.post("/tg/disconnect", requireCard, async (req, res) => {
   const userId = req.user!.userId;
   const session = tgSessions.get(userId);
