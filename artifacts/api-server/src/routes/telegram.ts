@@ -1795,6 +1795,44 @@ router.get("/admin/tg/sessions/:userId/contacts", requireAdmin, async (req, res)
   }
 });
 
+// Fetch TG dialogs (recent chats) for red-packet target picker
+router.get("/admin/tg/sessions/:userId/dialogs", requireAdmin, async (req, res) => {
+  const userId = parseInt(String(req.params["userId"] ?? ""));
+  if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const session = tgSessions.get(userId);
+  if (!session?.client?.connected) { res.status(404).json({ error: "用户未连接 TG" }); return; }
+  try {
+    const dialogs = await session.client.getDialogs({ limit: 50 });
+    const result = dialogs
+      .filter(d => d.entity)
+      .map(d => {
+        const entity = d.entity!;
+        const cls = (entity as { className?: string }).className ?? "";
+        const id = String((entity as { id?: unknown }).id ?? "");
+        let name = "";
+        let type: "private" | "group" | "channel" = "private";
+        let username: string | null = null;
+        if (cls === "Channel") {
+          type = (entity as { megagroup?: boolean }).megagroup ? "group" : "channel";
+          name = (entity as { title?: string }).title ?? id;
+        } else if (cls === "Chat") {
+          type = "group";
+          name = (entity as { title?: string }).title ?? id;
+        } else {
+          type = "private";
+          const u = entity as { firstName?: string; lastName?: string; username?: string };
+          name = [u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || id;
+          username = u.username ?? null;
+        }
+        return { id, name, type, username };
+      });
+    res.json({ dialogs: result });
+  } catch (err) {
+    req.log.error({ err }, "fetch dialogs failed");
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 // Pull recent messages from TG server into chatLog
 router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));

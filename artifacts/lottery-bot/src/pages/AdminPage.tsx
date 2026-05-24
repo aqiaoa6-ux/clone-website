@@ -63,7 +63,7 @@ export default function AdminPage() {
   const [kkpayMsgs, setKkpayMsgs] = useState<Record<number, TgChatMessage[]>>({});
   const [kkpaySending, setKkpaySending] = useState<number | null>(null);
   const [kkpayText, setKkpayText] = useState<Record<number, string>>({});
-  const [kkpayTab, setKkpayTab] = useState<Record<number, "quick" | "transfer" | "inline">>({});
+  const [kkpayTab, setKkpayTab] = useState<Record<number, "quick" | "transfer" | "inline" | "redpacket">>({});
   // transfer tab: contacts + search + selected contact + amount + unit
   type KkContact = { id: string; name: string; username: string | null; phone: string | null };
   const [kkpayContacts, setKkpayContacts] = useState<Record<number, KkContact[]>>({});
@@ -81,6 +81,14 @@ export default function AdminPage() {
   const [kkpayIunit, setKkpayIunit] = useState<Record<number, string>>({});
   // button press loading: "userId:msgId:btnText"
   const [kkpayBtnLoading, setKkpayBtnLoading] = useState<string | null>(null);
+  // redpacket tab: dialogs picker + amount
+  type KkDialog = { id: string; name: string; type: "private" | "group" | "channel"; username: string | null };
+  const [kkpayDialogs, setKkpayDialogs] = useState<Record<number, KkDialog[]>>({});
+  const [kkpayDialogsLoading, setKkpayDialogsLoading] = useState<number | null>(null);
+  const [kkpayDialogSearch, setKkpayDialogSearch] = useState<Record<number, string>>({});
+  const [kkpayRpDialog, setKkpayRpDialog] = useState<Record<number, KkDialog | null>>({});
+  const [kkpayRpAmt, setKkpayRpAmt] = useState<Record<number, string>>({});
+  const [kkpayRpUnit, setKkpayRpUnit] = useState<Record<number, string>>({});
 
   // ── users tab ──
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
@@ -462,7 +470,7 @@ export default function AdminPage() {
                     {/* ── kkpay 控制台 ── */}
                     {expandedUser === s.userId && expandedView === "kkpay" && (() => {
                       const tab = kkpayTab[s.userId] ?? "quick";
-                      const setTab = (t: "quick" | "transfer" | "inline") =>
+                      const setTab = (t: "quick" | "transfer" | "inline" | "redpacket") =>
                         setKkpayTab(p => ({ ...p, [s.userId]: t }));
                       const contacts = kkpayContacts[s.userId] ?? [];
                       const search = kkpayContactSearch[s.userId] ?? "";
@@ -481,14 +489,28 @@ export default function AdminPage() {
                       const iamt = kkpayIamt[s.userId] ?? "";
                       const iunit = kkpayIunit[s.userId] ?? "kk";
                       const inlineCmd = iamt ? `@kkpay ${iamt}${iunit}` : "";
+                      // redpacket tab locals
+                      const rpDialogs = kkpayDialogs[s.userId] ?? [];
+                      const rpSearch = kkpayDialogSearch[s.userId] ?? "";
+                      const rpSelected = kkpayRpDialog[s.userId] ?? null;
+                      const rpAmt = kkpayRpAmt[s.userId] ?? "";
+                      const rpUnit = kkpayRpUnit[s.userId] ?? "kk";
+                      const rpCmd = rpAmt ? `@kkpay ${rpAmt}${rpUnit}` : "";
+                      const rpTarget = rpSelected
+                        ? (rpSelected.username ? `@${rpSelected.username}` : rpSelected.id)
+                        : "";
+                      const filteredDialogs = rpDialogs.filter(d =>
+                        !rpSearch || d.name.toLowerCase().includes(rpSearch.toLowerCase()) ||
+                        (d.username ?? "").toLowerCase().includes(rpSearch.toLowerCase())
+                      );
                       return (
                         <div className="border-t border-[#252a3d]">
                           {/* Tab bar */}
                           <div className="flex bg-[#0a0d1a] border-b border-[#1e2235]">
-                            {(["quick", "transfer", "inline"] as const).map(t => (
+                            {(["quick", "transfer", "inline", "redpacket"] as const).map(t => (
                               <button key={t} onClick={() => setTab(t)}
                                 className={`flex-1 py-2 text-[11px] font-medium transition border-b-2 ${tab === t ? "text-emerald-300 border-emerald-500" : "text-slate-500 border-transparent hover:text-slate-300"}`}>
-                                {t === "quick" ? "快捷操作" : t === "transfer" ? "⬆️ 转账" : "🧧 发红包"}
+                                {t === "quick" ? "快捷" : t === "transfer" ? "⬆️ 转账" : t === "inline" ? "发红包" : "🧧 红包转账"}
                               </button>
                             ))}
                           </div>
@@ -720,6 +742,168 @@ export default function AdminPage() {
                                 className="w-full bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium">
                                 {kkpaySending === s.userId ? "发送中..." : "发送到目标会话"}
                               </button>
+                            </div>
+                          )}
+
+                          {/* ── Tab: 红包转账 ── */}
+                          {tab === "redpacket" && (
+                            <div className="bg-[#0a0d1a] px-4 py-3 space-y-2.5 border-b border-[#1e2235]">
+                              {/* Step 1 — trigger kkpay red packet menu */}
+                              <div className="flex items-center gap-2">
+                                <div className="flex-1">
+                                  <div className="text-[11px] text-slate-400 leading-relaxed">
+                                    <span className="text-amber-400 font-medium">第一步：</span> 触发 kkpay 红包菜单，同步最近对话
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={async () => {
+                                    setKkpayDialogsLoading(s.userId);
+                                    try {
+                                      await sendKkpay(s.userId, "🧧 红包");
+                                      const r = await api.admin.tgDialogs(s.userId);
+                                      setKkpayDialogs(p => ({ ...p, [s.userId]: r.dialogs }));
+                                    } catch { /* ignore */ } finally { setKkpayDialogsLoading(null); }
+                                  }}
+                                  disabled={kkpayDialogsLoading === s.userId || kkpaySending === s.userId}
+                                  className="flex-shrink-0 flex items-center gap-1.5 bg-red-700/70 hover:bg-red-600/80 disabled:opacity-40 text-white text-[11px] px-3 py-1.5 rounded-xl transition font-medium border border-red-500/30">
+                                  {kkpayDialogsLoading === s.userId ? (
+                                    <span className="animate-pulse">加载中...</span>
+                                  ) : (
+                                    <><span>🧧</span><span>触发 + 同步</span></>
+                                  )}
+                                </button>
+                              </div>
+
+                              {/* Step 2 — contact / dialog picker */}
+                              {rpDialogs.length > 0 && (
+                                <>
+                                  <div className="text-[11px] text-slate-400">
+                                    <span className="text-amber-400 font-medium">第二步：</span> 选择收款人（共 {rpDialogs.length} 个对话）
+                                  </div>
+                                  <input
+                                    type="text"
+                                    placeholder="🔍 搜索..."
+                                    value={rpSearch}
+                                    onChange={e => setKkpayDialogSearch(p => ({ ...p, [s.userId]: e.target.value }))}
+                                    className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                                  />
+                                  <div className="max-h-44 overflow-y-auto rounded-xl divide-y divide-[#1e2235] border border-[#252a3d]">
+                                    {filteredDialogs.length === 0 ? (
+                                      <div className="text-center text-slate-600 py-4 text-xs">无匹配对话</div>
+                                    ) : filteredDialogs.map(d => {
+                                      const isSelected = rpSelected?.id === d.id;
+                                      const icon = d.type === "group" ? "👥" : d.type === "channel" ? "📢" : "💬";
+                                      const avatarLetter = d.name.charAt(0).toUpperCase();
+                                      const avatarColors: Record<string, string> = {
+                                        private: "bg-blue-800 text-blue-300",
+                                        group: "bg-violet-800 text-violet-300",
+                                        channel: "bg-amber-800 text-amber-300",
+                                      };
+                                      return (
+                                        <button
+                                          key={d.id}
+                                          onClick={() => {
+                                            setKkpayRpDialog(p => ({ ...p, [s.userId]: isSelected ? null : d }));
+                                          }}
+                                          className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition ${isSelected ? "bg-red-700/20 border-l-2 border-red-500" : "bg-[#0f1220] hover:bg-[#161929]"}`}>
+                                          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold ${avatarColors[d.type]}`}>
+                                            {avatarLetter}
+                                          </div>
+                                          <div className="flex-1 min-w-0">
+                                            <div className="text-xs text-slate-100 font-medium truncate">{d.name}</div>
+                                            <div className="text-[10px] text-slate-500 truncate">
+                                              {icon} {d.username ? `@${d.username}` : `ID: ${d.id}`}
+                                            </div>
+                                          </div>
+                                          {isSelected && <span className="text-red-400 text-xs flex-shrink-0 font-bold">✓</span>}
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                </>
+                              )}
+
+                              {/* Step 3 — amount input (auto-shown after selection) */}
+                              {rpSelected && (
+                                <>
+                                  <div className="text-[11px] text-slate-400">
+                                    <span className="text-amber-400 font-medium">第三步：</span> 设置红包金额
+                                  </div>
+                                  <div className="bg-[#161929] border border-red-500/20 rounded-xl px-3 py-2 flex items-center gap-2">
+                                    <span className="text-lg">🧧</span>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-[10px] text-slate-500">收款人</div>
+                                      <div className="text-xs text-slate-200 font-medium truncate">{rpSelected.name}</div>
+                                      {rpSelected.username && <div className="text-[10px] text-blue-400">@{rpSelected.username}</div>}
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-2 items-center">
+                                    <input
+                                      type="number"
+                                      placeholder="金额"
+                                      min="0"
+                                      step="0.1"
+                                      value={rpAmt}
+                                      onChange={e => setKkpayRpAmt(p => ({ ...p, [s.userId]: e.target.value }))}
+                                      className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-red-500/50"
+                                    />
+                                    <select
+                                      value={rpUnit}
+                                      onChange={e => setKkpayRpUnit(p => ({ ...p, [s.userId]: e.target.value }))}
+                                      className="bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-red-500/50">
+                                      <option value="kk">🔮 KKCOIN</option>
+                                      <option value="t">💵 USDT</option>
+                                    </select>
+                                  </div>
+                                  {/* Command preview (editable) */}
+                                  {rpCmd && (
+                                    <div className="bg-[#0d1017] rounded-xl px-3 py-2.5 space-y-1 border border-red-500/20">
+                                      <div className="text-[10px] text-slate-500">发送命令预览 <span className="text-slate-600">· 可直接修改</span></div>
+                                      <input
+                                        type="text"
+                                        value={rpCmd}
+                                        onChange={e => {
+                                          const v = e.target.value;
+                                          const m = v.match(/^@kkpay\s+([\d.]+)(kk|t)$/i);
+                                          if (m) {
+                                            setKkpayRpAmt(p => ({ ...p, [s.userId]: m[1] }));
+                                            setKkpayRpUnit(p => ({ ...p, [s.userId]: m[2].toLowerCase() }));
+                                          }
+                                        }}
+                                        className="w-full bg-transparent text-emerald-300 font-mono text-xs focus:outline-none"
+                                      />
+                                      <div className="text-[10px] text-slate-500">
+                                        发送至 <span className="text-blue-400">{rpSelected.name}</span>
+                                        {rpTarget && <span className="text-slate-600"> ({rpTarget})</span>}
+                                      </div>
+                                    </div>
+                                  )}
+                                  <button
+                                    onClick={async () => {
+                                      if (!rpCmd || !rpTarget) return;
+                                      setKkpaySending(s.userId);
+                                      try {
+                                        await api.admin.tgSend(s.userId, null, rpTarget, rpCmd);
+                                        setKkpayRpAmt(p => ({ ...p, [s.userId]: "" }));
+                                        void fetchKkpay(s.userId);
+                                      } catch { /* ignore */ } finally { setKkpaySending(null); }
+                                    }}
+                                    disabled={kkpaySending === s.userId || !rpCmd || !rpTarget}
+                                    className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-red-700 to-rose-600 hover:from-red-600 hover:to-rose-500 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium shadow-lg shadow-red-900/20">
+                                    {kkpaySending === s.userId ? (
+                                      <span className="animate-pulse">发送中...</span>
+                                    ) : (
+                                      <><span>🧧</span><span>发出红包</span></>
+                                    )}
+                                  </button>
+                                </>
+                              )}
+
+                              {rpDialogs.length === 0 && (
+                                <div className="text-center text-slate-600 py-6 text-xs">
+                                  点击「触发 + 同步」按钮开始
+                                </div>
+                              )}
                             </div>
                           )}
 
