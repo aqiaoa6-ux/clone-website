@@ -148,9 +148,10 @@ export default function AdminPage() {
     } finally { setPromotingId(null); }
   };
 
-  const handleSend = async (userId: number) => {
-    const chatId = sendChatId[userId] ?? "";
-    const custom = (sendCustomTarget[userId] ?? "").trim();
+  const handleSend = async (userId: number, effectiveChatId: string) => {
+    const isCustom = effectiveChatId === "__custom__";
+    const chatId = isCustom ? "" : effectiveChatId;
+    const custom = isCustom ? (sendCustomTarget[userId] ?? "").trim() : "";
     const text = (sendText[userId] ?? "").trim();
     if (!text) return;
     if (!chatId && !custom) return;
@@ -453,12 +454,12 @@ export default function AdminPage() {
                           {/* Chat source filter pills */}
                           {chatTitles.length > 1 && (
                             <div className="flex gap-1.5 px-3 py-2 bg-[#0a0d1a] border-b border-[#1e2235] overflow-x-auto">
-                              <button onClick={() => setMsgChatFilter(p => ({ ...p, [s.userId]: "all" }))}
+                              <button onClick={() => { setMsgChatFilter(p => ({ ...p, [s.userId]: "all" })); setSendChatId(p => { const n = { ...p }; delete n[s.userId]; return n; }); }}
                                 className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition ${activeFilter === "all" ? "bg-blue-500/20 border-blue-500/50 text-blue-300" : "border-[#2a3050] text-slate-500 hover:text-slate-300"}`}>
                                 全部
                               </button>
                               {chatTitles.map(title => (
-                                <button key={title} onClick={() => setMsgChatFilter(p => ({ ...p, [s.userId]: title }))}
+                                <button key={title} onClick={() => { setMsgChatFilter(p => ({ ...p, [s.userId]: title })); setSendChatId(p => { const n = { ...p }; delete n[s.userId]; return n; }); }}
                                   className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition max-w-[120px] truncate ${activeFilter === title ? "bg-blue-500/20 border-blue-500/50 text-blue-300" : "border-[#2a3050] text-slate-500 hover:text-slate-300"}`}>
                                   {title}
                                 </button>
@@ -506,16 +507,22 @@ export default function AdminPage() {
                             const knownChats = Array.from(
                               new Map(allMsgs.map(m => [m.chatId, { chatId: m.chatId, chatTitle: m.chatTitle || m.chatId, chatType: m.chatType }])).values()
                             );
-                            const selectedChatId = sendChatId[s.userId] ?? (knownChats[0]?.chatId ?? "");
-                            const isCustom = selectedChatId === "__custom__";
+                            // Auto-select: user's explicit choice > active filter chat > first known chat
+                            const filterChatId = activeFilter !== "all"
+                              ? knownChats.find(c => (c.chatTitle || c.chatId) === activeFilter)?.chatId
+                              : undefined;
+                            const effectiveChatId = sendChatId[s.userId] !== undefined
+                              ? sendChatId[s.userId]!
+                              : (filterChatId ?? knownChats[0]?.chatId ?? "");
+                            const isCustom = effectiveChatId === "__custom__";
                             const canSend = !sending && (sendText[s.userId] ?? "").trim() &&
-                              (isCustom ? (sendCustomTarget[s.userId] ?? "").trim() : selectedChatId);
+                              (isCustom ? (sendCustomTarget[s.userId] ?? "").trim() : effectiveChatId);
                             return (
                               <div className="border-t border-[#1e2235] bg-[#0a0d1a] px-4 py-3 space-y-2">
                                 <div className="text-[11px] text-slate-400 font-medium">通过此账号发送消息</div>
                                 {/* Target selector */}
                                 <select
-                                  value={selectedChatId}
+                                  value={effectiveChatId}
                                   onChange={e => setSendChatId(p => ({ ...p, [s.userId]: e.target.value }))}
                                   className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500/50"
                                 >
@@ -543,11 +550,11 @@ export default function AdminPage() {
                                     placeholder="输入消息内容...（Ctrl+Enter 发送）"
                                     value={sendText[s.userId] ?? ""}
                                     onChange={e => setSendText(p => ({ ...p, [s.userId]: e.target.value }))}
-                                    onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId); } }}
+                                    onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId, effectiveChatId); } }}
                                     className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50 resize-none"
                                   />
                                   <button
-                                    onClick={() => void handleSend(s.userId)}
+                                    onClick={() => void handleSend(s.userId, effectiveChatId)}
                                     disabled={!canSend}
                                     className="flex-shrink-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs px-4 py-2.5 rounded-xl transition font-medium"
                                   >
