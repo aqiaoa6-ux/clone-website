@@ -1,5 +1,29 @@
 [
   {
+    "id": "1779640377553-7zbe3",
+    "timestamp": 1779640377553,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_success",
+    "text": "✅ 支付密码验证成功"
+  },
+  {
+    "id": "1779640348741-5a8be",
+    "timestamp": 1779640348741,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_success",
+    "text": "✅ 支付密码验证成功"
+  },
+  {
+    "id": "1779640346209-l6cp2",
+    "timestamp": 1779640346209,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_sent",
+    "text": "441522"
+  },
+  {
     "id": "1779640112807-xf7jk",
     "timestamp": 1779640112808,
     "userId": 2,

