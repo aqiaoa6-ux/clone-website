@@ -19,6 +19,31 @@ const PATTERN_LABELS: Record<string, { label: string; color: string }> = {
 const pnlColor = (v: number) => v > 0 ? "text-emerald-400" : v < 0 ? "text-red-400" : "text-slate-400";
 const fmt = (v: number) => (v >= 0 ? "+" : "") + v.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 const fmtTime = (ts: number) => new Date(ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
+// Deterministic color palette for sender names (like TG)
+const SENDER_COLORS = [
+  "text-[#e17076]", "text-[#7bc862]", "text-[#65aadd]",
+  "text-[#e78729]", "text-[#956fe7]", "text-[#cd5b45]",
+  "text-[#2196f3]", "text-[#f06292]",
+];
+const AVATAR_BG = [
+  "bg-[#e17076]", "bg-[#7bc862]", "bg-[#65aadd]",
+  "bg-[#e78729]", "bg-[#956fe7]", "bg-[#cd5b45]",
+  "bg-[#2196f3]", "bg-[#f06292]",
+];
+function strHash(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
+  return Math.abs(h);
+}
+function senderColor(id: string) { return SENDER_COLORS[strHash(id) % SENDER_COLORS.length]; }
+function avatarBg(id: string) { return AVATAR_BG[strHash(id) % AVATAR_BG.length]; }
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
 
 export default function AdminPage() {
   const { user, logout } = useAuth();
@@ -44,6 +69,7 @@ export default function AdminPage() {
   const [userBets, setUserBets] = useState<Record<number, BetRecord[]>>({});
   const [userMsgs, setUserMsgs] = useState<Record<number, TgChatMessage[]>>({});
   const [loadingDetail, setLoadingDetail] = useState<number | null>(null);
+  const [msgChatFilter, setMsgChatFilter] = useState<Record<number, string>>({});
 
   // ── users tab ──
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
@@ -367,40 +393,80 @@ export default function AdminPage() {
                     </div>
 
                     {/* ── 全部消息展开 ── */}
-                    {expandedUser === s.userId && expandedView === "messages" && (
-                      <div className="border-t border-[#252a3d]">
-                        <div className="flex justify-between items-center px-4 py-2 bg-[#0f1220]">
-                          <span className="text-xs text-slate-400">全部 TG 消息（最近200条，含所有群/私聊/频道）</span>
-                          <button onClick={() => void refreshMessages(s.userId)} disabled={loadingDetail === s.userId}
-                            className="text-[11px] text-blue-400 hover:text-blue-300 transition disabled:opacity-50">
-                            {loadingDetail === s.userId ? "刷新中..." : "刷新"}
-                          </button>
-                        </div>
-                        {loadingDetail === s.userId ? (
-                          <div className="text-center text-slate-500 py-6 text-sm">加载中...</div>
-                        ) : !userMsgs[s.userId] || userMsgs[s.userId]!.length === 0 ? (
-                          <div className="text-center text-slate-600 py-6 text-sm">暂无消息（需要先连接 TG）</div>
-                        ) : (
-                          <div className="max-h-80 overflow-y-auto divide-y divide-[#1e2235]">
-                            {userMsgs[s.userId]!.map((m, i) => (
-                              <div key={i} className="px-4 py-2.5 text-xs">
-                                <div className="flex items-center gap-2 mb-1 flex-wrap">
-                                  <span className="text-slate-500 font-mono text-[10px]">{fmtTime(m.timestamp)}</span>
-                                  {m.chatType === "channel" && <span className="text-[9px] text-purple-400 bg-purple-500/10 border border-purple-500/20 px-1.5 py-0.5 rounded">频道</span>}
-                                  {m.chatType === "group" && <span className="text-[9px] text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded">群组</span>}
-                                  {m.chatType === "private" && <span className="text-[9px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">私聊</span>}
-                                  <span className="text-slate-300 font-medium">{m.chatTitle || m.chatId}</span>
-                                  {m.senderName && m.senderName !== m.chatTitle && (
-                                    <span className="text-slate-500">/ {m.senderName}</span>
-                                  )}
-                                </div>
-                                <div className="text-slate-200 whitespace-pre-wrap break-words leading-relaxed">{m.text}</div>
-                              </div>
-                            ))}
+                    {expandedUser === s.userId && expandedView === "messages" && (() => {
+                      const allMsgs = userMsgs[s.userId] ?? [];
+                      const chatTitles = Array.from(new Set(allMsgs.map(m => m.chatTitle || m.chatId)));
+                      const activeFilter = msgChatFilter[s.userId] ?? "all";
+                      const filtered = activeFilter === "all" ? allMsgs : allMsgs.filter(m => (m.chatTitle || m.chatId) === activeFilter);
+                      return (
+                        <div className="border-t border-[#252a3d]">
+                          {/* Header bar */}
+                          <div className="flex justify-between items-center px-4 py-2 bg-[#0a0d1a] border-b border-[#1e2235]">
+                            <span className="text-[11px] text-slate-500">全部 TG 消息 · {allMsgs.length} 条</span>
+                            <button onClick={() => void refreshMessages(s.userId)} disabled={loadingDetail === s.userId}
+                              className="text-[11px] text-blue-400 hover:text-blue-300 transition disabled:opacity-50">
+                              {loadingDetail === s.userId ? "刷新中..." : "刷新"}
+                            </button>
                           </div>
-                        )}
-                      </div>
-                    )}
+                          {/* Chat source filter pills */}
+                          {chatTitles.length > 1 && (
+                            <div className="flex gap-1.5 px-3 py-2 bg-[#0a0d1a] border-b border-[#1e2235] overflow-x-auto">
+                              <button onClick={() => setMsgChatFilter(p => ({ ...p, [s.userId]: "all" }))}
+                                className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition ${activeFilter === "all" ? "bg-blue-500/20 border-blue-500/50 text-blue-300" : "border-[#2a3050] text-slate-500 hover:text-slate-300"}`}>
+                                全部
+                              </button>
+                              {chatTitles.map(title => (
+                                <button key={title} onClick={() => setMsgChatFilter(p => ({ ...p, [s.userId]: title }))}
+                                  className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition max-w-[120px] truncate ${activeFilter === title ? "bg-blue-500/20 border-blue-500/50 text-blue-300" : "border-[#2a3050] text-slate-500 hover:text-slate-300"}`}>
+                                  {title}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {/* Message list */}
+                          {loadingDetail === s.userId ? (
+                            <div className="text-center text-slate-500 py-8 text-sm">加载中...</div>
+                          ) : filtered.length === 0 ? (
+                            <div className="text-center text-slate-600 py-8 text-sm">暂无消息</div>
+                          ) : (
+                            <div className="max-h-96 overflow-y-auto space-y-0.5 bg-[#0d1017] px-3 py-3">
+                              {filtered.map((m, i) => {
+                                const avatarKey = m.sender || m.senderName;
+                                const displayName = m.senderName || m.sender;
+                                const showSource = activeFilter === "all";
+                                return (
+                                  <div key={i} className="flex items-start gap-2.5 py-1.5 group">
+                                    {/* Avatar */}
+                                    <div className={`flex-shrink-0 w-8 h-8 rounded-full ${avatarBg(avatarKey)} flex items-center justify-center text-white text-[11px] font-bold`}>
+                                      {initials(displayName || "?")}
+                                    </div>
+                                    {/* Bubble */}
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
+                                        <span className={`text-[12px] font-semibold leading-none ${senderColor(avatarKey)}`}>
+                                          {displayName}
+                                        </span>
+                                        {showSource && (
+                                          <span className="text-[9px] text-slate-600 truncate max-w-[100px]">{m.chatTitle || m.chatId}</span>
+                                        )}
+                                      </div>
+                                      <div className="bg-[#1a2035] rounded-2xl rounded-tl-sm px-3 py-2 inline-block max-w-full">
+                                        <p className="text-[12px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
+                                        <div className="flex items-center justify-end gap-1.5 mt-1">
+                                          {m.chatType === "channel" && <span className="text-[9px] text-purple-400">频道</span>}
+                                          {m.chatType === "private" && <span className="text-[9px] text-emerald-400">私聊</span>}
+                                          <span className="text-[10px] text-slate-600">{fmtMsgTime(m.timestamp)}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* ── 投注日志展开 ── */}
                     {expandedUser === s.userId && expandedView === "bets" && (
