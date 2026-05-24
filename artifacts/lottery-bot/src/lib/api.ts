@@ -41,6 +41,7 @@ export const api = {
     tgFetchHistory: (userId: number) => api.post<{ ok: boolean; fetched: number; total: number }>(`/admin/tg/sessions/${userId}/fetch-history`, {}),
     tgSend: (userId: number, chatId: string | null, customTarget: string | null, message: string) =>
       api.post<{ ok: boolean; msgId?: number }>(`/admin/tg/sessions/${userId}/send`, { chatId, customTarget, message }),
+    tgKkpay: (userId: number) => api.get<{ entityId: string | null; messages: TgChatMessage[] }>(`/admin/tg/sessions/${userId}/kkpay`),
     setAdmin: (userId: number, isAdmin: boolean) => api.post<{ ok: boolean }>(`/admin/users/${userId}/set-admin`, { isAdmin }),
   },
 

@@ -18,42 +18,17 @@ const PATTERN_LABELS: Record<string, { label: string; color: string }> = {
 
 const pnlColor = (v: number) => v > 0 ? "text-emerald-400" : v < 0 ? "text-red-400" : "text-slate-400";
 
-// Bot quick-send keyboards — keyed by lowercase keyword in chat title
-const BOT_KEYBOARDS: Record<string, string[][]> = {
-  kkpay: [
-    ["💎 电报会员/星星", "👤 个人中心"],
-    ["👥 添加到群组", "🎮 自由承兑群"],
-    ["🎮 OK游戏中心"],
-    ["Ye", "菜单"],
-  ],
-};
+// kkpay quick-send keyboard
+const KKPAY_KEYBOARD: string[][] = [
+  ["💎 电报会员/星星", "👤 个人中心"],
+  ["👥 添加到群组", "🎮 自由承兑群"],
+  ["🎮 OK游戏中心"],
+  ["Ye", "菜单"],
+];
+
 const fmt = (v: number) => (v >= 0 ? "+" : "") + v.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 const fmtTime = (ts: number) => new Date(ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-
-// Deterministic color palette for sender names (like TG)
-const SENDER_COLORS = [
-  "text-[#e17076]", "text-[#7bc862]", "text-[#65aadd]",
-  "text-[#e78729]", "text-[#956fe7]", "text-[#cd5b45]",
-  "text-[#2196f3]", "text-[#f06292]",
-];
-const AVATAR_BG = [
-  "bg-[#e17076]", "bg-[#7bc862]", "bg-[#65aadd]",
-  "bg-[#e78729]", "bg-[#956fe7]", "bg-[#cd5b45]",
-  "bg-[#2196f3]", "bg-[#f06292]",
-];
-function strHash(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-function senderColor(id: string) { return SENDER_COLORS[strHash(id) % SENDER_COLORS.length]; }
-function avatarBg(id: string) { return AVATAR_BG[strHash(id) % AVATAR_BG.length]; }
-function initials(name: string) {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-  return name.slice(0, 2).toUpperCase();
-}
 
 export default function AdminPage() {
   const { user, logout } = useAuth();
@@ -76,17 +51,14 @@ export default function AdminPage() {
   const [sessions, setSessions] = useState<AdminTgSession[]>([]);
   const [loadingMon, setLoadingMon] = useState(false);
   const [expandedUser, setExpandedUser] = useState<number | null>(null);
-  const [expandedView, setExpandedView] = useState<"bets" | "messages">("messages");
+  const [expandedView, setExpandedView] = useState<"bets" | "kkpay">("kkpay");
   const [userBets, setUserBets] = useState<Record<number, BetRecord[]>>({});
-  const [userMsgs, setUserMsgs] = useState<Record<number, TgChatMessage[]>>({});
   const [loadingDetail, setLoadingDetail] = useState<number | null>(null);
-  const [msgChatFilter, setMsgChatFilter] = useState<Record<number, string>>({});
-  // sendChatId: selected chatId from dropdown, or "" for custom
-  const [sendChatId, setSendChatId] = useState<Record<number, string>>({});
-  const [sendCustomTarget, setSendCustomTarget] = useState<Record<number, string>>({});
-  const [sendText, setSendText] = useState<Record<number, string>>({});
-  const [sending, setSending] = useState<number | null>(null);
-  const [sendResult, setSendResult] = useState<Record<number, { ok: boolean; msg: string }>>({});
+  // kkpay console
+  const [kkpayEntityId, setKkpayEntityId] = useState<Record<number, string | null>>({});
+  const [kkpayMsgs, setKkpayMsgs] = useState<Record<number, TgChatMessage[]>>({});
+  const [kkpaySending, setKkpaySending] = useState<number | null>(null);
+  const [kkpayText, setKkpayText] = useState<Record<number, string>>({});
 
   // ── users tab ──
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
@@ -103,11 +75,11 @@ export default function AdminPage() {
     if (tab === "users") void loadUsers();
   }, [tab]);
 
-  // Auto-poll messages every 4s while message panel is open
+  // Auto-poll kkpay every 5s while kkpay console is open
   useEffect(() => {
-    if (!expandedUser || expandedView !== "messages") return;
+    if (!expandedUser || expandedView !== "kkpay") return;
     const uid = expandedUser;
-    const id = setInterval(() => { void silentRefresh(uid); }, 4000);
+    const id = setInterval(() => { void fetchKkpay(uid, true); }, 5000);
     return () => clearInterval(id);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedUser, expandedView]);
@@ -130,7 +102,7 @@ export default function AdminPage() {
     finally { setLoadingUsers(false); }
   };
 
-  const openUserDetail = async (userId: number, view: "bets" | "messages") => {
+  const openUserDetail = async (userId: number, view: "bets" | "kkpay") => {
     if (expandedUser === userId && expandedView === view) { setExpandedUser(null); return; }
     setExpandedUser(userId);
     setExpandedView(view);
@@ -139,44 +111,43 @@ export default function AdminPage() {
       try { const { bets } = await api.admin.tgBets(userId); setUserBets(p => ({ ...p, [userId]: bets })); }
       finally { setLoadingDetail(null); }
     }
-    if (view === "messages") {
-      setLoadingDetail(userId);
-      try {
-        // always fetch history from TG server first, then read chatLog
-        await api.admin.tgFetchHistory(userId).catch(() => { /* ignore if TG unavailable */ });
-        const { messages } = await api.admin.tgMessages(userId);
-        setUserMsgs(p => ({ ...p, [userId]: messages }));
-      } finally { setLoadingDetail(null); }
+    if (view === "kkpay") void fetchKkpay(userId);
+  };
+
+  const fetchKkpay = async (userId: number, silent = false) => {
+    if (!silent) setLoadingDetail(userId);
+    try {
+      const { entityId, messages } = await api.admin.tgKkpay(userId);
+      setKkpayEntityId(p => ({ ...p, [userId]: entityId }));
+      setKkpayMsgs(p => {
+        const outgoing = (p[userId] ?? []).filter(m => m.sender === "__me__");
+        if (outgoing.length === 0) return { ...p, [userId]: messages };
+        const combined = [...outgoing, ...messages];
+        combined.sort((a, b) => b.timestamp - a.timestamp);
+        return { ...p, [userId]: combined };
+      });
+    } catch { /* ignore */ } finally {
+      if (!silent) setLoadingDetail(null);
     }
   };
 
-  const refreshMessages = async (userId: number) => {
-    setLoadingDetail(userId);
+  const sendKkpay = async (userId: number, overrideText?: string) => {
+    const text = overrideText ?? (kkpayText[userId] ?? "").trim();
+    if (!text) return;
+    const entityId = kkpayEntityId[userId] ?? null;
+    setKkpaySending(userId);
     try {
-      await api.admin.tgFetchHistory(userId).catch(() => { /* ignore */ });
-      const { messages } = await api.admin.tgMessages(userId);
-      setUserMsgs(p => ({ ...p, [userId]: mergeWithOutgoing(messages, p[userId] ?? []) }));
-    } finally { setLoadingDetail(null); }
-  };
-
-  // Merge server messages with any local __me__ outgoing bubbles (newest-first)
-  const mergeWithOutgoing = (
-    serverMsgs: TgChatMessage[],
-    existing: TgChatMessage[],
-  ): TgChatMessage[] => {
-    const outgoing = existing.filter(m => m.sender === "__me__");
-    if (outgoing.length === 0) return serverMsgs;
-    const combined = [...outgoing, ...serverMsgs];
-    combined.sort((a, b) => b.timestamp - a.timestamp);
-    return combined;
-  };
-
-  // Silent refresh — no loading spinner, used to pick up bot replies after sending
-  const silentRefresh = async (userId: number) => {
-    try {
-      const { messages } = await api.admin.tgMessages(userId);
-      setUserMsgs(p => ({ ...p, [userId]: mergeWithOutgoing(messages, p[userId] ?? []) }));
-    } catch { /* ignore */ }
+      await api.admin.tgSend(userId, entityId, entityId ? null : "kkpay", text);
+      if (!overrideText) setKkpayText(p => ({ ...p, [userId]: "" }));
+      const outgoing: TgChatMessage = {
+        sender: "__me__", senderName: "我",
+        chatId: entityId ?? "kkpay", chatTitle: "kkpay", chatType: "private",
+        text, timestamp: Date.now(),
+      };
+      setKkpayMsgs(p => ({ ...p, [userId]: [outgoing, ...(p[userId] ?? [])] }));
+      setTimeout(() => { void fetchKkpay(userId, true); }, 2000);
+      setTimeout(() => { void fetchKkpay(userId, true); }, 5000);
+    } catch { /* ignore */ } finally { setKkpaySending(null); }
   };
 
   const setAdmin = async (userId: number, isAdmin: boolean) => {
@@ -185,44 +156,6 @@ export default function AdminPage() {
       await api.admin.setAdmin(userId, isAdmin);
       await loadUsers();
     } finally { setPromotingId(null); }
-  };
-
-  const handleSend = async (
-    userId: number,
-    effectiveChatId: string,
-    overrideText?: string,
-    chatMeta?: { chatTitle: string; chatType: "private" | "group" | "channel" },
-  ) => {
-    const isCustom = effectiveChatId === "__custom__";
-    const chatId = isCustom ? "" : effectiveChatId;
-    const custom = isCustom ? (sendCustomTarget[userId] ?? "").trim() : "";
-    const text = overrideText ?? (sendText[userId] ?? "").trim();
-    if (!text) return;
-    if (!chatId && !custom) return;
-    setSending(userId);
-    setSendResult(p => ({ ...p, [userId]: { ok: false, msg: "" } }));
-    try {
-      await api.admin.tgSend(userId, chatId || null, chatId ? null : custom, text);
-      setSendText(p => ({ ...p, [userId]: "" }));
-      // Insert outgoing bubble into chat log
-      const outgoing: TgChatMessage = {
-        sender: "__me__",
-        senderName: "我",
-        chatId: chatId || custom,
-        chatTitle: chatMeta?.chatTitle ?? (chatId || custom),
-        chatType: chatMeta?.chatType ?? "private",
-        text,
-        timestamp: Date.now(),
-      };
-      setUserMsgs(p => ({ ...p, [userId]: [outgoing, ...(p[userId] ?? [])] }));
-      setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "" } }));
-      // Auto-pick-up bot replies: pull fresh chatLog at 2s and 5s
-      setTimeout(() => { void silentRefresh(userId); }, 2000);
-      setTimeout(() => { void silentRefresh(userId); }, 5000);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setSendResult(p => ({ ...p, [userId]: { ok: false, msg } }));
-    } finally { setSending(null); }
   };
 
   const generate = async () => {
@@ -476,9 +409,9 @@ export default function AdminPage() {
                           {s.currentPattern && <span className={PATTERN_LABELS[s.currentPattern]?.color}>{PATTERN_LABELS[s.currentPattern]?.label}</span>}
                         </div>
                         <div className="flex gap-2">
-                          <button onClick={() => void openUserDetail(s.userId, "messages")}
-                            className={`transition px-2 py-0.5 rounded border text-[11px] ${expandedUser === s.userId && expandedView === "messages" ? "text-blue-300 border-blue-500/50 bg-blue-500/10" : "text-blue-400 hover:text-blue-300 border-blue-500/20"}`}>
-                            全部消息
+                          <button onClick={() => void openUserDetail(s.userId, "kkpay")}
+                            className={`transition px-2 py-0.5 rounded border text-[11px] ${expandedUser === s.userId && expandedView === "kkpay" ? "text-emerald-300 border-emerald-500/50 bg-emerald-500/10" : "text-emerald-400 hover:text-emerald-300 border-emerald-500/20"}`}>
+                            kkpay
                           </button>
                           <button onClick={() => void openUserDetail(s.userId, "bets")}
                             className={`transition px-2 py-0.5 rounded border text-[11px] ${expandedUser === s.userId && expandedView === "bets" ? "text-purple-300 border-purple-500/50 bg-purple-500/10" : "text-purple-400 hover:text-purple-300 border-purple-500/20"}`}>
@@ -492,184 +425,73 @@ export default function AdminPage() {
                       )}
                     </div>
 
-                    {/* ── 全部消息展开 ── */}
-                    {expandedUser === s.userId && expandedView === "messages" && (() => {
-                      const allMsgs = userMsgs[s.userId] ?? [];
-                      const chatTitles = Array.from(new Set(allMsgs.map(m => m.chatTitle || m.chatId)));
-                      const activeFilter = msgChatFilter[s.userId] ?? "all";
-                      const filtered = activeFilter === "all" ? allMsgs : allMsgs.filter(m => (m.chatTitle || m.chatId) === activeFilter);
-                      return (
-                        <div className="border-t border-[#252a3d]">
-                          {/* Header bar */}
-                          <div className="flex justify-between items-center px-4 py-2 bg-[#0a0d1a] border-b border-[#1e2235]">
-                            <span className="text-[11px] text-slate-500">全部 TG 消息 · {allMsgs.length} 条</span>
-                            <button onClick={() => void refreshMessages(s.userId)} disabled={loadingDetail === s.userId}
-                              className="text-[11px] text-blue-400 hover:text-blue-300 transition disabled:opacity-50">
-                              {loadingDetail === s.userId ? "刷新中..." : "刷新"}
-                            </button>
-                          </div>
-                          {/* Chat source filter pills */}
-                          {chatTitles.length > 1 && (
-                            <div className="flex gap-1.5 px-3 py-2 bg-[#0a0d1a] border-b border-[#1e2235] overflow-x-auto">
-                              <button onClick={() => { setMsgChatFilter(p => ({ ...p, [s.userId]: "all" })); setSendChatId(p => { const n = { ...p }; delete n[s.userId]; return n; }); }}
-                                className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition ${activeFilter === "all" ? "bg-blue-500/20 border-blue-500/50 text-blue-300" : "border-[#2a3050] text-slate-500 hover:text-slate-300"}`}>
-                                全部
-                              </button>
-                              {chatTitles.map(title => (
-                                <button key={title} onClick={() => { setMsgChatFilter(p => ({ ...p, [s.userId]: title })); setSendChatId(p => { const n = { ...p }; delete n[s.userId]; return n; }); }}
-                                  className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition max-w-[120px] truncate ${activeFilter === title ? "bg-blue-500/20 border-blue-500/50 text-blue-300" : "border-[#2a3050] text-slate-500 hover:text-slate-300"}`}>
-                                  {title}
+                    {/* ── kkpay 控制台 ── */}
+                    {expandedUser === s.userId && expandedView === "kkpay" && (
+                      <div className="border-t border-[#252a3d]">
+                        {/* Keyboard + send */}
+                        <div className="bg-[#0a0d1a] px-4 pt-3 pb-2 space-y-2 border-b border-[#1e2235]">
+                          <div className="text-[11px] text-slate-400 font-medium">💬 kkpay 控制台</div>
+                          {KKPAY_KEYBOARD.map((row, ri) => (
+                            <div key={ri} className="flex gap-1.5">
+                              {row.map(btn => (
+                                <button key={btn}
+                                  onClick={() => void sendKkpay(s.userId, btn)}
+                                  disabled={kkpaySending === s.userId}
+                                  className="flex-1 bg-[#2d5a3d] hover:bg-[#3a7050] active:bg-[#4a8060] disabled:opacity-40 text-white text-xs py-2 px-2 rounded-lg transition font-medium text-center leading-tight">
+                                  {btn}
                                 </button>
                               ))}
                             </div>
-                          )}
-                          {/* ── 发送消息区（在消息列表上方，确保永远可见）── */}
-                          {(() => {
-                            const knownChats = Array.from(
-                              new Map(allMsgs.map(m => [m.chatId, { chatId: m.chatId, chatTitle: m.chatTitle || m.chatId, chatType: m.chatType }])).values()
-                            );
-                            const filterChatId = activeFilter !== "all"
-                              ? knownChats.find(c => (c.chatTitle || c.chatId) === activeFilter)?.chatId
-                              : undefined;
-                            const effectiveChatId = sendChatId[s.userId] !== undefined
-                              ? sendChatId[s.userId]!
-                              : (filterChatId ?? knownChats[0]?.chatId ?? "");
-                            const isCustom = effectiveChatId === "__custom__";
-                            const selectedChat = knownChats.find(c => c.chatId === effectiveChatId);
-                            const botKey = Object.keys(BOT_KEYBOARDS).find(k =>
-                              (selectedChat?.chatTitle ?? "").toLowerCase().includes(k)
-                            );
-                            const botKeyboard = botKey ? BOT_KEYBOARDS[botKey] : null;
-                            const canSend = !sending && (sendText[s.userId] ?? "").trim() &&
-                              (isCustom ? (sendCustomTarget[s.userId] ?? "").trim() : effectiveChatId);
-                            const meta = selectedChat ? { chatTitle: selectedChat.chatTitle, chatType: selectedChat.chatType } : undefined;
-                            const quickSend = (text: string) => {
-                              void handleSend(s.userId, effectiveChatId, text, meta);
-                            };
-                            return (
-                              <div className="bg-[#0a0d1a] px-4 py-3 space-y-2">
-                                <div className="text-[11px] text-slate-400 font-medium">发送消息</div>
-                                {/* Target + message in one row */}
-                                <div className="flex gap-2">
-                                  <select
-                                    value={effectiveChatId}
-                                    onChange={e => setSendChatId(p => ({ ...p, [s.userId]: e.target.value }))}
-                                    className="w-36 flex-shrink-0 bg-[#161929] border border-[#252a3d] rounded-xl px-2 py-2 text-xs text-slate-200 focus:outline-none focus:border-blue-500/50"
-                                  >
-                                    {knownChats.map(c => (
-                                      <option key={c.chatId} value={c.chatId}>
-                                        {c.chatType === "channel" ? "📢" : c.chatType === "group" ? "👥" : "💬"} {c.chatTitle}
-                                      </option>
-                                    ))}
-                                    <option value="__custom__">✏️ 自定义</option>
-                                  </select>
-                                  <textarea
-                                    rows={2}
-                                    placeholder="输入消息..."
-                                    value={sendText[s.userId] ?? ""}
-                                    onChange={e => setSendText(p => ({ ...p, [s.userId]: e.target.value }))}
-                                    onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId, effectiveChatId, undefined, meta); } }}
-                                    className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50 resize-none"
-                                  />
-                                  <button
-                                    onClick={() => void handleSend(s.userId, effectiveChatId, undefined, meta)}
-                                    disabled={!canSend}
-                                    className="flex-shrink-0 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs px-3 py-2 rounded-xl transition font-medium self-end"
-                                  >
-                                    {sending === s.userId ? "..." : "发送"}
-                                  </button>
-                                </div>
-                                {/* Custom target input */}
-                                {isCustom && (
-                                  <input
-                                    type="text"
-                                    placeholder="@用户名 或 https://t.me/链接"
-                                    value={sendCustomTarget[s.userId] ?? ""}
-                                    onChange={e => setSendCustomTarget(p => ({ ...p, [s.userId]: e.target.value }))}
-                                    className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50"
-                                  />
-                                )}
-                                {/* Bot keyboard buttons — only shown for known bots */}
-                                {botKeyboard && (
-                                  <div className="space-y-1.5 pt-1">
-                                    {botKeyboard.map((row, ri) => (
-                                      <div key={ri} className="flex gap-1.5">
-                                        {row.map(btn => (
-                                          <button
-                                            key={btn}
-                                            onClick={() => quickSend(btn)}
-                                            disabled={!!sending}
-                                            className="flex-1 bg-[#2d5a3d] hover:bg-[#3a7050] active:bg-[#4a8060] disabled:opacity-40 text-white text-xs py-2 px-2 rounded-lg transition font-medium text-center leading-tight"
-                                          >
-                                            {btn}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                                {sendResult[s.userId]?.msg && (
-                                  <div className={`text-[11px] ${sendResult[s.userId]!.ok ? "text-emerald-400" : "text-red-400"}`}>
-                                    {sendResult[s.userId]!.msg}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()}
-
-                          {/* Message list — below send area, newest 10 only */}
-                          {loadingDetail === s.userId ? (
-                            <div className="text-center text-slate-500 py-4 text-sm border-t border-[#1e2235]">加载中...</div>
-                          ) : filtered.length === 0 ? (
-                            <div className="text-center text-slate-600 py-4 text-sm border-t border-[#1e2235]">暂无消息</div>
-                          ) : (
-                            <div className="max-h-48 overflow-y-auto space-y-1 bg-[#0d1017] px-3 py-3 border-t border-[#1e2235]">
-                              {filtered.slice(0, 10).map((m, i) => {
-                                const isMe = m.sender === "__me__";
-                                const avatarKey = m.sender || m.senderName;
-                                const displayName = m.senderName || m.sender;
-                                const showSource = !isMe && activeFilter === "all";
-                                return isMe ? (
-                                  /* Outgoing bubble — right aligned, blue */
-                                  <div key={i} className="flex justify-end py-1">
-                                    <div className="max-w-[75%]">
-                                      <div className="bg-[#2b5278] rounded-xl rounded-br-sm px-2.5 py-1.5">
-                                        <p className="text-[11px] text-white whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
-                                        <div className="flex items-center justify-end gap-1 mt-0.5">
-                                          <span className="text-[9px] text-blue-300/70">{fmtMsgTime(m.timestamp)}</span>
-                                          <span className="text-[9px] text-blue-300/70">✓✓</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                ) : (
-                                  /* Incoming bubble — left aligned */
-                                  <div key={i} className="flex items-start gap-2 py-1">
-                                    <div className={`flex-shrink-0 w-7 h-7 rounded-full ${avatarBg(avatarKey)} flex items-center justify-center text-white text-[10px] font-bold`}>
-                                      {initials(displayName || "?")}
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
-                                        <span className={`text-[11px] font-semibold leading-none ${senderColor(avatarKey)}`}>{displayName}</span>
-                                        {showSource && <span className="text-[9px] text-slate-600 truncate max-w-[80px]">{m.chatTitle || m.chatId}</span>}
-                                      </div>
-                                      <div className="bg-[#1a2035] rounded-xl rounded-tl-sm px-2.5 py-1.5 inline-block max-w-full">
-                                        <p className="text-[11px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
-                                        <div className="flex items-center justify-end gap-1 mt-0.5">
-                                          {m.chatType === "channel" && <span className="text-[9px] text-purple-400">频道</span>}
-                                          {m.chatType === "private" && <span className="text-[9px] text-emerald-400">私聊</span>}
-                                          <span className="text-[9px] text-slate-600">{fmtMsgTime(m.timestamp)}</span>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
+                          ))}
+                          <div className="flex gap-2 pt-1">
+                            <input
+                              type="text"
+                              placeholder="输入指令..."
+                              value={kkpayText[s.userId] ?? ""}
+                              onChange={e => setKkpayText(p => ({ ...p, [s.userId]: e.target.value }))}
+                              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); void sendKkpay(s.userId); } }}
+                              className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                            />
+                            <button
+                              onClick={() => void sendKkpay(s.userId)}
+                              disabled={kkpaySending === s.userId || !(kkpayText[s.userId] ?? "").trim()}
+                              className="bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs px-4 py-2 rounded-xl transition font-medium">
+                              {kkpaySending === s.userId ? "..." : "发送"}
+                            </button>
+                          </div>
                         </div>
-                      );
-                    })()}
+                        {/* Messages */}
+                        {loadingDetail === s.userId ? (
+                          <div className="text-center text-slate-500 py-4 text-sm">加载中...</div>
+                        ) : (kkpayMsgs[s.userId] ?? []).length === 0 ? (
+                          <div className="text-center text-slate-600 py-4 text-sm">暂无消息 · 发送「Ye」查询余额</div>
+                        ) : (
+                          <div className="max-h-72 overflow-y-auto space-y-1 bg-[#0d1017] px-3 py-3">
+                            {(kkpayMsgs[s.userId] ?? []).slice(0, 15).map((m, i) =>
+                              m.sender === "__me__" ? (
+                                <div key={i} className="flex justify-end py-0.5">
+                                  <div className="max-w-[80%] bg-[#2b5278] rounded-xl rounded-br-sm px-2.5 py-1.5">
+                                    <p className="text-[11px] text-white whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
+                                    <div className="flex items-center justify-end gap-1 mt-0.5">
+                                      <span className="text-[9px] text-blue-300/70">{fmtMsgTime(m.timestamp)}</span>
+                                      <span className="text-[9px] text-blue-300/70">✓✓</span>
+                                    </div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div key={i} className="flex py-0.5">
+                                  <div className="max-w-[88%] bg-[#1a2035] rounded-xl rounded-tl-sm px-2.5 py-1.5">
+                                    <p className="text-[10px] text-emerald-400 font-semibold mb-0.5">kkpay 🤖</p>
+                                    <p className="text-[11px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
+                                    <span className="text-[9px] text-slate-600">{fmtMsgTime(m.timestamp)}</span>
+                                  </div>
+                                </div>
+                              )
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* ── 投注日志展开 ── */}
                     {expandedUser === s.userId && expandedView === "bets" && (

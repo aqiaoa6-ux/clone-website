@@ -1423,6 +1423,19 @@ router.get("/admin/tg/sessions/:userId/messages", requireAdmin, (req, res) => {
   res.json({ messages: session ? session.chatLog : [] });
 });
 
+// kkpay-only messages + entityId (for dedicated kkpay console)
+router.get("/admin/tg/sessions/:userId/kkpay", requireAdmin, (req, res) => {
+  const userId = parseInt(String(req.params["userId"] ?? ""));
+  if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const session = tgSessions.get(userId);
+  if (!session) { res.json({ entityId: null, messages: [] }); return; }
+  const eid = session.kkpayEntityId ?? null;
+  const messages = session.chatLog.filter(m =>
+    (eid && m.chatId === eid) || m.chatTitle.toLowerCase().includes("kkpay")
+  );
+  res.json({ entityId: eid, messages });
+});
+
 // Pull recent messages from TG server into chatLog
 router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
