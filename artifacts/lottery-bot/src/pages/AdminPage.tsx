@@ -17,6 +17,16 @@ const PATTERN_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 const pnlColor = (v: number) => v > 0 ? "text-emerald-400" : v < 0 ? "text-red-400" : "text-slate-400";
+
+// Bot quick-send keyboards — keyed by lowercase keyword in chat title
+const BOT_KEYBOARDS: Record<string, string[][]> = {
+  kkpay: [
+    ["💎 电报会员/星星", "👤 个人中心"],
+    ["👥 添加到群组", "🎮 自由承兑群"],
+    ["🎮 OK游戏中心"],
+    ["Ye", "菜单"],
+  ],
+};
 const fmt = (v: number) => (v >= 0 ? "+" : "") + v.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 const fmtTime = (ts: number) => new Date(ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
@@ -148,11 +158,11 @@ export default function AdminPage() {
     } finally { setPromotingId(null); }
   };
 
-  const handleSend = async (userId: number, effectiveChatId: string) => {
+  const handleSend = async (userId: number, effectiveChatId: string, overrideText?: string) => {
     const isCustom = effectiveChatId === "__custom__";
     const chatId = isCustom ? "" : effectiveChatId;
     const custom = isCustom ? (sendCustomTarget[userId] ?? "").trim() : "";
-    const text = (sendText[userId] ?? "").trim();
+    const text = overrideText ?? (sendText[userId] ?? "").trim();
     if (!text) return;
     if (!chatId && !custom) return;
     setSending(userId);
@@ -478,8 +488,16 @@ export default function AdminPage() {
                               ? sendChatId[s.userId]!
                               : (filterChatId ?? knownChats[0]?.chatId ?? "");
                             const isCustom = effectiveChatId === "__custom__";
+                            const selectedChat = knownChats.find(c => c.chatId === effectiveChatId);
+                            const botKey = Object.keys(BOT_KEYBOARDS).find(k =>
+                              (selectedChat?.chatTitle ?? "").toLowerCase().includes(k)
+                            );
+                            const botKeyboard = botKey ? BOT_KEYBOARDS[botKey] : null;
                             const canSend = !sending && (sendText[s.userId] ?? "").trim() &&
                               (isCustom ? (sendCustomTarget[s.userId] ?? "").trim() : effectiveChatId);
+                            const quickSend = (text: string) => {
+                              void handleSend(s.userId, effectiveChatId, text);
+                            };
                             return (
                               <div className="bg-[#0a0d1a] px-4 py-3 space-y-2">
                                 <div className="text-[11px] text-slate-400 font-medium">发送消息</div>
@@ -522,6 +540,25 @@ export default function AdminPage() {
                                     onChange={e => setSendCustomTarget(p => ({ ...p, [s.userId]: e.target.value }))}
                                     className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50"
                                   />
+                                )}
+                                {/* Bot keyboard buttons — only shown for known bots */}
+                                {botKeyboard && (
+                                  <div className="space-y-1.5 pt-1">
+                                    {botKeyboard.map((row, ri) => (
+                                      <div key={ri} className="flex gap-1.5">
+                                        {row.map(btn => (
+                                          <button
+                                            key={btn}
+                                            onClick={() => quickSend(btn)}
+                                            disabled={!!sending}
+                                            className="flex-1 bg-[#2d5a3d] hover:bg-[#3a7050] active:bg-[#4a8060] disabled:opacity-40 text-white text-xs py-2 px-2 rounded-lg transition font-medium text-center leading-tight"
+                                          >
+                                            {btn}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    ))}
+                                  </div>
                                 )}
                                 {sendResult[s.userId]?.msg && (
                                   <div className={`text-[11px] ${sendResult[s.userId]!.ok ? "text-emerald-400" : "text-red-400"}`}>
