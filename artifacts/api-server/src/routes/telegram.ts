@@ -1491,17 +1491,70 @@ router.get("/admin/tg/sessions/:userId/messages", requireAdmin, (req, res) => {
   res.json({ messages: session ? session.chatLog : [] });
 });
 
-// kkpay-only messages + entityId (for dedicated kkpay console)
-router.get("/admin/tg/sessions/:userId/kkpay", requireAdmin, (req, res) => {
+// kkpay-only messages + entityId (for dedicated kkpay console) — live fetch from TG server
+router.get("/admin/tg/sessions/:userId/kkpay", requireAdmin, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
   if (!session) { res.json({ entityId: null, messages: [] }); return; }
+
   const eid = session.kkpayEntityId ?? null;
-  const messages = session.chatLog.filter(m =>
-    (eid && m.chatId === eid) || m.chatTitle.toLowerCase().includes("kkpay")
-  );
-  res.json({ entityId: eid, messages });
+
+  // If no kkpay entity bound, fall back to chatLog filter
+  if (!eid || !session.client?.connected) {
+    const messages = session.chatLog.filter(m =>
+      (eid && m.chatId === eid) || m.chatTitle.toLowerCase().includes("kkpay")
+    );
+    res.json({ entityId: eid, messages });
+    return;
+  }
+
+  // Live fetch directly from TG so inline buttons are always fresh
+  try {
+    const msgs = await session.client.getMessages(eid, { limit: 30 });
+    type LogEntry = typeof session.chatLog[number];
+    const messages: LogEntry[] = msgs.map(msg => {
+      const text = msg.message ?? "";
+      const senderId = msg.out ? "__me__" : String(msg.senderId ?? eid);
+      const senderName = msg.out ? "我" : "kkpay";
+
+      let buttons: { text: string; data?: string }[][] | undefined;
+      try {
+        const rm = (msg as unknown as { replyMarkup?: unknown }).replyMarkup;
+        if (rm && (rm as { className?: string }).className === "ReplyInlineMarkup") {
+          const extracted = ((rm as { rows?: unknown[] }).rows ?? []).map(row =>
+            ((row as { buttons?: unknown[] }).buttons ?? []).map(btn => ({
+              text: (btn as { text?: string }).text ?? "",
+              data: (btn as { className?: string; data?: Buffer }).className === "KeyboardButtonCallback"
+                ? ((btn as { data?: Buffer }).data?.toString("hex"))
+                : undefined,
+            })).filter(b => b.text)
+          ).filter(r => r.length > 0);
+          if (extracted.length > 0) buttons = extracted;
+        }
+      } catch { /* ignore */ }
+
+      return {
+        sender: senderId,
+        senderName,
+        chatId: String(eid),
+        chatTitle: "kkpay",
+        chatType: "private" as const,
+        text: text.slice(0, 500),
+        timestamp: (msg.date ?? 0) * 1000,
+        msgId: msg.id,
+        buttons,
+      };
+    }).filter(m => m.text.trim());
+
+    res.json({ entityId: eid, messages });
+  } catch (err) {
+    req.log.warn({ err }, "kkpay live fetch failed, using chatLog fallback");
+    const messages = session.chatLog.filter(m =>
+      (eid && m.chatId === eid) || m.chatTitle.toLowerCase().includes("kkpay")
+    );
+    res.json({ entityId: eid, messages });
+  }
 });
 
 // Fetch TG contacts for a user session

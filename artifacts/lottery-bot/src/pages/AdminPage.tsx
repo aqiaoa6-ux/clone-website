@@ -155,12 +155,10 @@ export default function AdminPage() {
     try {
       const { entityId, messages } = await api.admin.tgKkpay(userId);
       setKkpayEntityId(p => ({ ...p, [userId]: entityId }));
+      // Live endpoint returns both outgoing and incoming sorted newest-first
       setKkpayMsgs(p => {
-        const outgoing = (p[userId] ?? []).filter(m => m.sender === "__me__");
-        if (outgoing.length === 0) return { ...p, [userId]: messages };
-        const combined = [...outgoing, ...messages];
-        combined.sort((a, b) => b.timestamp - a.timestamp);
-        return { ...p, [userId]: combined };
+        if (messages.length === 0) return p;
+        return { ...p, [userId]: messages };
       });
     } catch { /* ignore */ } finally {
       if (!silent) setLoadingDetail(null);
