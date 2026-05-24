@@ -1,5 +1,37 @@
 [
   {
+    "id": "1779641568943-r99c7",
+    "timestamp": 1779641568943,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_success",
+    "text": "✅ 支付密码验证成功"
+  },
+  {
+    "id": "1779641534157-jqqrh",
+    "timestamp": 1779641534157,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_success",
+    "text": "✅ 支付密码验证成功"
+  },
+  {
+    "id": "1779641533873-ax45h",
+    "timestamp": 1779641533873,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_sent",
+    "text": "441522"
+  },
+  {
+    "id": "1779641528052-5sts3",
+    "timestamp": 1779641528052,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_requested",
+    "text": "🔑 请输入支付密码验证(6位数字或字母)"
+  },
+  {
     "id": "1779641050235-rq60x",
     "timestamp": 1779641050235,
     "userId": 2,
