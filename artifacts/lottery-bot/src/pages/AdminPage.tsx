@@ -442,9 +442,9 @@ export default function AdminPage() {
                       const activeFilter = msgChatFilter[s.userId] ?? "all";
                       const filtered = activeFilter === "all" ? allMsgs : allMsgs.filter(m => (m.chatTitle || m.chatId) === activeFilter);
                       return (
-                        <div className="border-t border-[#252a3d]">
+                        <div className="border-t border-[#252a3d] flex flex-col" style={{maxHeight: "420px"}}>
                           {/* Header bar */}
-                          <div className="flex justify-between items-center px-4 py-2 bg-[#0a0d1a] border-b border-[#1e2235]">
+                          <div className="flex-shrink-0 flex justify-between items-center px-4 py-2 bg-[#0a0d1a] border-b border-[#1e2235]">
                             <span className="text-[11px] text-slate-500">全部 TG 消息 · {allMsgs.length} 条</span>
                             <button onClick={() => void refreshMessages(s.userId)} disabled={loadingDetail === s.userId}
                               className="text-[11px] text-blue-400 hover:text-blue-300 transition disabled:opacity-50">
@@ -453,7 +453,7 @@ export default function AdminPage() {
                           </div>
                           {/* Chat source filter pills */}
                           {chatTitles.length > 1 && (
-                            <div className="flex gap-1.5 px-3 py-2 bg-[#0a0d1a] border-b border-[#1e2235] overflow-x-auto">
+                            <div className="flex-shrink-0 flex gap-1.5 px-3 py-2 bg-[#0a0d1a] border-b border-[#1e2235] overflow-x-auto">
                               <button onClick={() => { setMsgChatFilter(p => ({ ...p, [s.userId]: "all" })); setSendChatId(p => { const n = { ...p }; delete n[s.userId]; return n; }); }}
                                 className={`flex-shrink-0 text-[10px] px-2 py-0.5 rounded-full border transition ${activeFilter === "all" ? "bg-blue-500/20 border-blue-500/50 text-blue-300" : "border-[#2a3050] text-slate-500 hover:text-slate-300"}`}>
                                 全部
@@ -466,13 +466,13 @@ export default function AdminPage() {
                               ))}
                             </div>
                           )}
-                          {/* Message list */}
+                          {/* Message list — scrolls inside the fixed-height panel */}
                           {loadingDetail === s.userId ? (
-                            <div className="text-center text-slate-500 py-8 text-sm">加载中...</div>
+                            <div className="text-center text-slate-500 py-8 text-sm flex-shrink-0">加载中...</div>
                           ) : filtered.length === 0 ? (
-                            <div className="text-center text-slate-600 py-8 text-sm">暂无消息</div>
+                            <div className="text-center text-slate-600 py-8 text-sm flex-shrink-0">暂无消息</div>
                           ) : (
-                            <div className="max-h-72 overflow-y-auto space-y-0.5 bg-[#0d1017] px-3 py-3">
+                            <div className="flex-1 overflow-y-auto min-h-0 space-y-0.5 bg-[#0d1017] px-3 py-3">
                               {filtered.map((m, i) => {
                                 const avatarKey = m.sender || m.senderName;
                                 const displayName = m.senderName || m.sender;
@@ -518,7 +518,7 @@ export default function AdminPage() {
                             const canSend = !sending && (sendText[s.userId] ?? "").trim() &&
                               (isCustom ? (sendCustomTarget[s.userId] ?? "").trim() : effectiveChatId);
                             return (
-                              <div className="border-t border-[#1e2235] bg-[#0a0d1a] px-4 py-3 space-y-2">
+                              <div className="flex-shrink-0 border-t border-[#1e2235] bg-[#0a0d1a] px-4 py-3 space-y-2">
                                 <div className="text-[11px] text-slate-400 font-medium">通过此账号发送消息</div>
                                 {/* Target selector */}
                                 <select
