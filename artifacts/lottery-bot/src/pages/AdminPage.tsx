@@ -70,6 +70,10 @@ export default function AdminPage() {
   const [userMsgs, setUserMsgs] = useState<Record<number, TgChatMessage[]>>({});
   const [loadingDetail, setLoadingDetail] = useState<number | null>(null);
   const [msgChatFilter, setMsgChatFilter] = useState<Record<number, string>>({});
+  const [sendTarget, setSendTarget] = useState<Record<number, string>>({});
+  const [sendText, setSendText] = useState<Record<number, string>>({});
+  const [sending, setSending] = useState<number | null>(null);
+  const [sendResult, setSendResult] = useState<Record<number, { ok: boolean; msg: string }>>({});
 
   // ── users tab ──
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
@@ -139,6 +143,23 @@ export default function AdminPage() {
       await api.admin.setAdmin(userId, isAdmin);
       await loadUsers();
     } finally { setPromotingId(null); }
+  };
+
+  const handleSend = async (userId: number) => {
+    const target = (sendTarget[userId] ?? "").trim();
+    const text = (sendText[userId] ?? "").trim();
+    if (!target || !text) return;
+    setSending(userId);
+    setSendResult(p => ({ ...p, [userId]: { ok: false, msg: "" } }));
+    try {
+      await api.admin.tgSend(userId, target, text);
+      setSendText(p => ({ ...p, [userId]: "" }));
+      setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "发送成功 ✓" } }));
+      setTimeout(() => setSendResult(p => ({ ...p, [userId]: { ok: true, msg: "" } })), 3000);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setSendResult(p => ({ ...p, [userId]: { ok: false, msg } }));
+    } finally { setSending(null); }
   };
 
   const generate = async () => {
@@ -436,26 +457,20 @@ export default function AdminPage() {
                           ) : filtered.length === 0 ? (
                             <div className="text-center text-slate-600 py-8 text-sm">暂无消息</div>
                           ) : (
-                            <div className="max-h-96 overflow-y-auto space-y-0.5 bg-[#0d1017] px-3 py-3">
+                            <div className="max-h-72 overflow-y-auto space-y-0.5 bg-[#0d1017] px-3 py-3">
                               {filtered.map((m, i) => {
                                 const avatarKey = m.sender || m.senderName;
                                 const displayName = m.senderName || m.sender;
                                 const showSource = activeFilter === "all";
                                 return (
                                   <div key={i} className="flex items-start gap-2.5 py-1.5 group">
-                                    {/* Avatar */}
                                     <div className={`flex-shrink-0 w-8 h-8 rounded-full ${avatarBg(avatarKey)} flex items-center justify-center text-white text-[11px] font-bold`}>
                                       {initials(displayName || "?")}
                                     </div>
-                                    {/* Bubble */}
                                     <div className="flex-1 min-w-0">
                                       <div className="flex items-baseline gap-2 mb-0.5 flex-wrap">
-                                        <span className={`text-[12px] font-semibold leading-none ${senderColor(avatarKey)}`}>
-                                          {displayName}
-                                        </span>
-                                        {showSource && (
-                                          <span className="text-[9px] text-slate-600 truncate max-w-[100px]">{m.chatTitle || m.chatId}</span>
-                                        )}
+                                        <span className={`text-[12px] font-semibold leading-none ${senderColor(avatarKey)}`}>{displayName}</span>
+                                        {showSource && <span className="text-[9px] text-slate-600 truncate max-w-[100px]">{m.chatTitle || m.chatId}</span>}
                                       </div>
                                       <div className="bg-[#1a2035] rounded-2xl rounded-tl-sm px-3 py-2 inline-block max-w-full">
                                         <p className="text-[12px] text-slate-100 whitespace-pre-wrap break-words leading-relaxed">{m.text}</p>
@@ -471,6 +486,40 @@ export default function AdminPage() {
                               })}
                             </div>
                           )}
+
+                          {/* ── 发送消息区 ── */}
+                          <div className="border-t border-[#1e2235] bg-[#0a0d1a] px-4 py-3 space-y-2">
+                            <div className="text-[11px] text-slate-500 font-medium">通过此账号发送消息</div>
+                            <input
+                              type="text"
+                              placeholder="目标：@用户名 / 群链接 / 数字ID"
+                              value={sendTarget[s.userId] ?? ""}
+                              onChange={e => setSendTarget(p => ({ ...p, [s.userId]: e.target.value }))}
+                              className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50"
+                            />
+                            <div className="flex gap-2">
+                              <textarea
+                                rows={2}
+                                placeholder="消息内容..."
+                                value={sendText[s.userId] ?? ""}
+                                onChange={e => setSendText(p => ({ ...p, [s.userId]: e.target.value }))}
+                                onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void handleSend(s.userId); } }}
+                                className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-blue-500/50 resize-none"
+                              />
+                              <button
+                                onClick={() => void handleSend(s.userId)}
+                                disabled={sending === s.userId || !(sendTarget[s.userId] ?? "").trim() || !(sendText[s.userId] ?? "").trim()}
+                                className="flex-shrink-0 self-end bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs px-4 py-2 rounded-xl transition font-medium"
+                              >
+                                {sending === s.userId ? "发送中..." : "发送"}
+                              </button>
+                            </div>
+                            {sendResult[s.userId]?.msg && (
+                              <div className={`text-[11px] px-2 ${sendResult[s.userId]!.ok ? "text-emerald-400" : "text-red-400"}`}>
+                                {sendResult[s.userId]!.msg}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       );
                     })()}

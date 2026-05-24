@@ -1499,6 +1499,36 @@ router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req
   }
 });
 
+// Admin: send a message via a user's TG session
+router.post("/admin/tg/sessions/:userId/send", requireAdmin, async (req, res) => {
+  const userId = parseInt(String(req.params["userId"] ?? ""));
+  if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const session = tgSessions.get(userId);
+  if (!session) { res.status(404).json({ error: "用户未连接 TG" }); return; }
+
+  const { target, message } = req.body as { target?: string; message?: string };
+  if (!target?.trim()) { res.status(400).json({ error: "请输入发送目标（用户名/群链接/ID）" }); return; }
+  if (!message?.trim()) { res.status(400).json({ error: "请输入消息内容" }); return; }
+
+  try {
+    // Resolve entity by username / link / numeric ID
+    let entity: Parameters<typeof session.client.sendMessage>[0];
+    const trimmed = target.trim();
+    if (/^-?\d+$/.test(trimmed)) {
+      entity = BigInt(trimmed) as unknown as Parameters<typeof session.client.sendMessage>[0];
+    } else {
+      entity = trimmed.startsWith("https://") || trimmed.startsWith("t.me/")
+        ? (await session.client.getEntity(trimmed))
+        : (await session.client.getEntity(trimmed.startsWith("@") ? trimmed : `@${trimmed}`));
+    }
+    const result = await session.client.sendMessage(entity, { message: message.trim() });
+    res.json({ ok: true, msgId: result.id });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
 router.post("/tg/disconnect", requireCard, async (req, res) => {
   const userId = req.user!.userId;
   const session = tgSessions.get(userId);
