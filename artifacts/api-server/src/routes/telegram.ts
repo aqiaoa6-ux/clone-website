@@ -89,8 +89,10 @@ interface TgSession {
   lastBetPeriod?: number;
   currentCloseTimeMs: number;
   yeMessageId?: number;
-  // chat message log (from watched group)
-  chatLog: Array<{ sender: string; text: string; timestamp: number }>;
+  // global TG message log (all incoming messages)
+  chatLog: Array<{ sender: string; senderName: string; chatId: string; chatTitle: string; chatType: "private" | "group" | "channel"; text: string; timestamp: number }>;
+  globalHandler: ((event: NewMessageEvent) => Promise<void>) | null;
+  globalHandlerBuilder: NewMessage | null;
   // balance
   balance: number;
   todayPnl: number;
@@ -235,6 +237,51 @@ function stopAllTimers(session: TgSession): void {
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (session.lotteryPollTimer) { clearInterval(session.lotteryPollTimer); session.lotteryPollTimer = undefined; }
+  if (session.globalHandler && session.globalHandlerBuilder) {
+    try { session.client.removeEventHandler(session.globalHandler, session.globalHandlerBuilder); } catch { /* ok */ }
+    session.globalHandler = null; session.globalHandlerBuilder = null;
+  }
+}
+
+function startGlobalListener(session: TgSession): void {
+  if (session.globalHandler && session.globalHandlerBuilder) {
+    try { session.client.removeEventHandler(session.globalHandler, session.globalHandlerBuilder); } catch { /* ok */ }
+    session.globalHandler = null; session.globalHandlerBuilder = null;
+  }
+
+  session.globalHandler = async (event: NewMessageEvent) => {
+    const msg = event.message;
+    if (msg.out) return;
+    const text = msg.message ?? "";
+    if (!text.trim()) return;
+
+    const chatId = String(msg.chatId ?? msg.senderId ?? "");
+    const senderId = String(msg.senderId ?? "");
+
+    let chatTitle = chatId;
+    let senderName = senderId;
+    let chatType: "private" | "group" | "channel" = "private";
+
+    try {
+      const chat = msg.chat as ({ title?: string; firstName?: string; lastName?: string; className?: string }) | undefined;
+      if (chat) {
+        const cls = chat.className ?? "";
+        if (cls === "Channel") { chatType = "channel"; chatTitle = chat.title ?? chatId; }
+        else if (cls === "Chat" || cls === "ChatForbidden") { chatType = "group"; chatTitle = chat.title ?? chatId; }
+        else { chatType = "private"; chatTitle = [chat.firstName, chat.lastName].filter(Boolean).join(" ") || chatId; }
+      }
+      const sender = msg.sender as ({ title?: string; firstName?: string; lastName?: string; username?: string }) | undefined;
+      if (sender) {
+        senderName = sender.title ?? ([sender.firstName, sender.lastName].filter(Boolean).join(" ") || sender.username) ?? senderId;
+      }
+    } catch { /* ignore */ }
+
+    session.chatLog.unshift({ sender: senderId, senderName, chatId, chatTitle, chatType, text: text.slice(0, 500), timestamp: Date.now() });
+    if (session.chatLog.length > 200) session.chatLog.pop();
+  };
+
+  session.globalHandlerBuilder = new NewMessage({});
+  session.client.addEventHandler(session.globalHandler, session.globalHandlerBuilder);
 }
 
 function startWatchdog(session: TgSession): void {
@@ -254,6 +301,7 @@ function startWatchdog(session: TgSession): void {
         try {
           await session.client.connect();
           if (session.watchGroupId) startGroupListener(session);
+          startGlobalListener(session);
           await startKkpayListener(session);
           saveSession(session);
           pushEvent(session, "session:reconnected", { at: Date.now() });
@@ -289,6 +337,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       betLog: [], sseClients: new Set(),
       messageHandler: null, messageHandlerBuilder: null,
       kkpayHandler: null, kkpayHandlerBuilder: null,
+      globalHandler: null, globalHandlerBuilder: null,
       consecutiveLosses: 0,
       sessionPnl: 0,
       currentBet: data.cfg?.betAmount ?? DEFAULT_CFG.betAmount,
@@ -314,6 +363,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     tgSessions.set(userId, session);
 
     if (session.watchGroupId) startGroupListener(session);
+    startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     startWatchdog(session);
     logger.info({ userId }, "[tg] session restored");
@@ -922,11 +972,6 @@ function startGroupListener(session: TgSession): void {
     if (chatId !== targetId && `-100${chatId}` !== targetId) return;
     const senderId = String(msg.senderId ?? "");
     const text = msg.message ?? "";
-    // Record all incoming group messages for admin monitoring
-    if (text.trim()) {
-      session.chatLog.unshift({ sender: senderId, text: text.slice(0, 300), timestamp: Date.now() });
-      if (session.chatLog.length > 100) session.chatLog.pop();
-    }
     if (!session.cfg.autoBet) return;
     if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
     if (session.betLog.some(b => b.status === "sent")) return;
@@ -1093,7 +1138,9 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
       betPlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0,
-      recentResults: [], chatLog: [], balance: 1000000,
+      recentResults: [], chatLog: [],
+      globalHandler: null, globalHandlerBuilder: null,
+      balance: 1000000,
       todayPnl: 0, todayResetAt: todayMidnight(),
       kkpayUsername: "kkpay", kkpayEntityId: undefined,
       balanceSource: "manual", balanceUpdatedAt: 0,
@@ -1123,6 +1170,7 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     const me = (result as Api.auth.Authorization).user as Api.User;
     session.me = me;
     session.groups = await fetchGroups(session.client);
+    startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     saveSession(session);
     startWatchdog(session);
@@ -1148,6 +1196,7 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     const me = (await session.client.getMe()) as Api.User;
     session.me = me;
     session.groups = await fetchGroups(session.client);
+    startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     saveSession(session);
     startWatchdog(session);

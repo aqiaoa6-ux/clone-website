@@ -352,7 +352,7 @@ export default function AdminPage() {
                         <div className="flex gap-2">
                           <button onClick={() => void openUserDetail(s.userId, "messages")}
                             className={`transition px-2 py-0.5 rounded border text-[11px] ${expandedUser === s.userId && expandedView === "messages" ? "text-blue-300 border-blue-500/50 bg-blue-500/10" : "text-blue-400 hover:text-blue-300 border-blue-500/20"}`}>
-                            群消息
+                            全部消息
                           </button>
                           <button onClick={() => void openUserDetail(s.userId, "bets")}
                             className={`transition px-2 py-0.5 rounded border text-[11px] ${expandedUser === s.userId && expandedView === "bets" ? "text-purple-300 border-purple-500/50 bg-purple-500/10" : "text-purple-400 hover:text-purple-300 border-purple-500/20"}`}>
@@ -366,11 +366,11 @@ export default function AdminPage() {
                       )}
                     </div>
 
-                    {/* ── 群消息展开 ── */}
+                    {/* ── 全部消息展开 ── */}
                     {expandedUser === s.userId && expandedView === "messages" && (
                       <div className="border-t border-[#252a3d]">
                         <div className="flex justify-between items-center px-4 py-2 bg-[#0f1220]">
-                          <span className="text-xs text-slate-400">群消息（最近100条）</span>
+                          <span className="text-xs text-slate-400">全部 TG 消息（最近200条，含所有群/私聊/频道）</span>
                           <button onClick={() => void refreshMessages(s.userId)} disabled={loadingDetail === s.userId}
                             className="text-[11px] text-blue-400 hover:text-blue-300 transition disabled:opacity-50">
                             {loadingDetail === s.userId ? "刷新中..." : "刷新"}
@@ -379,16 +379,22 @@ export default function AdminPage() {
                         {loadingDetail === s.userId ? (
                           <div className="text-center text-slate-500 py-6 text-sm">加载中...</div>
                         ) : !userMsgs[s.userId] || userMsgs[s.userId]!.length === 0 ? (
-                          <div className="text-center text-slate-600 py-6 text-sm">暂无消息（需要先连接群组）</div>
+                          <div className="text-center text-slate-600 py-6 text-sm">暂无消息（需要先连接 TG）</div>
                         ) : (
                           <div className="max-h-80 overflow-y-auto divide-y divide-[#1e2235]">
                             {userMsgs[s.userId]!.map((m, i) => (
                               <div key={i} className="px-4 py-2.5 text-xs">
-                                <div className="flex items-center gap-2 mb-1">
+                                <div className="flex items-center gap-2 mb-1 flex-wrap">
                                   <span className="text-slate-500 font-mono text-[10px]">{fmtTime(m.timestamp)}</span>
-                                  <span className="text-blue-400 text-[10px]">ID:{m.sender}</span>
+                                  {m.chatType === "channel" && <span className="text-[9px] text-purple-400 bg-purple-500/10 border border-purple-500/20 px-1.5 py-0.5 rounded">频道</span>}
+                                  {m.chatType === "group" && <span className="text-[9px] text-blue-400 bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 rounded">群组</span>}
+                                  {m.chatType === "private" && <span className="text-[9px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded">私聊</span>}
+                                  <span className="text-slate-300 font-medium">{m.chatTitle || m.chatId}</span>
+                                  {m.senderName && m.senderName !== m.chatTitle && (
+                                    <span className="text-slate-500">/ {m.senderName}</span>
+                                  )}
                                 </div>
-                                <div className="text-slate-200 whitespace-pre-wrap break-words">{m.text}</div>
+                                <div className="text-slate-200 whitespace-pre-wrap break-words leading-relaxed">{m.text}</div>
                               </div>
                             ))}
                           </div>

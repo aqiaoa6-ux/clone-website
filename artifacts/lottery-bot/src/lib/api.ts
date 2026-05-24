@@ -188,6 +188,10 @@ export interface BetRecord {
 
 export interface TgChatMessage {
   sender: string;
+  senderName: string;
+  chatId: string;
+  chatTitle: string;
+  chatType: "private" | "group" | "channel";
   text: string;
   timestamp: number;
 }
