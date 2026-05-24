@@ -35,6 +35,8 @@ export const api = {
     listCards: () => api.get<{ cards: AdminCard[] }>("/admin/cards"),
     deleteCard: (id: number) => api.del<{ ok: boolean }>(`/admin/cards/${id}`),
     listUsers: () => api.get<{ users: AdminUser[] }>("/admin/users"),
+    tgSessions: () => api.get<{ sessions: AdminTgSession[] }>("/admin/tg/sessions"),
+    tgBets: (userId: number) => api.get<{ bets: BetRecord[] }>(`/admin/tg/sessions/${userId}/bets`),
   },
 
   tg: {
@@ -180,6 +182,26 @@ export interface BetRecord {
   pnl?: number;
   won?: boolean;
   isChase?: boolean;
+}
+
+export interface AdminTgSession {
+  userId: number;
+  me: { firstName?: string; lastName?: string; username?: string; phone?: string };
+  watchGroupTitle?: string;
+  autoBet: boolean;
+  consecutiveLosses: number;
+  sessionPnl: number;
+  todayPnl: number;
+  balance: number;
+  currentBet: number;
+  totalBets: number;
+  wins: number;
+  settled: number;
+  winRate: string;
+  riskBlocked: boolean;
+  riskReason?: string;
+  lastAlgoUsed?: string;
+  currentPattern?: "streak" | "oscillating" | "neutral";
 }
 
 export interface LotteryData {

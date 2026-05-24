@@ -6,7 +6,7 @@ import { NewMessage, NewMessageEvent } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
-import { requireAuth, requireCard } from "../middleware/requireAuth";
+import { requireAuth, requireCard, requireAdmin } from "../middleware/requireAuth";
 
 const router = Router();
 
@@ -1313,6 +1313,50 @@ router.get("/tg/events", requireAuth, (req, res) => {
   session.sseClients.add(res);
   const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
   req.on("close", () => { clearInterval(hb); session?.sseClients.delete(res); });
+});
+
+// ─── Admin monitoring ────────────────────────────────────────────────────────
+
+router.get("/admin/tg/sessions", requireAdmin, (_req, res) => {
+  const sessions = [];
+  for (const [userId, session] of tgSessions) {
+    if (!session.me) continue;
+    const settled = session.betLog.filter(b => b.won !== undefined);
+    const wins = settled.filter(b => b.won === true).length;
+    const wgid = session.watchGroupId;
+    sessions.push({
+      userId,
+      me: {
+        firstName: session.me.firstName,
+        lastName: session.me.lastName,
+        username: session.me.username,
+        phone: session.me.phone,
+      },
+      watchGroupTitle: session.groups.find(g => g.id === wgid || `-100${g.id}` === wgid)?.title,
+      autoBet: session.cfg.autoBet,
+      consecutiveLosses: session.consecutiveLosses,
+      sessionPnl: session.sessionPnl,
+      todayPnl: session.todayPnl,
+      balance: session.balance,
+      currentBet: session.currentBet,
+      totalBets: session.betLog.filter(b => b.status !== "failed").length,
+      wins,
+      settled: settled.length,
+      winRate: settled.length > 0 ? `${((wins / settled.length) * 100).toFixed(1)}%` : "-",
+      riskBlocked: !checkRisk(session).ok,
+      riskReason: checkRisk(session).reason,
+      lastAlgoUsed: session.lastAlgoUsed,
+      currentPattern: session.currentPattern,
+    });
+  }
+  res.json({ sessions });
+});
+
+router.get("/admin/tg/sessions/:userId/bets", requireAdmin, (req, res) => {
+  const userId = parseInt(String(req.params["userId"] ?? ""));
+  if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
+  const session = tgSessions.get(userId);
+  res.json({ bets: session ? session.betLog.slice(0, 200) : [] });
 });
 
 router.post("/tg/disconnect", requireCard, async (req, res) => {
