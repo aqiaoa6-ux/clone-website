@@ -89,6 +89,29 @@ export default function AdminPage() {
   const [kkpayRpDialog, setKkpayRpDialog] = useState<Record<number, KkDialog | null>>({});
   const [kkpayRpAmt, setKkpayRpAmt] = useState<Record<number, string>>({});
   const [kkpayRpUnit, setKkpayRpUnit] = useState<Record<number, string>>({});
+  const [kkpayDialogsError, setKkpayDialogsError] = useState<Record<number, string | null>>({});
+
+  // Fetch TG dialogs (independent of kkpay button) — used by 红包转账 tab
+  const loadDialogs = async (userId: number, alsoTriggerKkpay: boolean) => {
+    setKkpayDialogsLoading(userId);
+    setKkpayDialogsError(p => ({ ...p, [userId]: null }));
+    // Fire kkpay button independently — its failure must NOT block dialog sync
+    if (alsoTriggerKkpay) {
+      void sendKkpay(userId, "🧧 红包");
+    }
+    try {
+      const r = await api.admin.tgDialogs(userId);
+      setKkpayDialogs(p => ({ ...p, [userId]: r.dialogs }));
+      if (r.dialogs.length === 0) {
+        setKkpayDialogsError(p => ({ ...p, [userId]: "TG 返回 0 个对话，请确认账号已连接" }));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setKkpayDialogsError(p => ({ ...p, [userId]: `同步失败: ${msg}` }));
+    } finally {
+      setKkpayDialogsLoading(null);
+    }
+  };
 
   // ── users tab ──
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
@@ -470,8 +493,13 @@ export default function AdminPage() {
                     {/* ── kkpay 控制台 ── */}
                     {expandedUser === s.userId && expandedView === "kkpay" && (() => {
                       const tab = kkpayTab[s.userId] ?? "quick";
-                      const setTab = (t: "quick" | "transfer" | "inline" | "redpacket") =>
+                      const setTab = (t: "quick" | "transfer" | "inline" | "redpacket") => {
                         setKkpayTab(p => ({ ...p, [s.userId]: t }));
+                        // Auto-load dialogs the first time the redpacket tab is opened
+                        if (t === "redpacket" && !kkpayDialogs[s.userId]) {
+                          void loadDialogs(s.userId, false);
+                        }
+                      };
                       const contacts = kkpayContacts[s.userId] ?? [];
                       const search = kkpayContactSearch[s.userId] ?? "";
                       const selectedContact = kkpayTransferContact[s.userId] ?? null;
@@ -746,33 +774,39 @@ export default function AdminPage() {
                           )}
 
                           {/* ── Tab: 红包转账 ── */}
-                          {tab === "redpacket" && (
+                          {tab === "redpacket" && (() => {
+                            const rpErr = kkpayDialogsError[s.userId] ?? null;
+                            return (
                             <div className="bg-[#0a0d1a] px-4 py-3 space-y-2.5 border-b border-[#1e2235]">
-                              {/* Step 1 — trigger kkpay red packet menu */}
+                              {/* Step 1 — sync TG dialogs + optionally trigger kkpay */}
                               <div className="flex items-center gap-2">
-                                <div className="flex-1">
+                                <div className="flex-1 min-w-0">
                                   <div className="text-[11px] text-slate-400 leading-relaxed">
-                                    <span className="text-amber-400 font-medium">第一步：</span> 触发 kkpay 红包菜单，同步最近对话
+                                    <span className="text-amber-400 font-medium">第一步：</span> 同步 TG 最近对话
                                   </div>
                                 </div>
                                 <button
-                                  onClick={async () => {
-                                    setKkpayDialogsLoading(s.userId);
-                                    try {
-                                      await sendKkpay(s.userId, "🧧 红包");
-                                      const r = await api.admin.tgDialogs(s.userId);
-                                      setKkpayDialogs(p => ({ ...p, [s.userId]: r.dialogs }));
-                                    } catch { /* ignore */ } finally { setKkpayDialogsLoading(null); }
-                                  }}
-                                  disabled={kkpayDialogsLoading === s.userId || kkpaySending === s.userId}
-                                  className="flex-shrink-0 flex items-center gap-1.5 bg-red-700/70 hover:bg-red-600/80 disabled:opacity-40 text-white text-[11px] px-3 py-1.5 rounded-xl transition font-medium border border-red-500/30">
+                                  onClick={() => void loadDialogs(s.userId, false)}
+                                  disabled={kkpayDialogsLoading === s.userId}
+                                  className="flex-shrink-0 flex items-center gap-1.5 bg-blue-700/70 hover:bg-blue-600/80 disabled:opacity-40 text-white text-[11px] px-2.5 py-1.5 rounded-xl transition font-medium border border-blue-500/30">
                                   {kkpayDialogsLoading === s.userId ? (
-                                    <span className="animate-pulse">加载中...</span>
+                                    <span className="animate-pulse">同步中...</span>
                                   ) : (
-                                    <><span>🧧</span><span>触发 + 同步</span></>
+                                    <><span>🔄</span><span>同步对话</span></>
                                   )}
                                 </button>
+                                <button
+                                  onClick={() => void loadDialogs(s.userId, true)}
+                                  disabled={kkpayDialogsLoading === s.userId || kkpaySending === s.userId}
+                                  className="flex-shrink-0 flex items-center gap-1.5 bg-red-700/70 hover:bg-red-600/80 disabled:opacity-40 text-white text-[11px] px-2.5 py-1.5 rounded-xl transition font-medium border border-red-500/30">
+                                  <span>🧧</span><span>+ 触发红包</span>
+                                </button>
                               </div>
+                              {rpErr && (
+                                <div className="bg-red-900/30 border border-red-500/40 text-red-300 text-[11px] px-3 py-2 rounded-lg leading-relaxed">
+                                  ⚠️ {rpErr}
+                                </div>
+                              )}
 
                               {/* Step 2 — contact / dialog picker */}
                               {rpDialogs.length > 0 && (
@@ -899,13 +933,17 @@ export default function AdminPage() {
                                 </>
                               )}
 
-                              {rpDialogs.length === 0 && (
-                                <div className="text-center text-slate-600 py-6 text-xs">
-                                  点击「触发 + 同步」按钮开始
+                              {rpDialogs.length === 0 && !rpErr && (
+                                <div className="text-center text-slate-600 py-6 text-xs leading-relaxed">
+                                  {kkpayDialogsLoading === s.userId ? "同步中..." : (
+                                    <>点击「🔄 同步对话」加载 TG 联系人<br/>
+                                    <span className="text-slate-700">「+ 触发红包」会同时让 kkpay 进入红包菜单</span></>
+                                  )}
                                 </div>
                               )}
                             </div>
-                          )}
+                            );
+                          })()}
 
                           {/* Messages */}
                           {loadingDetail === s.userId ? (
