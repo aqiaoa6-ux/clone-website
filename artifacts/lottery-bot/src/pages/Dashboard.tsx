@@ -316,46 +316,26 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   <span key={k} className={tagCls(betOpts.includes(k))} onClick={() => toggleOpt(k)}>{v}</span>
                 ))}
               </div>
-              <div className="mt-2 space-y-1">
-                <div className="flex items-center justify-between">
-                  <p className="text-[10px] text-slate-500">双组模式（AI每期同时下两项）</p>
-                  {dualGroupMode && (
-                    <button
-                      type="button"
-                      onClick={() => setDualGroupMode(false)}
-                      className="text-[10px] text-slate-500 hover:text-red-400 transition"
-                    >
-                      关闭
-                    </button>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => { setDualGroupMode(true); setBetOpts(["big-odd", "small-even"]); }}
-                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition ${
-                      dualGroupMode && betOpts.includes("big-odd")
-                        ? "bg-violet-600 border-violet-500 text-white"
-                        : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50"
-                    }`}
-                  >
-                    大单 + 小双
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => { setDualGroupMode(true); setBetOpts(["small-odd", "big-even"]); }}
-                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition ${
-                      dualGroupMode && betOpts.includes("small-odd")
-                        ? "bg-violet-600 border-violet-500 text-white"
-                        : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50"
-                    }`}
-                  >
-                    小单 + 大双
-                  </button>
-                </div>
+              <div className="mt-2 space-y-1.5">
+                <p className="text-[10px] text-slate-500">双组模式</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !dualGroupMode;
+                    setDualGroupMode(next);
+                    if (next) setBetOpts(["big-odd", "small-even", "small-odd", "big-even"]);
+                  }}
+                  className={`w-full py-2 rounded-lg text-xs font-medium border transition ${
+                    dualGroupMode
+                      ? "bg-violet-600 border-violet-500 text-white"
+                      : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50"
+                  }`}
+                >
+                  （大单 小双）＋（小单 大双）
+                </button>
                 {dualGroupMode && (
-                  <p className="text-[10px] text-emerald-500 mt-0.5">
-                    ✓ 已启用 · AI决策后同时发出两注 · 自动避免连续同组
+                  <p className="text-[10px] text-emerald-500">
+                    ✓ 已启用 · AI每期从两组中选一组同时发出两注 · 自动避免连续同组
                   </p>
                 )}
               </div>
