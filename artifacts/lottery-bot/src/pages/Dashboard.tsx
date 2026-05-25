@@ -18,20 +18,10 @@ interface DrawState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const ALGO_LABELS: Record<string, string> = {
-  signal_follow:  "跟信号",
-  signal_reverse: "反信号",
-  streak_follow:  "顺势而为",
-  dragon_ride:    "长龙跟龙",
-  dragon_break:   "长龙反打",
-  cold_pick:      "冷号追",
-  random:         "随机",
-  ai_trend:       "AI趋势",
-  momentum:       "近期动量",
-  anti_streak:    "震荡反打",
+  ai_trend: "AI趋势",
 };
 
 const BET_OPT_LABELS: Record<string, string> = {
-  big: "大", small: "小", odd: "单", even: "双",
   "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
 };
 
