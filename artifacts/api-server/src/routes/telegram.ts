@@ -1392,26 +1392,54 @@ function decideKillGroup(session: TgSession): KillGroupOption {
   const n = history.length;
   const scores: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
 
-  // ── A: 遗漏分：遗漏越少（越近期出现）→ 杀分越高 ───────────────────────────
+  // ── 预计算遗漏 & 当前连出 ──────────────────────────────────────────────────
+  const latest = history[n - 1]!;
+  let streak = 0;
+  for (let i = n - 1; i >= 0 && history[i] === latest; i--) streak++;
+
   const absence: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
   for (const opt of KILL_GROUP_ALL) {
     let ab = 0;
     for (let i = n - 1; i >= 0 && history[i] !== opt; i--) ab++;
     absence[opt] = ab;
   }
+
+  // ── 趋势保护（最高优先级）────────────────────────────────────────────────
+  // 规则1：当前有效连出 ≥ 2 → 强烈保护，不能杀（趋势中）
+  if (streak >= 2) {
+    scores[latest] -= 999;
+  }
+
+  // 规则2：刚断大龙缓冲保护
+  // 某组遗漏 1-5 期，但在最近 (absence+8) 期的历史里出现次数 ≥ 5 → 刚断龙，保护期
+  for (const opt of KILL_GROUP_ALL) {
+    if (opt === latest && streak >= 2) continue; // 已被规则1处理
+    const ab = absence[opt];
+    if (ab >= 1 && ab <= 5) {
+      const lookback = Math.min(ab + 10, n);
+      const preSlice = history.slice(-lookback, ab > 0 ? -ab : undefined);
+      const hotCount = preSlice.filter(r => r === opt).length;
+      if (hotCount >= 5) {
+        // 刚断龙，可能短暂喘息后继续 → 缓冲期保护
+        scores[opt] -= (6 - ab) * 1.5; // 断得越近保护越强
+      }
+    }
+  }
+
+  // ── A: 遗漏分：遗漏越少（越近期出现）→ 杀分越高 ───────────────────────────
+  // 注意：已被趋势保护覆盖的组即使遗漏=0也不会被杀
   const maxAb = Math.max(...Object.values(absence));
   for (const opt of KILL_GROUP_ALL) {
-    // 遗漏=0(刚出) → 高杀分；遗漏最大 → 最低杀分
     const hotness = maxAb > 0 ? (maxAb - absence[opt]) / maxAb : 0.5;
-    scores[opt] += hotness * 4.0;
+    scores[opt] += hotness * 3.0;
   }
 
   // ── B: 近10期出现频率（短期热度）────────────────────────────────────────────
   const h10 = history.slice(-Math.min(10, n));
   for (const opt of KILL_GROUP_ALL) {
     const cnt = h10.filter(r => r === opt).length;
-    if (cnt >= 4) scores[opt] += (cnt - 2.5) * 1.5;   // 明显过热
-    else if (cnt >= 3) scores[opt] += 0.8;
+    if (cnt >= 4) scores[opt] += (cnt - 2.5) * 1.2;
+    else if (cnt >= 3) scores[opt] += 0.6;
   }
 
   // ── C: 近20期出现频率（中期热度）────────────────────────────────────────────
@@ -1419,22 +1447,19 @@ function decideKillGroup(session: TgSession): KillGroupOption {
   for (const opt of KILL_GROUP_ALL) {
     const freq20 = h20.filter(r => r === opt).length / h20.length;
     const excess = freq20 - 0.25;
-    if (excess > 0.1) scores[opt] += excess * 5.0;     // 中期过热加杀
+    if (excess > 0.1) scores[opt] += excess * 4.0;
   }
 
-  // ── D: 当前连出加杀 ───────────────────────────────────────────────────────
-  // 连出≥2期：本期刚连出，再次出现概率偏低 → 加杀分
-  const latest = history[n - 1]!;
-  let streak = 0;
-  for (let i = n - 1; i >= 0 && history[i] === latest; i--) streak++;
-  if (streak >= 2 && streak <= 4) scores[latest] += 1.5;
-  else if (streak >= 5)           scores[latest] += 2.5;
-  // streak=1: 刚出一次，遗漏=0已在A中拿到最高分，无需额外加
+  // ── D: 单次刚出加杀（streak=1，非龙非缓冲时）──────────────────────────────
+  // streak≥2 已被规则1强保护，streak=1 且无断龙缓冲才正常加杀分
+  if (streak === 1 && scores[latest] > -10) {
+    scores[latest] += 0.5;
+  }
 
   // ── E: 长缺席强保护（欠出，绝对不杀）────────────────────────────────────────
   for (const opt of KILL_GROUP_ALL) {
     const ab = absence[opt];
-    if (ab >= 8)      scores[opt] -= 20;   // 极度缺席，完全不杀
+    if (ab >= 8)      scores[opt] -= 20;
     else if (ab >= 6) scores[opt] -= 10;
     else if (ab >= 4) scores[opt] -= 3;
     else if (ab >= 3) scores[opt] -= 1;
