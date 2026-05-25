@@ -663,7 +663,9 @@ function computeNextBet(session: TgSession, won: boolean): number {
   const { amountLevels, stepBackOnWin, betAmount, strategy, betMultiplier } = session.cfg;
   if (amountLevels.length > 1) {
     let lvl = session.currentLevel;
-    lvl = won ? (stepBackOnWin ? 0 : lvl) : Math.min(amountLevels.length - 1, lvl + 1);
+    lvl = won
+      ? (stepBackOnWin ? 0 : lvl)
+      : (lvl >= amountLevels.length - 1 ? 0 : lvl + 1);
     session.currentLevel = lvl;
     return amountLevels[lvl]!;
   }
