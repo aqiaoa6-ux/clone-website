@@ -22,7 +22,7 @@ const ALGO_LABELS: Record<string, string> = {
 };
 
 const BET_OPT_LABELS: Record<string, string> = {
-  "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
+  big: "大", small: "小", odd: "单", even: "双",
 };
 
 const STRATEGY_LABELS: Record<string, string> = {
