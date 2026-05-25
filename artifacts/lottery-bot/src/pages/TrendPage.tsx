@@ -44,8 +44,7 @@ function parseData(data: LotteryData): DrawItem[] {
   const raw = data.message?.all?.keno28?.data ?? [];
   return raw
     .filter(d => d.r3)
-    .slice(-100)   // keep up to 100 periods for better missing stats
-    .reverse()     // newest first
+    .slice(0, 100)  // API returns newest-first; take first 100 = newest 100
     .map(d => {
       const sum = (d.sum1 ?? 0) + (d.sum2 ?? 0) + (d.sum3 ?? 0);
       const r3 = d.r3!;
