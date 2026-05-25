@@ -79,6 +79,10 @@ export default function AdminPage() {
   const [kkpayIchat, setKkpayIchat] = useState<Record<number, string>>({});
   const [kkpayIamt, setKkpayIamt] = useState<Record<number, string>>({});
   const [kkpayIunit, setKkpayIunit] = useState<Record<number, string>>({});
+  // custom transfer: manual TG ID + amount + unit (no contact list needed)
+  const [kkpayCustomId, setKkpayCustomId] = useState<Record<number, string>>({});
+  const [kkpayCustomAmt, setKkpayCustomAmt] = useState<Record<number, string>>({});
+  const [kkpayCustomUnit, setKkpayCustomUnit] = useState<Record<number, string>>({});
   // button press loading: "userId:msgId:btnText"
   const [kkpayBtnLoading, setKkpayBtnLoading] = useState<string | null>(null);
   // redpacket tab: dialogs picker + amount
@@ -532,6 +536,12 @@ export default function AdminPage() {
                         !rpSearch || d.name.toLowerCase().includes(rpSearch.toLowerCase()) ||
                         (d.username ?? "").toLowerCase().includes(rpSearch.toLowerCase())
                       );
+                      // custom transfer locals (manual TG ID, no contact list)
+                      const customId = kkpayCustomId[s.userId] ?? "";
+                      const customAmt = kkpayCustomAmt[s.userId] ?? "";
+                      const customUnit = kkpayCustomUnit[s.userId] ?? "kk";
+                      const customCmd = customId.trim() && customAmt.trim()
+                        ? `zz ${customId.trim()} ${customAmt.trim()}${customUnit}` : "";
                       return (
                         <div className="border-t border-[#252a3d]">
                           {/* Tab bar */}
@@ -577,7 +587,67 @@ export default function AdminPage() {
 
                           {/* ── Tab: Transfer with contact picker ── */}
                           {tab === "transfer" && (
-                            <div className="bg-[#0a0d1a] px-4 py-3 space-y-2 border-b border-[#1e2235]">
+                            <div className="bg-[#0a0d1a] px-4 py-3 space-y-2.5 border-b border-[#1e2235]">
+
+                              {/* ─ 自定义转账 (no contact list required) ─ */}
+                              <div className="bg-[#0d1117] border border-[#252a3d] rounded-xl px-3 py-2.5 space-y-2">
+                                <div className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5">
+                                  <span className="text-emerald-400">⚡</span> 自定义转账（直接输入 TG ID）
+                                </div>
+                                <input
+                                  type="text"
+                                  placeholder="收款人 TG ID 或 @用户名"
+                                  value={customId}
+                                  onChange={e => setKkpayCustomId(p => ({ ...p, [s.userId]: e.target.value }))}
+                                  className="w-full bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50 font-mono"
+                                />
+                                <div className="flex gap-2">
+                                  <input
+                                    type="text"
+                                    placeholder="金额"
+                                    value={customAmt}
+                                    onChange={e => setKkpayCustomAmt(p => ({ ...p, [s.userId]: e.target.value }))}
+                                    onKeyDown={async e => {
+                                      if (e.key === "Enter" && customCmd) {
+                                        await sendKkpay(s.userId, customCmd);
+                                        setKkpayCustomId(p => ({ ...p, [s.userId]: "" }));
+                                        setKkpayCustomAmt(p => ({ ...p, [s.userId]: "" }));
+                                      }
+                                    }}
+                                    className="flex-1 bg-[#161929] border border-[#252a3d] rounded-xl px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-emerald-500/50"
+                                  />
+                                  <div className="flex gap-1 items-center flex-shrink-0">
+                                    {(["kk", "u"] as const).map(u => (
+                                      <button key={u}
+                                        onClick={() => setKkpayCustomUnit(p => ({ ...p, [s.userId]: u }))}
+                                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-mono transition ${customUnit === u ? "bg-emerald-700 text-white" : "bg-[#161929] text-slate-400 hover:text-slate-200 border border-[#252a3d]"}`}>
+                                        {u}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                                {customCmd && (
+                                  <div className="bg-[#080c14] rounded-lg px-3 py-2 font-mono text-xs border border-emerald-500/20 flex items-center gap-2">
+                                    <span className="text-slate-500">命令</span>
+                                    <span className="text-emerald-300 flex-1">{customCmd}</span>
+                                  </div>
+                                )}
+                                <button
+                                  onClick={async () => {
+                                    if (!customCmd) return;
+                                    await sendKkpay(s.userId, customCmd);
+                                    setKkpayCustomId(p => ({ ...p, [s.userId]: "" }));
+                                    setKkpayCustomAmt(p => ({ ...p, [s.userId]: "" }));
+                                  }}
+                                  disabled={kkpaySending === s.userId || !customCmd}
+                                  className="w-full bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white text-xs py-2.5 rounded-xl transition font-medium">
+                                  {kkpaySending === s.userId ? "发送中..." : "发送转账命令到 kkpay"}
+                                </button>
+                              </div>
+
+                              {/* ─ 联系人选择（可选）─ */}
+                              <div className="text-[10px] text-slate-600 text-center">── 或从联系人列表选择 ──</div>
+
                               {/* Header + sync button */}
                               <div className="flex items-center justify-between">
                                 <div className="text-[11px] text-slate-400">
