@@ -250,6 +250,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [cooldown, setCooldown] = useState(String(status.cooldownSeconds ?? 0));
   const [algos, setAlgos] = useState<string[]>(status.algorithms ?? ["signal_follow"]);
   const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
+  const [dualGroupMode, setDualGroupMode] = useState<boolean>(!!(status as unknown as { dualGroupMode?: boolean }).dualGroupMode);
   const [kkpay, setKkpay] = useState(status.kkpayUsername ?? "kkpay");
   const [levels, setLevels] = useState<string[]>(initLevels.map(String));
   const [stepBackOnWin, setStepBackOnWin] = useState(status.stepBackOnWin ?? true);
@@ -276,7 +277,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
         betAmount: Number(betAmount), strategy, betMultiplier: Number(multiplier),
         stopLoss: Number(stopLoss), targetProfit: Number(targetProfit),
         maxConsecutiveLosses: Number(maxLoss), cooldownSeconds: Number(cooldown),
-        algorithms: algos, betOptions: betOpts,
+        algorithms: algos, betOptions: betOpts, dualGroupMode,
         amountLevels: levels.map(Number),
         stepBackOnWin,
         odds: Number(odds),
@@ -316,31 +317,47 @@ function SettingsDrawer({ status, onClose, onSave }: {
                 ))}
               </div>
               <div className="mt-2 space-y-1">
-                <p className="text-[10px] text-slate-500">快捷双组（AI算法自动交替）</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] text-slate-500">双组模式（AI每期同时下两项）</p>
+                  {dualGroupMode && (
+                    <button
+                      type="button"
+                      onClick={() => setDualGroupMode(false)}
+                      className="text-[10px] text-slate-500 hover:text-red-400 transition"
+                    >
+                      关闭
+                    </button>
+                  )}
+                </div>
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    onClick={() => setBetOpts(["big-odd", "small-even"])}
+                    onClick={() => { setDualGroupMode(true); setBetOpts(["big-odd", "small-even"]); }}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition ${
-                      betOpts.length === 2 && betOpts.includes("big-odd") && betOpts.includes("small-even")
+                      dualGroupMode && betOpts.includes("big-odd")
                         ? "bg-violet-600 border-violet-500 text-white"
                         : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50"
                     }`}
                   >
-                    大单 / 小双
+                    大单 + 小双
                   </button>
                   <button
                     type="button"
-                    onClick={() => setBetOpts(["small-odd", "big-even"])}
+                    onClick={() => { setDualGroupMode(true); setBetOpts(["small-odd", "big-even"]); }}
                     className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition ${
-                      betOpts.length === 2 && betOpts.includes("small-odd") && betOpts.includes("big-even")
+                      dualGroupMode && betOpts.includes("small-odd")
                         ? "bg-violet-600 border-violet-500 text-white"
                         : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50"
                     }`}
                   >
-                    小单 / 大双
+                    小单 + 大双
                   </button>
                 </div>
+                {dualGroupMode && (
+                  <p className="text-[10px] text-emerald-500 mt-0.5">
+                    ✓ 已启用 · AI决策后同时发出两注 · 自动避免连续同组
+                  </p>
+                )}
               </div>
             </div>
             <div>

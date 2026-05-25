@@ -37,6 +37,7 @@ interface BetCfg {
   odds: number;
   chaseNumbers: Array<{ num: number; amount: number }>;
   enableChase: boolean;
+  dualGroupMode: boolean;
 }
 
 interface GroupInfo {
@@ -157,6 +158,7 @@ const DEFAULT_CFG: BetCfg = {
   odds: 1.98,
   chaseNumbers: [],
   enableChase: false,
+  dualGroupMode: false,
 };
 
 const BET_OPTION_LABELS: Record<BetOption, string> = {
@@ -978,16 +980,26 @@ function decideBetAuto(session: TgSession): string | null {
  * ────────────────────────────────────────────────────────────────────────────
  */
 function decideAI(session: TgSession): string | null {
-  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
-  if (labels.length < 2) return labels[0] ?? null;
-  const [optA, optB] = labels as [string, string];
+  // ── 双组模式：AI 在 [大单+小双] 和 [小单+大双] 两个组合间选一组 ─────────
+  let optA: string;
+  let optB: string;
+  let history: string[];
 
-  const rawHistory = [...lotteryHistoryCache, ...session.recentResults];
-  const history = rawHistory
-    .map(r => mapR3ToEnabled(r, labels))
-    .filter((x): x is string => x !== null);
+  if (session.cfg.dualGroupMode) {
+    optA = "大单小双"; optB = "小单大双";
+    history = [...lotteryHistoryCache, ...session.recentResults]
+      .map(r => (r === "大单" || r === "小双") ? optA : (r === "小单" || r === "大双") ? optB : null)
+      .filter((x): x is string => x !== null);
+  } else {
+    const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+    if (labels.length < 2) return labels[0] ?? null;
+    [optA, optB] = labels as [string, string];
+    history = [...lotteryHistoryCache, ...session.recentResults]
+      .map(r => mapR3ToEnabled(r, [optA, optB]))
+      .filter((x): x is string => x !== null);
+  }
 
-  if (history.length < 3) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  if (history.length < 3) return Math.random() < 0.5 ? optA : optB;
 
   // Helpers
   const countA = (arr: string[]) => arr.filter(x => x === optA).length;
@@ -1093,13 +1105,14 @@ function decideAI(session: TgSession): string | null {
     score = globalA <= total / 2 ? 0.1 : -0.1;
   }
 
-  // ── M9: 双组防连方向（大单/小双 或 小单/大双 模式专用）──────────────
-  // 若用户选的是对立双组，且上一次 AI 已选了某方向，施加反向压力，
-  // 让弱信号时自动切换，强信号时仍可坚持但难度更高。
-  const isDualGroup = labels.length === 2 && (
-    (labels.includes("大单") && labels.includes("小双")) ||
-    (labels.includes("小单") && labels.includes("大双"))
-  );
+  // ── M9: 双组防连方向（dualGroupMode 或对立选项专用）────────────────────
+  const isDualGroup = session.cfg.dualGroupMode || (() => {
+    const ls = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+    return ls.length === 2 && (
+      (ls.includes("大单") && ls.includes("小双")) ||
+      (ls.includes("小单") && ls.includes("大双"))
+    );
+  })();
   if (isDualGroup && session.lastAIBet !== null) {
     const tentative = score > 0 ? optA : optB;
     if (tentative === session.lastAIBet) {
@@ -1160,15 +1173,28 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
   session.betPlacedThisCycle = true;
 
+  // 双组模式：把虚拟组名展开成两个实际选项
+  // "大单小双" → ["大单","小双"]，"小单大双" → ["小单","大双"]
+  const DUAL_GROUP_MAP: Record<string, string[]> = {
+    "大单小双": ["大单", "小双"],
+    "小单大双": ["小单", "大双"],
+  };
+  const dualItems = session.cfg.dualGroupMode ? (DUAL_GROUP_MAP[direction] ?? [direction]) : null;
+
   // Only include chase entries if not already sent this cycle
   const chaseEntries = (!session.chasePlacedThisCycle && session.cfg.enableChase ? session.cfg.chaseNumbers : [])
     .filter(c => c.amount > 0);
   session.chasePlacedThisCycle = true;
 
-  // Compose single message: "0/100  27/100  大 100"
+  // Compose message
+  // Dual group: "大单 100  小双 100  0/chase"
+  // Normal:     "0/chase  大 100"
+  const betParts: string[] = dualItems
+    ? dualItems.map(opt => `${opt} ${mainAmount}`)
+    : [`${direction} ${mainAmount}`];
   const parts: string[] = [
     ...chaseEntries.map(c => `${c.num}/${c.amount}`),
-    `${direction} ${mainAmount}`,
+    ...betParts,
   ];
   const message = parts.join("  ");
 
@@ -1182,16 +1208,29 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
 
   const status = succeeded ? "sent" : "failed";
 
-  // Log main bet record
-  const mainRec: BetRecord = {
-    id: `main-${now}`, groupId: targetId, groupTitle,
-    messageText: message, betContent: direction, amount: mainAmount,
-    timestamp: now, status,
-  };
-  betLog.unshift(mainRec);
-  pushEvent(session, "bet:new", { bet: mainRec });
+  if (dualItems) {
+    // 双组模式：每个选项单独记录一条 BetRecord
+    dualItems.forEach((opt, i) => {
+      const rec: BetRecord = {
+        id: `main-${i}-${now}`, groupId: targetId, groupTitle,
+        messageText: message, betContent: opt, amount: mainAmount,
+        timestamp: now, status,
+      };
+      betLog.unshift(rec);
+      pushEvent(session, "bet:new", { bet: rec });
+    });
+  } else {
+    // 普通模式：一条主 BetRecord
+    const mainRec: BetRecord = {
+      id: `main-${now}`, groupId: targetId, groupTitle,
+      messageText: message, betContent: direction, amount: mainAmount,
+      timestamp: now, status,
+    };
+    betLog.unshift(mainRec);
+    pushEvent(session, "bet:new", { bet: mainRec });
+  }
 
-  // Log individual chase records (same message text, each with its own betContent = num)
+  // Log individual chase records
   for (const { num, amount } of chaseEntries) {
     const rec: BetRecord = {
       id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
@@ -1741,6 +1780,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     odds: body.odds ?? prev.odds,
     chaseNumbers: body.chaseNumbers ?? prev.chaseNumbers,
     enableChase: body.enableChase ?? prev.enableChase,
+    dualGroupMode: body.dualGroupMode ?? prev.dualGroupMode,
   };
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
