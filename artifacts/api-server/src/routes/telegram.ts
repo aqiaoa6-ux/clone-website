@@ -962,34 +962,136 @@ function decideBetAuto(session: TgSession): string | null {
   return direction;
 }
 
+/**
+ * ── Supreme AI ──────────────────────────────────────────────────────────────
+ * 8 模块集成决策系统，动态权重 + 熵自适应，覆盖所有走势形态：
+ *   M1: 龙形判断（短龙跟/中龙打/长龙跟）
+ *   M2: 震荡波型检测（ABAB / AABB / 混沌）
+ *   M3: 多周期频率偏差（5/10/20/50期均值回归）
+ *   M4: 指数衰减动量（近期结果指数加权）
+ *   M5: 统计偏差修正（极端偏离强制回归）
+ *   M6: 区间突破动量（短期方向漂移）
+ *   M7: 熵值自适应（有序市场跟势，混沌市场回归）
+ *   M8: 全局少数方向（终局平局决胜）
+ * ────────────────────────────────────────────────────────────────────────────
+ */
 function decideAI(session: TgSession): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
-  if (!labels.length) return null;
-  const [optA, optB = optA] = labels;
-  const history = [...lotteryHistoryCache, ...session.recentResults]
-    .map(r => mapR3ToEnabled(r, labels)).filter((x): x is string => x !== null);
-  if (!history.length) return labels[Math.floor(Math.random() * labels.length)] ?? null;
-  let votes = 0;
-  const last5 = history.slice(-5);
-  const streak = last5.reduce((acc, x) => x === last5[last5.length - 1] ? acc + 1 : 0, 0);
-  if (streak >= 4) votes += last5[last5.length - 1] === optA ? -3 : 3;
-  else if (streak === 3) votes += last5[last5.length - 1] === optA ? -2 : 2;
-  else if (streak === 2) votes += last5[last5.length - 1] === optA ? 1 : -1;
-  const last15 = history.slice(-15);
-  const rA = last15.filter(x => x === optA).length / (last15.length || 1);
-  if (rA >= 0.7) votes -= 2;
-  else if (rA <= 0.3) votes += 2;
-  else votes += rA < 0.5 ? 1 : -1;
-  const last6 = history.slice(-6);
-  if (last6.length >= 4 && last6.every((x, i) => i === 0 || x !== last6[i - 1]))
-    votes += last6[last6.length - 1] === optA ? -1 : 1;
-  const last12 = history.slice(-12);
-  const ws = last12.reduce((s, x, i) => s + ((i + 1) * (x === optA ? 1 : -1)), 0);
-  votes += ws > 0 ? -1 : 1;
-  if (votes > 0) return optA;
-  if (votes < 0) return optB;
-  const last20 = history.slice(-20);
-  return last20.filter(x => x === optA).length <= last20.length / 2 ? optA : optB;
+  if (labels.length < 2) return labels[0] ?? null;
+  const [optA, optB] = labels as [string, string];
+
+  const rawHistory = [...lotteryHistoryCache, ...session.recentResults];
+  const history = rawHistory
+    .map(r => mapR3ToEnabled(r, labels))
+    .filter((x): x is string => x !== null);
+
+  if (history.length < 3) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+
+  // Helpers
+  const countA = (arr: string[]) => arr.filter(x => x === optA).length;
+  const ratioA = (arr: string[]) => arr.length ? countA(arr) / arr.length : 0.5;
+  const last = (n: number) => history.slice(-n);
+  const latest = history[history.length - 1]!;
+
+  let score = 0; // positive → optA, negative → optB
+
+  // ── M1: 龙形判断 ─────────────────────────────────────────────────────────
+  // Measure consecutive streak of latest result
+  let streakLen = 0;
+  for (let i = history.length - 1; i >= 0 && history[i] === latest; i--) streakLen++;
+  if (streakLen <= 1) {
+    // no streak — neutral
+  } else if (streakLen <= 3) {
+    // 短龙：顺势 (强度2)
+    score += latest === optA ? 2 : -2;
+  } else if (streakLen <= 5) {
+    // 中龙：逆势，即将反转 (强度3)
+    score += latest === optA ? -3 : 3;
+  } else {
+    // 长龙≥6：超强龙，继续跟 (强度4)
+    score += latest === optA ? 4 : -4;
+  }
+
+  // ── M2: 震荡波型检测 ──────────────────────────────────────────────────────
+  const h8 = last(8);
+  if (h8.length >= 4) {
+    let altCount = 0;
+    for (let i = 1; i < h8.length; i++) if (h8[i] !== h8[i - 1]) altCount++;
+    const altRatio = altCount / (h8.length - 1);
+
+    if (altRatio >= 0.75) {
+      // 强震荡 ABAB：投上期反面
+      score += latest === optA ? -2.5 : 2.5;
+    } else if (altRatio <= 0.25) {
+      // 强龙市：继续跟（M1已算，额外加权）
+      score += latest === optA ? 1.5 : -1.5;
+    }
+
+    // AABB 双跳检测：AB各出2连后切换
+    const h4 = h8.slice(-4);
+    if (h4[0] === h4[1] && h4[2] === h4[3] && h4[0] !== h4[2]) {
+      // AABB 完成，下一期大概率重复 h4[3]
+      score += h4[3] === optA ? 1.5 : -1.5;
+    }
+  }
+
+  // ── M3: 多周期频率偏差（均值回归）───────────────────────────────────────
+  const windows: [number, number][] = [[5, 2.0], [10, 1.5], [20, 1.0], [50, 0.6]];
+  for (const [w, wt] of windows) {
+    const slice = last(w);
+    if (slice.length < Math.min(w, 4)) continue;
+    const r = ratioA(slice);
+    if      (r >= 0.70) score -= wt * 2.0;  // optA 严重过多 → 买 optB
+    else if (r >= 0.60) score -= wt * 1.0;
+    else if (r <= 0.30) score += wt * 2.0;  // optA 严重过少 → 买 optA
+    else if (r <= 0.40) score += wt * 1.0;
+    else score += r < 0.5 ? wt * 0.3 : -wt * 0.3;
+  }
+
+  // ── M4: 指数衰减动量（时间越近权重越高）─────────────────────────────────
+  const h15 = last(15);
+  let emoScore = 0;
+  for (let i = 0; i < h15.length; i++) {
+    const decay = Math.pow(1.25, i); // h15[0]=oldest(低权), h15[n-1]=newest(高权)
+    emoScore += h15[i] === optA ? decay : -decay;
+  }
+  // 动量反转：最近偏 optA 则下注 optB（均值回归）
+  score += emoScore > 0 ? -1.5 : 1.5;
+
+  // ── M5: 统计极端偏差修正 ─────────────────────────────────────────────────
+  const h30 = last(30);
+  if (h30.length >= 15) {
+    const dev = (ratioA(h30) - 0.5) * 2; // -1~+1，正=偏A
+    score -= dev * 3.5; // 强制回归
+  }
+
+  // ── M6: 区间突破动量 ──────────────────────────────────────────────────────
+  const h10 = last(10);
+  if (h10.length >= 8) {
+    const firstHalf = h10.slice(0, 5);
+    const secondHalf = h10.slice(5);
+    const drift = ratioA(secondHalf) - ratioA(firstHalf);
+    // 近期方向明显漂移 → 跟随（突破信号）
+    if (Math.abs(drift) >= 0.3) score += drift * 2.5;
+  }
+
+  // ── M7: 熵值自适应权重调整 ────────────────────────────────────────────────
+  const h20 = last(20);
+  let transitions = 0;
+  for (let i = 1; i < h20.length; i++) if (h20[i] !== h20[i - 1]) transitions++;
+  const entropy = h20.length > 1 ? transitions / (h20.length - 1) : 0.5;
+  // 有序市场(低熵)：形态信号更可靠，放大 score；混沌市场(高熵)：依赖统计回归，收敛 score
+  const entropyFactor = entropy < 0.4 ? 1.3 : entropy > 0.7 ? 0.75 : 1.0;
+  score *= entropyFactor;
+
+  // ── M8: 最终平局决胜（全局少数方向）────────────────────────────────────
+  if (score === 0) {
+    const globalA = countA(last(50));
+    const total   = Math.min(50, history.length);
+    score = globalA <= total / 2 ? 0.1 : -0.1;
+  }
+
+  return score > 0 ? optA : optB;
 }
 
 // ─── Auto-bet engine ──────────────────────────────────────────────────────────
