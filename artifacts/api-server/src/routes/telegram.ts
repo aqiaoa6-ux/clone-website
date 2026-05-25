@@ -1444,9 +1444,9 @@ async function pollLottery(session: TgSession): Promise<void> {
     if (latest.term <= session.lastSeenLotteryPeriod) return;
 
     if (latest.r3) {
-      // Settle main directional bet
-      const pending = session.betLog.find(b => b.status === "sent" && !b.isChase);
-      if (pending) {
+      // Settle ALL pending main bets (kill-group mode places 3 records per cycle)
+      const pendingAll = session.betLog.filter(b => b.status === "sent" && !b.isChase);
+      for (const pending of pendingAll) {
         const bet = pending.betContent.trim();
         let won = bet === latest.r3;
         if (!won && bet.length === 1) {
