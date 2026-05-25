@@ -630,6 +630,10 @@ export default function Dashboard() {
         if (ev.type === "balance:update") {
           setStatus(prev => prev ? { ...prev, balance: ev.balance as number, balanceSource: ev.balanceSource as string, balanceUpdatedAt: ev.balanceUpdatedAt as number } : prev);
         }
+        if (ev.type === "chase:won_stop") {
+          // 追号中奖，后端已自动关闭 enableChase，刷新 status 以同步配置
+          void fetchStatus();
+        }
       } catch { /* ignore */ }
     };
 
@@ -655,11 +659,12 @@ export default function Dashboard() {
   const cardExpiry = card?.expiresAt ? new Date(card.expiresAt) : null;
   const cardDaysLeft = cardExpiry ? Math.ceil((cardExpiry.getTime() - Date.now()) / 86400000) : 0;
 
-  const settled = bets.filter(b => b.won !== undefined);
+  const mainBets = bets.filter(b => !b.isChase);
+  const settled = mainBets.filter(b => b.won !== undefined);
   const wins = settled.filter(b => b.won === true).length;
   const winRate = settled.length > 0 ? ((wins / settled.length) * 100).toFixed(1) : "0.0";
   let maxStreak = 0, curStreak = 0;
-  for (const b of [...bets].reverse()) {
+  for (const b of [...mainBets].reverse()) {
     if (b.won === true) { curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
     else if (b.won === false) curStreak = 0;
   }

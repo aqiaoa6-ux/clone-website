@@ -696,8 +696,8 @@ function checkRisk(session: TgSession): { ok: boolean; reason?: string } {
   return { ok: true };
 }
 
-function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; result?: string; betId?: string; period?: number }): void {
-  const { won, pnl, result, betId, period } = opts;
+function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; result?: string; betId?: string; period?: number; isChase?: boolean }): void {
+  const { won, pnl, result, betId, period, isChase } = opts;
   const { betLog } = session;
 
   if (pnl !== undefined) {
@@ -717,19 +717,24 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
     if (period && !record.period) record.period = period;
   }
 
-  if (result) {
+  if (result && !isChase) {
     session.recentResults.push(result);
     if (session.recentResults.length > 30) session.recentResults.shift();
   }
 
-  session.consecutiveLosses = won ? 0 : session.consecutiveLosses + 1;
-  session.currentBet = computeNextBet(session, won);
+  // 追号不影响主投注的连亏计数和资金策略
+  if (!isChase) {
+    session.consecutiveLosses = won ? 0 : session.consecutiveLosses + 1;
+    session.currentBet = computeNextBet(session, won);
+  }
 
   if (record) {
-    const settled = betLog.filter(b => b.won !== undefined);
-    const wins = settled.filter(b => b.won === true).length;
+    // 统计只基于主注（非追号）
+    const mainBets = betLog.filter(b => b.won !== undefined && !b.isChase);
+    const wins = mainBets.filter(b => b.won === true).length;
     let streak = 0, maxS = 0;
     for (const b of [...betLog].reverse()) {
+      if (b.isChase) continue;
       if (b.won === true) { streak++; if (streak > maxS) maxS = streak; }
       else if (b.won === false) streak = 0;
     }
@@ -740,10 +745,10 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
       sessionPnl: session.sessionPnl,
       consecutiveLosses: session.consecutiveLosses,
       currentBet: session.currentBet,
-      totalBets: betLog.filter(b => b.status !== "failed").length,
-      settled: settled.length,
+      totalBets: betLog.filter(b => b.status !== "failed" && !b.isChase).length,
+      settled: mainBets.length,
       wins, maxStreak: maxS,
-      winRate: settled.length > 0 ? ((wins / settled.length) * 100).toFixed(2) : "0.00",
+      winRate: mainBets.length > 0 ? ((wins / mainBets.length) * 100).toFixed(2) : "0.00",
     });
   }
 }
@@ -1467,14 +1472,21 @@ async function pollLottery(session: TgSession): Promise<void> {
         settleBet(session, { won: wonPart, pnl, result: latest.r3, betId: pending.id, period: latest.term });
       }
 
-      // Settle chase number bets by sum value
+      // Settle chase number bets by sum value (excluded from main stats)
       const sum = (latest.sum1 ?? 0) + (latest.sum2 ?? 0) + (latest.sum3 ?? 0);
       const chasePending = session.betLog.filter(b => b.status === "sent" && b.isChase);
+      let chaseWon = false;
       for (const cb of chasePending) {
         const targetNum = parseInt(cb.betContent, 10);
         const won = !isNaN(targetNum) && targetNum === sum;
+        if (won) chaseWon = true;
         const winPnl = Math.round(cb.amount * (session.cfg.odds - 1) * 100) / 100;
-        settleBet(session, { won, pnl: won ? winPnl : -cb.amount, result: latest.r3, betId: cb.id, period: latest.term });
+        settleBet(session, { won, pnl: won ? winPnl : -cb.amount, result: latest.r3, betId: cb.id, period: latest.term, isChase: true });
+      }
+      // 追号中奖后自动停止追号
+      if (chaseWon && session.cfg.enableChase) {
+        session.cfg.enableChase = false;
+        pushEvent(session, "chase:won_stop", { sum });
       }
     }
 
