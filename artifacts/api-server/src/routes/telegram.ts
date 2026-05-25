@@ -119,6 +119,7 @@ interface TgSession {
   rawPwdHandlerBuilder?: Raw | null;
   rawPwdHandlerTimeout?: ReturnType<typeof setTimeout>;
   lastSeenLotteryPeriod: number;
+  lastSignalText: string;
 }
 
 interface PersistedData {
@@ -537,6 +538,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       chasePlacedThisCycle: false,
       lastSeenLotteryPeriod: 0,
       currentCloseTimeMs: 0,
+      lastSignalText: "",
       recentResults: [],
       chatLog: [],
       balance: data.balance ?? 1000000,
@@ -1104,8 +1106,15 @@ async function runAutoBet(session: TgSession): Promise<void> {
     }
     return;
   }
-  const direction = decideBetAuto(session);
-  if (!direction) return;
+  // For signal-based algos, use the cached last signal; otherwise use the auto decider
+  const isSignalAlgo = session.cfg.algorithms.includes("signal_follow") || session.cfg.algorithms.includes("signal_reverse");
+  const direction = isSignalAlgo
+    ? decideBet(session, session.lastSignalText)
+    : decideBetAuto(session);
+  if (!direction) {
+    if (isSignalAlgo) logger.info("[auto-bet] signal algo but no cached signal yet, skip");
+    return;
+  }
   await placeAllBets(session, direction);
 }
 
@@ -1232,6 +1241,10 @@ function startGroupListener(session: TgSession): void {
     const text = msg.message ?? "";
     if (!session.cfg.autoBet) return;
     if (session.kkpayEntityId && senderId === session.kkpayEntityId) return;
+
+    // Cache signal text for signal_follow / signal_reverse algos before window check
+    if (parseBetLabel(text)) session.lastSignalText = text;
+
     // Only block on unsettled main bets — chase bets (isChase=true) must not block main bet placement
     if (session.betLog.some(b => b.status === "sent" && !b.isChase)) return;
     if (session.betPlacedThisCycle) return;
@@ -1441,7 +1454,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       consecutiveLosses: 0, sessionPnl: 0,
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
-      betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0,
+      betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "",
       recentResults: [], chatLog: [],
       globalHandler: null, globalHandlerBuilder: null,
       balance: 1000000,
