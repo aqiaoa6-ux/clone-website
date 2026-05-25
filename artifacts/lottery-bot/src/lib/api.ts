@@ -172,6 +172,10 @@ export interface TgStatus {
   riskReason?: string;
   lastAlgoUsed?: string;
   currentPattern?: "streak" | "oscillating" | "neutral";
+  oddsBigOdd?: number;
+  oddsBigEven?: number;
+  oddsSmallOdd?: number;
+  oddsSmallEven?: number;
   totalBets?: number;
   settled?: number;
   wins?: number;

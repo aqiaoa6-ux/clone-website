@@ -35,6 +35,10 @@ interface BetCfg {
   betOptions: BetOption[];
   algorithms: AlgorithmId[];
   odds: number;
+  oddsBigOdd: number;
+  oddsBigEven: number;
+  oddsSmallOdd: number;
+  oddsSmallEven: number;
   chaseNumbers: Array<{ num: number; amount: number }>;
   enableChase: boolean;
   dualGroupMode: boolean;
@@ -157,6 +161,10 @@ const DEFAULT_CFG: BetCfg = {
   betOptions: ["big", "small"],
   algorithms: ["signal_follow"],
   odds: 1.98,
+  oddsBigOdd: 1.98,
+  oddsBigEven: 1.98,
+  oddsSmallOdd: 1.98,
+  oddsSmallEven: 1.98,
   chaseNumbers: [],
   enableChase: false,
   dualGroupMode: false,
@@ -1592,11 +1600,20 @@ async function pollLottery(session: TgSession): Promise<void> {
             }
           }
         }
-        // pnl: if 1 of count bets wins → gain = amount*(odds-1), lose = (count-1)*amount
-        //       net = amount*(odds-1) - (count-1)*amount = amount*(odds-count)
-        // if all lose → -count*amount
+        // pnl: winning part's odds used; net = amount*(winOdds-count) if won, -count*amount if lost
+        const winningPart = wonPart ? parts.find(bet => {
+          if (bet === latest.r3) return true;
+          if (bet.length === 1) {
+            if ((bet === "大" && latest.r3!.startsWith("大")) ||
+                (bet === "小" && latest.r3!.startsWith("小")) ||
+                (bet === "单" && latest.r3!.endsWith("单")) ||
+                (bet === "双" && latest.r3!.endsWith("双"))) return true;
+          }
+          return false;
+        }) : undefined;
+        const winOdds = winningPart ? getOddsForBet(winningPart, session.cfg) : session.cfg.odds;
         const pnl = wonPart
-          ? Math.round(pending.amount * (session.cfg.odds - count) * 100) / 100
+          ? Math.round(pending.amount * (winOdds - count) * 100) / 100
           : -pending.amount * count;
         settleBet(session, { won: wonPart, pnl, result: latest.r3, betId: pending.id, period: latest.term });
       }
@@ -1815,8 +1832,9 @@ async function startKkpayListener(session: TgSession): Promise<void> {
       if (sentBet) {
         const pnlM = text.match(/([+-][\d,]+(?:\.\d+)?)\s*KKCOIN/i) ?? text.match(/KKCOIN\s*([+-][\d,]+(?:\.\d+)?)/i) ?? danjineM;
         const pnlRaw = pnlM ? parseFloat(pnlM[1].replace(/,/g, "")) : undefined;
+        const betOdds = getOddsForBet(sentBet.betContent, session.cfg);
         const pnl = pnlRaw ?? (isWin
-          ? Math.round(sentBet.amount * (session.cfg.odds - 1) * 100) / 100
+          ? Math.round(sentBet.amount * (betOdds - 1) * 100) / 100
           : -sentBet.amount);
         if (pnl !== undefined) { isWin = pnl >= 0; isLoss = pnl < 0; }
         const rMatch = text.match(/[大小][单双]|[大小]|[单双]/);
@@ -1837,6 +1855,16 @@ async function startKkpayListener(session: TgSession): Promise<void> {
 
   session.kkpayHandlerBuilder = new NewMessage({});
   session.client.addEventHandler(session.kkpayHandler, session.kkpayHandlerBuilder);
+}
+
+// ─── Per-bet-type odds helper ──────────────────────────────────────────────────
+
+function getOddsForBet(betContent: string, cfg: BetCfg): number {
+  if (betContent === "大单") return cfg.oddsBigOdd;
+  if (betContent === "大双") return cfg.oddsBigEven;
+  if (betContent === "小单") return cfg.oddsSmallOdd;
+  if (betContent === "小双") return cfg.oddsSmallEven;
+  return cfg.odds; // fallback for 大/小/单/双 single-char bets
 }
 
 // ─── Stats helper ─────────────────────────────────────────────────────────────
@@ -2048,6 +2076,10 @@ router.post("/tg/config", requireCard, (req, res) => {
     betOptions: body.betOptions ?? prev.betOptions,
     algorithms: body.algorithms ?? prev.algorithms,
     odds: body.odds ?? prev.odds,
+    oddsBigOdd: body.oddsBigOdd ?? prev.oddsBigOdd,
+    oddsBigEven: body.oddsBigEven ?? prev.oddsBigEven,
+    oddsSmallOdd: body.oddsSmallOdd ?? prev.oddsSmallOdd,
+    oddsSmallEven: body.oddsSmallEven ?? prev.oddsSmallEven,
     chaseNumbers: body.chaseNumbers ?? prev.chaseNumbers,
     enableChase: body.enableChase ?? prev.enableChase,
     dualGroupMode: body.dualGroupMode ?? prev.dualGroupMode,

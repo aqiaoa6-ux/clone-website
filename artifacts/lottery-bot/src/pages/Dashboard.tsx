@@ -246,7 +246,10 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [kkpay, setKkpay] = useState(status.kkpayUsername ?? "kkpay");
   const [levels, setLevels] = useState<string[]>(initLevels.map(String));
   const [stepBackOnWin, setStepBackOnWin] = useState(status.stepBackOnWin ?? true);
-  const [odds, setOdds] = useState(String(status.odds ?? 1.98));
+  const [oddsBigOdd, setOddsBigOdd] = useState(String(status.oddsBigOdd ?? status.odds ?? 1.98));
+  const [oddsBigEven, setOddsBigEven] = useState(String(status.oddsBigEven ?? status.odds ?? 1.98));
+  const [oddsSmallOdd, setOddsSmallOdd] = useState(String(status.oddsSmallOdd ?? status.odds ?? 1.98));
+  const [oddsSmallEven, setOddsSmallEven] = useState(String(status.oddsSmallEven ?? status.odds ?? 1.98));
   const [chaseNumbers, setChaseNumbers] = useState<Array<{ num: string; amount: string }>>(
     (status.chaseNumbers ?? []).map(c => ({ num: String(c.num), amount: String(c.amount) }))
   );
@@ -273,7 +276,10 @@ function SettingsDrawer({ status, onClose, onSave }: {
         algorithms: algos, betOptions: betOpts, dualGroupMode, killGroupMode,
         amountLevels: levels.map(Number),
         stepBackOnWin,
-        odds: Number(odds),
+        oddsBigOdd: Number(oddsBigOdd),
+        oddsBigEven: Number(oddsBigEven),
+        oddsSmallOdd: Number(oddsSmallOdd),
+        oddsSmallEven: Number(oddsSmallEven),
         chaseNumbers: chaseNumbers
           .filter(c => c.num !== "" && c.amount !== "")
           .map(c => ({ num: Number(c.num), amount: Number(c.amount) }))
@@ -381,9 +387,21 @@ function SettingsDrawer({ status, onClose, onSave }: {
               </div>
             </div>
             <div>
-              <label className={labelCls}>赔率（含本金，如 1.998）</label>
-              <input type="number" value={odds} onChange={e => setOdds(e.target.value)}
-                className={inputCls} min="1.01" step="0.001" />
+              <label className={labelCls}>各项赔率（含本金，如 1.98）</label>
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  ["大单", oddsBigOdd, setOddsBigOdd],
+                  ["大双", oddsBigEven, setOddsBigEven],
+                  ["小单", oddsSmallOdd, setOddsSmallOdd],
+                  ["小双", oddsSmallEven, setOddsSmallEven],
+                ] as [string, string, (v: string) => void][]).map(([label, val, setter]) => (
+                  <div key={label}>
+                    <label className="block text-[10px] text-slate-500 mb-0.5">{label}</label>
+                    <input type="number" value={val} onChange={e => setter(e.target.value)}
+                      className={inputCls} min="1.01" step="0.001" />
+                  </div>
+                ))}
+              </div>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-slate-400">中后回首注</span>
