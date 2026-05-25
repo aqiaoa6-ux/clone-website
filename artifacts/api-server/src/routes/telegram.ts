@@ -19,7 +19,7 @@ const router = Router();
 type BetStrategy = "normal" | "martingale" | "anti-martingale";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
-  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak";
+  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai";
 
 interface BetCfg {
   autoBet: boolean;
@@ -933,7 +933,8 @@ function parseBetLabel(text: string): string | null {
 }
 
 function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
-  if (algoId === "ai_trend") return decideAI(session);
+  if (algoId === "ai_trend")   return decideAI(session);
+  if (algoId === "steady_ai")  return decideSteady(session);
   if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
   if (algoId === "dragon_ride") return dragonRide(session);
   if (algoId === "dragon_break") return dragonBreak(session);
@@ -1128,6 +1129,97 @@ function decideAI(session: TgSession): string | null {
   }
 
   const decision = score > 0 ? optA : optB;
+  session.lastAIBet = decision;
+  return decision;
+}
+
+// ─── Algorithm 2: 稳健跟势 (steady_ai) ───────────────────────────────────────
+/**
+ * 升级版算法 — 趋势跟随为主，与 AI趋势 的均值回归逻辑形成互补。
+ * 核心逻辑：
+ *  S1 主趋势（25期）: 哪边占优就跟哪边，不强行预测反转
+ *  S2 短期趋势（8期）: 近期方向确认
+ *  S3 连出跟随:  1-5期连出继续跟，≥7期才考虑反转
+ *  S4 ABAB震荡识别: 明显震荡时跟上期反面
+ *  S5 连亏防连方向（dual mode）
+ */
+function decideSteady(session: TgSession): string | null {
+  let optA: string, optB: string, history: string[];
+
+  if (session.cfg.dualGroupMode) {
+    optA = "大单小双"; optB = "小单大双";
+    history = [...lotteryHistoryCache, ...session.recentResults]
+      .map(r => (r === "大单" || r === "小双") ? optA : (r === "小单" || r === "大双") ? optB : null)
+      .filter((x): x is string => x !== null);
+  } else {
+    const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+    if (labels.length < 2) return labels[0] ?? null;
+    [optA, optB] = labels as [string, string];
+    history = [...lotteryHistoryCache, ...session.recentResults]
+      .map(r => mapR3ToEnabled(r, [optA, optB]))
+      .filter((x): x is string => x !== null);
+  }
+
+  if (history.length < 3) return Math.random() < 0.5 ? optA : optB;
+
+  const n = history.length;
+  const latest = history[n - 1]!;
+  let score = 0;
+
+  const countA = (arr: string[]) => arr.filter(x => x === optA).length;
+  const ratioA = (arr: string[]) => arr.length ? countA(arr) / arr.length : 0.5;
+
+  // ── S1: 主趋势（近25期）— 占优就跟 ─────────────────────────────────────────
+  const h25 = history.slice(-Math.min(25, n));
+  const r25 = ratioA(h25);
+  if (r25 >= 0.60)      score += (r25 - 0.5) * 8;   // A 占优，跟 A
+  else if (r25 <= 0.40) score += (r25 - 0.5) * 8;   // B 占优，跟 B（负分）
+
+  // ── S2: 短期趋势（近8期）确认 ────────────────────────────────────────────
+  const h8 = history.slice(-Math.min(8, n));
+  const r8 = ratioA(h8);
+  if (r8 >= 0.625)      score += 2.0;   // 近期 A 强
+  else if (r8 <= 0.375) score -= 2.0;   // 近期 B 强
+
+  // ── S3: 连出跟随 / 长龙反转 ──────────────────────────────────────────────
+  let streak = 0;
+  for (let i = n - 1; i >= 0 && history[i] === latest; i--) streak++;
+  if (streak >= 1 && streak <= 5) {
+    // 短中龙：连开大概率，继续跟
+    const weight = Math.min(streak, 4) * 0.8;
+    score += latest === optA ? weight : -weight;
+  } else if (streak >= 7) {
+    // 超长龙：趋势可能反转
+    score += latest === optA ? -1.5 : 1.5;
+  }
+
+  // ── S4: ABAB 震荡识别（近6期交替率） ─────────────────────────────────────
+  if (h8.length >= 6) {
+    let altCount = 0;
+    for (let i = 1; i < h8.length; i++) if (h8[i] !== h8[i - 1]) altCount++;
+    const altRatio = altCount / (h8.length - 1);
+    if (altRatio >= 0.80) {
+      // 强震荡：跟上期反面
+      score += latest === optA ? -2.5 : 2.5;
+    }
+  }
+
+  // ── S5: 双组/对立模式防连方向 ────────────────────────────────────────────
+  const isDual = session.cfg.dualGroupMode || (() => {
+    const ls = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+    return ls.length === 2 && (
+      (ls.includes("大单") && ls.includes("小双")) ||
+      (ls.includes("小单") && ls.includes("大双"))
+    );
+  })();
+  if (isDual && session.lastAIBet !== null) {
+    const tentative = score >= 0 ? optA : optB;
+    if (tentative === session.lastAIBet) {
+      score = score >= 0 ? score - 2.5 : score + 2.5;
+    }
+  }
+
+  const decision = score >= 0 ? optA : optB;
   session.lastAIBet = decision;
   return decision;
 }

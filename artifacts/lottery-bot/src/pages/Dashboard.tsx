@@ -18,7 +18,8 @@ interface DrawState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const ALGO_LABELS: Record<string, string> = {
-  ai_trend: "AI趋势",
+  ai_trend:  "AI趋势",
+  steady_ai: "升级版AI",
 };
 
 const BET_OPT_LABELS: Record<string, string> = {
