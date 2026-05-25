@@ -315,6 +315,33 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   <span key={k} className={tagCls(betOpts.includes(k))} onClick={() => toggleOpt(k)}>{v}</span>
                 ))}
               </div>
+              <div className="mt-2 space-y-1">
+                <p className="text-[10px] text-slate-500">快捷双组（AI算法自动交替）</p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setBetOpts(["big-odd", "small-even"])}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition ${
+                      betOpts.length === 2 && betOpts.includes("big-odd") && betOpts.includes("small-even")
+                        ? "bg-violet-600 border-violet-500 text-white"
+                        : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50"
+                    }`}
+                  >
+                    大单 / 小双
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBetOpts(["small-odd", "big-even"])}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium border transition ${
+                      betOpts.length === 2 && betOpts.includes("small-odd") && betOpts.includes("big-even")
+                        ? "bg-violet-600 border-violet-500 text-white"
+                        : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50"
+                    }`}
+                  >
+                    小单 / 大双
+                  </button>
+                </div>
+              </div>
             </div>
             <div>
               <label className={labelCls}>算法选择</label>

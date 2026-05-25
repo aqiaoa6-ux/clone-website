@@ -120,6 +120,7 @@ interface TgSession {
   rawPwdHandlerTimeout?: ReturnType<typeof setTimeout>;
   lastSeenLotteryPeriod: number;
   lastSignalText: string;
+  lastAIBet: string | null;
 }
 
 interface PersistedData {
@@ -541,6 +542,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       lastSeenLotteryPeriod: 0,
       currentCloseTimeMs: 0,
       lastSignalText: "",
+      lastAIBet: null,
       recentResults: [],
       chatLog: [],
       balance: data.balance ?? 1000000,
@@ -1091,7 +1093,23 @@ function decideAI(session: TgSession): string | null {
     score = globalA <= total / 2 ? 0.1 : -0.1;
   }
 
-  return score > 0 ? optA : optB;
+  // ── M9: 双组防连方向（大单/小双 或 小单/大双 模式专用）──────────────
+  // 若用户选的是对立双组，且上一次 AI 已选了某方向，施加反向压力，
+  // 让弱信号时自动切换，强信号时仍可坚持但难度更高。
+  const isDualGroup = labels.length === 2 && (
+    (labels.includes("大单") && labels.includes("小双")) ||
+    (labels.includes("小单") && labels.includes("大双"))
+  );
+  if (isDualGroup && session.lastAIBet !== null) {
+    const tentative = score > 0 ? optA : optB;
+    if (tentative === session.lastAIBet) {
+      score = score > 0 ? score - 3.5 : score + 3.5;
+    }
+  }
+
+  const decision = score > 0 ? optA : optB;
+  session.lastAIBet = decision;
+  return decision;
 }
 
 // ─── Auto-bet engine ──────────────────────────────────────────────────────────
@@ -1560,7 +1578,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       consecutiveLosses: 0, sessionPnl: 0,
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
-      betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "",
+      betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "", lastAIBet: null,
       recentResults: [], chatLog: [],
       globalHandler: null, globalHandlerBuilder: null,
       balance: 1000000,
