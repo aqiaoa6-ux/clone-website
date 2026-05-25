@@ -1,29 +1,29 @@
 {
-  "sessionString": "1AQAOMTQ5LjE1NC4xNzUuNjABuwiRFw03RNORzEVizEMMvaT1fjVZXhbd9eM8a+3EV+PAP6Y0JHZdfiJPf6Zl5Z0V5+e/t+SSk2vf2v57IOa115ZNhNYEI6gu8hsk6N/67cCQpUne0gToUIjS+VTQjVa66g2c3iM+dopqPY3rWJVn6oeO7MGfHKNoqCmfZ+y0zNF3Y8jtpvMSLSep6VU05cz59PJhUgscDN0X4KPbqrY/TVDxX/GdKgEjANWBKWeFbitYBQMSajqqtf1hUPF+z5A3Ea7Pilqqv8t0hEbH66/kwAYLLhGbBvXvQVOJytkuu6gJ+z/dEBjryV7n2y11HBtlgsTkhl/cxICgYCimzPWKUKA=",
-  "phone": "19089542124",
-  "balance": 395448.37,
-  "todayPnl": 0,
+  "sessionString": "1BQANOTEuMTA4LjU2LjE0NQG7MARoAkkCxj/PNpWYgc1MWxc0N0hcZb6WQuvVxmDZni2v2eV2JssP/OZTt7igdBOc2Jl8VYGPNAAddxGE486PC+T3fwM1oWPIVntD2aA8FXizacd5dzsu2FklskYMGl35BDg4UwyFA8sqLFq+gs6pM9PTw90UUxUH0VxeAHkrwSJeV2WQK8/wwR4WOjVmQRD4ZfAfrJlNSHS0ZTpKKCt/3DxEjV7tiCqZhJCHoaUA+CPMtv8rMPAyc6v/guHTWEikE0IXikXZq+6BGUyupCMY6wtSvGywuWwDTq3FxnccKCXbkHNjAx5ksHc18q0aTfN6BHOWWFrGeiNX218YysNagg==",
+  "phone": "855 96 786 6238",
+  "balance": 456900.864,
+  "todayPnl": 16300,
   "todayResetAt": 1779667200000,
-  "sessionPnl": 0,
+  "sessionPnl": 16300,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
-  "watchGroupId": "-1003858203119",
+  "watchGroupId": "-1003445706885",
   "cfg": {
-    "autoBet": false,
+    "autoBet": true,
     "betAmount": 100,
     "strategy": "normal",
     "betMultiplier": 2,
-    "maxConsecutiveLosses": 4,
-    "stopLoss": 200000,
-    "targetProfit": 200000,
+    "maxConsecutiveLosses": 100000,
+    "stopLoss": 400000,
+    "targetProfit": 300000,
     "cooldownSeconds": 0,
     "amountLevels": [
+      10000,
+      10000,
       20000,
-      40000,
-      80000,
-      15000,
       30000,
-      60000
+      40000,
+      32000
     ],
     "stepBackOnWin": true,
     "betOptions": [
@@ -32,10 +32,12 @@
     ],
     "algorithms": [
       "signal_follow",
+      "dragon_ride",
+      "anti_streak",
       "streak_follow",
-      "dragon_ride"
+      "ai_trend"
     ],
-    "odds": 1.998,
+    "odds": 1.98,
     "chaseNumbers": [
       {
         "num": 0,
@@ -46,6 +48,6 @@
         "amount": 1000
       }
     ],
-    "enableChase": false
+    "enableChase": true
   }
 }

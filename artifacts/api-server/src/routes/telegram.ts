@@ -530,9 +530,11 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       globalHandler: null, globalHandlerBuilder: null,
       consecutiveLosses: 0,
       sessionPnl: 0,
-      currentBet: data.cfg?.betAmount ?? DEFAULT_CFG.betAmount,
-      lastBetAt: 0,
       currentLevel: 0,
+      currentBet: (data.cfg?.amountLevels?.length ?? 0) > 1
+        ? (data.cfg!.amountLevels![0] ?? data.cfg?.betAmount ?? DEFAULT_CFG.betAmount)
+        : (data.cfg?.betAmount ?? DEFAULT_CFG.betAmount),
+      lastBetAt: 0,
       algIndex: 0,
       betPlacedThisCycle: false,
       chasePlacedThisCycle: false,
@@ -1630,6 +1632,12 @@ router.post("/tg/config", requireCard, (req, res) => {
 
   if (body.autoBet === false && prev.autoBet) stopPoller(session);
   if (body.autoBet === true && !prev.autoBet && session.watchGroupId) {
+    // Reset level to 1 every time autoBet is re-enabled
+    session.currentLevel = 0;
+    session.currentBet = session.cfg.amountLevels.length > 1
+      ? (session.cfg.amountLevels[0] ?? session.cfg.betAmount)
+      : session.cfg.betAmount;
+    session.consecutiveLosses = 0;
     session.betPlacedThisCycle = false;
     session.lastSeenLotteryPeriod = 0;
     startPoller(session);
