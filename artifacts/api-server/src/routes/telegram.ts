@@ -1211,16 +1211,14 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   const status = succeeded ? "sent" : "failed";
 
   if (dualItems) {
-    // 双组模式：每个选项单独记录一条 BetRecord
-    dualItems.forEach((opt, i) => {
-      const rec: BetRecord = {
-        id: `main-${i}-${now}`, groupId: targetId, groupTitle,
-        messageText: message, betContent: opt, amount: mainAmount,
-        timestamp: now, status,
-      };
-      betLog.unshift(rec);
-      pushEvent(session, "bet:new", { bet: rec });
-    });
+    // 双组模式：合并为一条记录，betContent = "大单+小双"
+    const dualRec: BetRecord = {
+      id: `main-${now}`, groupId: targetId, groupTitle,
+      messageText: message, betContent: dualItems.join("+"), amount: mainAmount,
+      timestamp: now, status,
+    };
+    betLog.unshift(dualRec);
+    pushEvent(session, "bet:new", { bet: dualRec });
   } else {
     // 普通模式：一条主 BetRecord
     const mainRec: BetRecord = {
@@ -1332,16 +1330,14 @@ async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOpti
 
   const status = succeeded ? "sent" : "failed";
 
-  // 每个投注选项独立记录
-  toBet.forEach((opt, i) => {
-    const rec: BetRecord = {
-      id: `kill-${i}-${now}`, groupId: targetId, groupTitle,
-      messageText: message, betContent: opt, amount,
-      timestamp: now, status,
-    };
-    betLog.unshift(rec);
-    pushEvent(session, "bet:new", { bet: rec });
-  });
+  // 三组合并为一条记录，betContent = "大双+大单+小双"
+  const combinedRec: BetRecord = {
+    id: `kill-${now}`, groupId: targetId, groupTitle,
+    messageText: message, betContent: toBet.join("+"), amount,
+    timestamp: now, status,
+  };
+  betLog.unshift(combinedRec);
+  pushEvent(session, "bet:new", { bet: combinedRec });
 
   // 追号记录
   for (const { num, amt } of chaseEntries.map(c => ({ num: c.num, amt: c.amount }))) {
@@ -1444,19 +1440,31 @@ async function pollLottery(session: TgSession): Promise<void> {
     if (latest.term <= session.lastSeenLotteryPeriod) return;
 
     if (latest.r3) {
-      // Settle ALL pending main bets (kill-group mode places 3 records per cycle)
+      // Settle ALL pending main bets
+      // betContent may be "大" / "大单" / "大单+小双" / "大双+大单+小双"
       const pendingAll = session.betLog.filter(b => b.status === "sent" && !b.isChase);
       for (const pending of pendingAll) {
-        const bet = pending.betContent.trim();
-        let won = bet === latest.r3;
-        if (!won && bet.length === 1) {
-          won = (bet === "大" && latest.r3.startsWith("大")) ||
+        const parts = pending.betContent.split("+").map(s => s.trim());
+        const count = parts.length; // 1=normal, 2=dual, 3=kill-group
+        let wonPart = false;
+        for (const bet of parts) {
+          if (bet === latest.r3) { wonPart = true; break; }
+          if (bet.length === 1) {
+            if ((bet === "大" && latest.r3.startsWith("大")) ||
                 (bet === "小" && latest.r3.startsWith("小")) ||
                 (bet === "单" && latest.r3.endsWith("单")) ||
-                (bet === "双" && latest.r3.endsWith("双"));
+                (bet === "双" && latest.r3.endsWith("双"))) {
+              wonPart = true; break;
+            }
+          }
         }
-        const winPnl = Math.round(pending.amount * (session.cfg.odds - 1) * 100) / 100;
-        settleBet(session, { won, pnl: won ? winPnl : -pending.amount, result: latest.r3, betId: pending.id, period: latest.term });
+        // pnl: if 1 of count bets wins → gain = amount*(odds-1), lose = (count-1)*amount
+        //       net = amount*(odds-1) - (count-1)*amount = amount*(odds-count)
+        // if all lose → -count*amount
+        const pnl = wonPart
+          ? Math.round(pending.amount * (session.cfg.odds - count) * 100) / 100
+          : -pending.amount * count;
+        settleBet(session, { won: wonPart, pnl, result: latest.r3, betId: pending.id, period: latest.term });
       }
 
       // Settle chase number bets by sum value
