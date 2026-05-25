@@ -250,6 +250,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
     (status.chaseNumbers ?? []).map(c => ({ num: String(c.num), amount: String(c.amount) }))
   );
   const [enableChase, setEnableChase] = useState(status.enableChase ?? false);
+  const [showChase, setShowChase] = useState(status.enableChase ?? false);
   const [saving, setSaving] = useState(false);
 
   const addChase = () => setChaseNumbers(prev => [...prev, { num: "", amount: "" }]);
@@ -428,74 +429,91 @@ function SettingsDrawer({ status, onClose, onSave }: {
             </div>
           </div>
 
-          {/* ── 自动追号 ── */}
-          <div className={`rounded-2xl border-2 transition-colors pb-4 mb-4 ${enableChase ? "border-amber-500/60 bg-amber-500/5" : "border-[#252a3d] bg-transparent"}`}>
-            {/* 标题行 + 开关 */}
-            <div className={`flex items-center justify-between px-4 py-3 rounded-t-2xl ${enableChase ? "bg-amber-500/10" : "bg-[#131728]/60"}`}>
+          {/* ── 自动追号（折叠区） ── */}
+          <div className="pb-4 mb-4 border-b border-[#252a3d]">
+            {/* 标题行：点击展开/折叠 */}
+            <button
+              type="button"
+              onClick={() => setShowChase(v => !v)}
+              className="w-full flex items-center justify-between py-2 group"
+            >
               <div className="flex items-center gap-2">
                 <span className="text-base leading-none">🎯</span>
-                <div>
-                  <p className={`text-sm font-semibold ${enableChase ? "text-amber-300" : "text-slate-400"}`}>自动追号</p>
-                  <p className="text-[10px] text-slate-600 mt-0.5">随主注每期同步下注 · 号码 0–27</p>
+                <span className="text-xs font-medium text-slate-400 group-hover:text-white transition">自动追号</span>
+                {enableChase && chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length > 0 && (
+                  <span className="text-[10px] bg-amber-500/20 text-amber-400 rounded px-1.5 py-0.5">
+                    {chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length} 个 · {chaseNumbers.filter(c => c.amount !== "").reduce((s, c) => s + (Number(c.amount) || 0), 0)} 元/期
+                  </span>
+                )}
+              </div>
+              <span className={`text-slate-500 text-xs transition-transform duration-200 ${showChase ? "rotate-180" : ""}`}>▼</span>
+            </button>
+
+            {/* 展开内容 */}
+            {showChase && (
+              <div className={`mt-2 rounded-2xl border-2 transition-colors pb-3 ${enableChase ? "border-amber-500/60 bg-amber-500/5" : "border-[#252a3d] bg-transparent"}`}>
+                {/* 开关行 */}
+                <div className={`flex items-center justify-between px-4 py-2.5 rounded-t-2xl ${enableChase ? "bg-amber-500/10" : "bg-[#131728]/60"}`}>
+                  <p className={`text-xs font-semibold ${enableChase ? "text-amber-300" : "text-slate-400"}`}>
+                    随主注每期同步下注 · 号码 0–27
+                  </p>
+                  <button
+                    onClick={() => setEnableChase(v => !v)}
+                    className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${enableChase ? "bg-amber-500" : "bg-[#252a3d]"}`}
+                  >
+                    <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${enableChase ? "left-5.5" : "left-0.5"}`} />
+                  </button>
+                </div>
+
+                {/* 号码列表 */}
+                <div className="px-4 pt-3 space-y-2">
+                  {chaseNumbers.length === 0 && (
+                    <p className="text-[11px] text-slate-600 text-center py-1">暂无追号，点击下方添加</p>
+                  )}
+                  {chaseNumbers.map((c, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <div className="flex-[1]">
+                        <input
+                          type="number" placeholder="号码 0-27"
+                          value={c.num}
+                          onChange={e => setChaseField(i, "num", e.target.value)}
+                          min="0" max="27"
+                          className={`w-full rounded-xl px-3 py-2 text-white text-sm focus:outline-none border ${enableChase ? "bg-[#1a1610] border-amber-500/30 focus:border-amber-400" : "bg-[#0f1220] border-[#252a3d] focus:border-blue-500"}`}
+                        />
+                      </div>
+                      <span className="text-slate-600 text-xs flex-shrink-0">×</span>
+                      <div className="flex-[1]">
+                        <input
+                          type="number" placeholder="金额"
+                          value={c.amount}
+                          onChange={e => setChaseField(i, "amount", e.target.value)}
+                          min="1"
+                          className={`w-full rounded-xl px-3 py-2 text-white text-sm focus:outline-none border ${enableChase ? "bg-[#1a1610] border-amber-500/30 focus:border-amber-400" : "bg-[#0f1220] border-[#252a3d] focus:border-blue-500"}`}
+                        />
+                      </div>
+                      <button
+                        onClick={() => removeChase(i)}
+                        className="text-slate-600 hover:text-rose-400 transition text-xl leading-none w-6 text-center flex-shrink-0"
+                      >×</button>
+                    </div>
+                  ))}
+
+                  <button
+                    onClick={addChase}
+                    className={`w-full border border-dashed rounded-xl py-2 text-xs transition ${enableChase ? "border-amber-500/40 text-amber-500/70 hover:border-amber-400 hover:text-amber-400" : "border-[#252a3d] text-slate-600 hover:border-blue-500/50 hover:text-blue-400"}`}
+                  >
+                    + 添加追号
+                  </button>
+
+                  {chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length > 0 && (
+                    <div className={`flex items-center justify-between text-[11px] rounded-lg px-3 py-1.5 ${enableChase ? "bg-amber-500/10 text-amber-400" : "bg-[#131728] text-slate-500"}`}>
+                      <span>{chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length} 个号码</span>
+                      <span>每期追注 {chaseNumbers.filter(c => c.amount !== "").reduce((s, c) => s + (Number(c.amount) || 0), 0)} 元</span>
+                    </div>
+                  )}
                 </div>
               </div>
-              {/* Toggle */}
-              <button
-                onClick={() => setEnableChase(v => !v)}
-                className={`relative w-12 h-7 rounded-full transition-colors flex-shrink-0 ${enableChase ? "bg-amber-500" : "bg-[#252a3d]"}`}
-              >
-                <span className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-all ${enableChase ? "left-6" : "left-1"}`} />
-              </button>
-            </div>
-
-            {/* 号码列表 */}
-            <div className="px-4 pt-3 space-y-2">
-              {chaseNumbers.length === 0 && (
-                <p className="text-[11px] text-slate-600 text-center py-2">暂无追号，点击下方添加</p>
-              )}
-              {chaseNumbers.map((c, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <div className="flex-[1]">
-                    <input
-                      type="number" placeholder="号码 0-27"
-                      value={c.num}
-                      onChange={e => setChaseField(i, "num", e.target.value)}
-                      min="0" max="27"
-                      className={`w-full rounded-xl px-3 py-2 text-white text-sm focus:outline-none border ${enableChase ? "bg-[#1a1610] border-amber-500/30 focus:border-amber-400" : "bg-[#0f1220] border-[#252a3d] focus:border-blue-500"}`}
-                    />
-                  </div>
-                  <span className="text-slate-600 text-xs flex-shrink-0">×</span>
-                  <div className="flex-[1]">
-                    <input
-                      type="number" placeholder="金额"
-                      value={c.amount}
-                      onChange={e => setChaseField(i, "amount", e.target.value)}
-                      min="1"
-                      className={`w-full rounded-xl px-3 py-2 text-white text-sm focus:outline-none border ${enableChase ? "bg-[#1a1610] border-amber-500/30 focus:border-amber-400" : "bg-[#0f1220] border-[#252a3d] focus:border-blue-500"}`}
-                    />
-                  </div>
-                  <button
-                    onClick={() => removeChase(i)}
-                    className="text-slate-600 hover:text-rose-400 transition text-xl leading-none w-6 text-center flex-shrink-0"
-                  >×</button>
-                </div>
-              ))}
-
-              <button
-                onClick={addChase}
-                className={`w-full border border-dashed rounded-xl py-2 text-xs transition ${enableChase ? "border-amber-500/40 text-amber-500/70 hover:border-amber-400 hover:text-amber-400" : "border-[#252a3d] text-slate-600 hover:border-blue-500/50 hover:text-blue-400"}`}
-              >
-                + 添加追号
-              </button>
-
-              {/* 汇总 */}
-              {chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length > 0 && (
-                <div className={`flex items-center justify-between text-[11px] rounded-lg px-3 py-1.5 ${enableChase ? "bg-amber-500/10 text-amber-400" : "bg-[#131728] text-slate-500"}`}>
-                  <span>{chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length} 个号码</span>
-                  <span>每期追注 {chaseNumbers.filter(c => c.amount !== "").reduce((s, c) => s + (Number(c.amount) || 0), 0)} 元</span>
-                </div>
-              )}
-            </div>
+            )}
           </div>
 
           <div className="pb-4">
