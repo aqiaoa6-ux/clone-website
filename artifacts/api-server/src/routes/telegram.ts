@@ -38,6 +38,7 @@ interface BetCfg {
   chaseNumbers: Array<{ num: number; amount: number }>;
   enableChase: boolean;
   dualGroupMode: boolean;
+  killGroupMode: boolean;
 }
 
 interface GroupInfo {
@@ -159,6 +160,7 @@ const DEFAULT_CFG: BetCfg = {
   chaseNumbers: [],
   enableChase: false,
   dualGroupMode: false,
+  killGroupMode: false,
 };
 
 const BET_OPTION_LABELS: Record<BetOption, string> = {
@@ -1244,6 +1246,117 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   if (betLog.length > 200) betLog.length = 200;
 }
 
+// ─── Kill-Group Mode ───────────────────────────────────────────────────────────
+// 四组杀组：AI 从 [大单/大双/小单/小双] 中挑出最可能不出的那一组杀掉，
+// 同时投注剩余三组。
+
+const KILL_GROUP_ALL = ["大单", "大双", "小单", "小双"] as const;
+type KillGroupOption = typeof KILL_GROUP_ALL[number];
+
+/**
+ * 根据走势分析决定杀哪一组（返回被杀组的标签）。
+ * 策略：计算每组的"热度分"，热度最高的组大概率已出得太多，最容易回调，
+ * 同时将其近期连出情况纳入权重，热度最高 → 杀之。
+ */
+function decideKillGroup(session: TgSession): KillGroupOption {
+  const history = [...lotteryHistoryCache, ...session.recentResults]
+    .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
+
+  if (history.length < 4) {
+    // 无足够历史：杀最近出现的那个（短期跟形不跟）
+    return history[history.length - 1] ?? KILL_GROUP_ALL[Math.floor(Math.random() * 4)]!;
+  }
+
+  const scores: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
+
+  // M1: 最近 8 期频率（高频→热→杀）
+  const h8 = history.slice(-8);
+  for (const opt of KILL_GROUP_ALL) {
+    const freq = h8.filter(r => r === opt).length / Math.max(1, h8.length);
+    scores[opt] += freq * 3.0;
+  }
+
+  // M2: 最近 20 期频率（均值回归）
+  const h20 = history.slice(-20);
+  for (const opt of KILL_GROUP_ALL) {
+    const freq = h20.filter(r => r === opt).length / Math.max(1, h20.length);
+    const expected = 0.25; // 均等分布期望
+    if (freq > expected) scores[opt] += (freq - expected) * 4.0;
+  }
+
+  // M3: 连出加权（当前连出长度 × 1.5 分）
+  const latest = history[history.length - 1]!;
+  let streak = 0;
+  for (let i = history.length - 1; i >= 0 && history[i] === latest; i--) streak++;
+  if (streak >= 2) scores[latest] += streak * 1.5;
+
+  // M4: 最近 3 期指数加权（最新 = 最重）
+  const h3 = history.slice(-3);
+  h3.forEach((r, i) => { scores[r] += Math.pow(2, i) * 0.5; });
+
+  // 杀热度最高的那组
+  const killed = (Object.entries(scores) as [KillGroupOption, number][])
+    .sort((a, b) => b[1] - a[1])[0]![0];
+  return killed;
+}
+
+/**
+ * 发出三注：下注除被杀组以外的三个选项，共享一条消息。
+ */
+async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOption): Promise<void> {
+  const { betLog } = session;
+  const targetId = session.watchGroupId!;
+  const amount = session.currentBet;
+  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
+
+  const toBet = KILL_GROUP_ALL.filter(o => o !== killedGroup);
+  const chaseEntries = (!session.chasePlacedThisCycle && session.cfg.enableChase ? session.cfg.chaseNumbers : [])
+    .filter(c => c.amount > 0);
+
+  const parts: string[] = [
+    ...chaseEntries.map(c => `${c.num}/${c.amount}`),
+    ...toBet.map(opt => `${opt} ${amount}`),
+  ];
+  const message = parts.join("  ");
+
+  const now = Date.now();
+  session.betPlacedThisCycle = true;
+  session.chasePlacedThisCycle = true;
+
+  let succeeded = false;
+  try {
+    await session.client.sendMessage(targetId, { message });
+    session.lastBetAt = now;
+    succeeded = true;
+  } catch { /* fall through */ }
+
+  const status = succeeded ? "sent" : "failed";
+
+  // 每个投注选项独立记录
+  toBet.forEach((opt, i) => {
+    const rec: BetRecord = {
+      id: `kill-${i}-${now}`, groupId: targetId, groupTitle,
+      messageText: message, betContent: opt, amount,
+      timestamp: now, status,
+    };
+    betLog.unshift(rec);
+    pushEvent(session, "bet:new", { bet: rec });
+  });
+
+  // 追号记录
+  for (const { num, amt } of chaseEntries.map(c => ({ num: c.num, amt: c.amount }))) {
+    const rec: BetRecord = {
+      id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
+      messageText: message, betContent: String(num), amount: amt,
+      timestamp: now, status, isChase: true,
+    };
+    betLog.unshift(rec);
+    pushEvent(session, "bet:new", { bet: rec });
+  }
+
+  if (betLog.length > 200) betLog.length = 200;
+}
+
 async function runAutoBet(session: TgSession): Promise<void> {
   if (!session.cfg.autoBet || !session.watchGroupId) return;
   const { betLog } = session;
@@ -1263,12 +1376,20 @@ async function runAutoBet(session: TgSession): Promise<void> {
 
   const risk = checkRisk(session);
   if (!risk.ok) {
-    // Risk blocked main bet — chase numbers still go out every period
     if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
       await placeChaseOnly(session);
     }
     return;
   }
+
+  // 四组杀组模式：AI 决定杀哪组，剩余三组全押
+  if (session.cfg.killGroupMode) {
+    const killed = decideKillGroup(session);
+    pushEvent(session, "bet:kill", { killed });
+    await placeKillGroupBets(session, killed);
+    return;
+  }
+
   // For signal-based algos, use the cached last signal; otherwise use the auto decider
   const isSignalAlgo = session.cfg.algorithms.includes("signal_follow") || session.cfg.algorithms.includes("signal_reverse");
   const direction = isSignalAlgo
@@ -1781,6 +1902,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     chaseNumbers: body.chaseNumbers ?? prev.chaseNumbers,
     enableChase: body.enableChase ?? prev.enableChase,
     dualGroupMode: body.dualGroupMode ?? prev.dualGroupMode,
+    killGroupMode: body.killGroupMode ?? prev.killGroupMode,
   };
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {

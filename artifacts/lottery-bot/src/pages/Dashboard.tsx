@@ -251,6 +251,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [algos, setAlgos] = useState<string[]>(status.algorithms ?? ["signal_follow"]);
   const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
   const [dualGroupMode, setDualGroupMode] = useState<boolean>(!!(status as unknown as { dualGroupMode?: boolean }).dualGroupMode);
+  const [killGroupMode, setKillGroupMode] = useState<boolean>(!!(status as unknown as { killGroupMode?: boolean }).killGroupMode);
   const [kkpay, setKkpay] = useState(status.kkpayUsername ?? "kkpay");
   const [levels, setLevels] = useState<string[]>(initLevels.map(String));
   const [stepBackOnWin, setStepBackOnWin] = useState(status.stepBackOnWin ?? true);
@@ -277,7 +278,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
         betAmount: Number(betAmount), strategy, betMultiplier: Number(multiplier),
         stopLoss: Number(stopLoss), targetProfit: Number(targetProfit),
         maxConsecutiveLosses: Number(maxLoss), cooldownSeconds: Number(cooldown),
-        algorithms: algos, betOptions: betOpts, dualGroupMode,
+        algorithms: algos, betOptions: betOpts, dualGroupMode, killGroupMode,
         amountLevels: levels.map(Number),
         stepBackOnWin,
         odds: Number(odds),
@@ -336,6 +337,29 @@ function SettingsDrawer({ status, onClose, onSave }: {
                 {dualGroupMode && (
                   <p className="text-[10px] text-emerald-500">
                     ✓ 已启用 · AI每期从两组中选一组同时发出两注 · 自动避免连续同组
+                  </p>
+                )}
+              </div>
+              <div className="mt-2 space-y-1.5">
+                <p className="text-[10px] text-slate-500">四组杀组模式</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = !killGroupMode;
+                    setKillGroupMode(next);
+                    if (next) setDualGroupMode(false);
+                  }}
+                  className={`w-full py-2 rounded-lg text-xs font-medium border transition ${
+                    killGroupMode
+                      ? "bg-orange-600 border-orange-500 text-white"
+                      : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-orange-500/50"
+                  }`}
+                >
+                  杀一组 · 投三组（大单 大双 小单 小双）
+                </button>
+                {killGroupMode && (
+                  <p className="text-[10px] text-orange-400">
+                    ✓ 已启用 · AI分析热度最高的组并杀掉 · 剩余三组同时下注
                   </p>
                 )}
               </div>
