@@ -1369,83 +1369,86 @@ type KillGroupOption = typeof KILL_GROUP_ALL[number];
 
 /**
  * 根据走势分析决定杀哪一组（返回被杀组的标签）。
- * 策略：计算每组的"热度分"，热度最高的组大概率已出得太多，最容易回调，
- * 同时将其近期连出情况纳入权重，热度最高 → 杀之。
+ *
+ * 核心策略：杀"近期最热"的组——刚出过、出现频率高的组，
+ * 下一期继续出的概率相对最低；长期缺席的组"欠出"，绝对不杀。
+ *
+ * 模块：
+ *  A: 近期遗漏（越短越热，越值得杀）
+ *  B: 短周期频率（近10期出现次数）
+ *  C: 中周期频率（近20期出现次数）
+ *  D: 当前连出加杀（连出≥2期，本期再出概率下降）
+ *  E: 长缺席强保护（≥6期未出，绝对不杀）
+ *  F: 大/小、单/双双面均衡修正
  */
 function decideKillGroup(session: TgSession): KillGroupOption {
   const history = [...lotteryHistoryCache, ...session.recentResults]
     .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
 
   if (history.length < 4) {
-    // 无足够历史：随机杀，不猜
     return KILL_GROUP_ALL[Math.floor(Math.random() * 4)]!;
   }
 
   const n = history.length;
   const scores: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
-  const expected = 0.25;
 
-  // ── M1: 长周期频率偏差（近 40 期）──────────────────────────────────────────
-  // 持续过热的组才是真正的杀组候选；短期波动不算。
-  const h40 = history.slice(-Math.min(40, n));
+  // ── A: 遗漏分：遗漏越少（越近期出现）→ 杀分越高 ───────────────────────────
+  const absence: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
   for (const opt of KILL_GROUP_ALL) {
-    const freq = h40.filter(r => r === opt).length / h40.length;
-    const excess = freq - expected;
-    if (excess > 0) scores[opt] += excess * 6.0;    // 超出期望越多，越值得杀
+    let ab = 0;
+    for (let i = n - 1; i >= 0 && history[i] !== opt; i--) ab++;
+    absence[opt] = ab;
+  }
+  const maxAb = Math.max(...Object.values(absence));
+  for (const opt of KILL_GROUP_ALL) {
+    // 遗漏=0(刚出) → 高杀分；遗漏最大 → 最低杀分
+    const hotness = maxAb > 0 ? (maxAb - absence[opt]) / maxAb : 0.5;
+    scores[opt] += hotness * 4.0;
   }
 
-  // ── M2: 中周期频率辅助（近 15 期）──────────────────────────────────────────
-  const h15 = history.slice(-Math.min(15, n));
+  // ── B: 近10期出现频率（短期热度）────────────────────────────────────────────
+  const h10 = history.slice(-Math.min(10, n));
   for (const opt of KILL_GROUP_ALL) {
-    const freq15 = h15.filter(r => r === opt).length / h15.length;
-    if (freq15 > 0.35) scores[opt] += (freq15 - 0.35) * 2.5;
+    const cnt = h10.filter(r => r === opt).length;
+    if (cnt >= 4) scores[opt] += (cnt - 2.5) * 1.5;   // 明显过热
+    else if (cnt >= 3) scores[opt] += 0.8;
   }
 
-  // ── M3: 遗漏保护——越久未出越不应杀 ─────────────────────────────────────────
-  // 高遗漏组正"欠出"，不该成为杀的对象。
+  // ── C: 近20期出现频率（中期热度）────────────────────────────────────────────
+  const h20 = history.slice(-Math.min(20, n));
   for (const opt of KILL_GROUP_ALL) {
-    let absence = 0;
-    for (let i = n - 1; i >= 0 && history[i] !== opt; i--) absence++;
-    if (absence >= 8)      scores[opt] -= absence * 1.2;  // 强保护
-    else if (absence >= 4) scores[opt] -= absence * 0.5;  // 中等保护
-    else if (absence >= 2) scores[opt] -= absence * 0.2;  // 轻度保护
+    const freq20 = h20.filter(r => r === opt).length / h20.length;
+    const excess = freq20 - 0.25;
+    if (excess > 0.1) scores[opt] += excess * 5.0;     // 中期过热加杀
   }
 
-  // ── M4: 连出保护 / 长龙杀 ──────────────────────────────────────────────────
-  // 彩票连开概率高（约 30-35%），连出1-3期不应作为杀的理由，反而要保护。
-  // 连出≥5期后趋势可能转向，此时适当加杀分。
+  // ── D: 当前连出加杀 ───────────────────────────────────────────────────────
+  // 连出≥2期：本期刚连出，再次出现概率偏低 → 加杀分
   const latest = history[n - 1]!;
   let streak = 0;
   for (let i = n - 1; i >= 0 && history[i] === latest; i--) streak++;
+  if (streak >= 2 && streak <= 4) scores[latest] += 1.5;
+  else if (streak >= 5)           scores[latest] += 2.5;
+  // streak=1: 刚出一次，遗漏=0已在A中拿到最高分，无需额外加
 
-  if (streak >= 5) {
-    // 超长龙：趋势大概率转向，适当加分
-    scores[latest] += 1.0;
-  } else if (streak >= 1 && streak <= 3) {
-    // 普通连开区间：连开概率高，保护不杀
-    scores[latest] -= 2.0;
+  // ── E: 长缺席强保护（欠出，绝对不杀）────────────────────────────────────────
+  for (const opt of KILL_GROUP_ALL) {
+    const ab = absence[opt];
+    if (ab >= 8)      scores[opt] -= 20;   // 极度缺席，完全不杀
+    else if (ab >= 6) scores[opt] -= 10;
+    else if (ab >= 4) scores[opt] -= 3;
+    else if (ab >= 3) scores[opt] -= 1;
   }
 
-  // ── M5: 大/小 & 单/双 均衡修正 ───────────────────────────────────────────
-  // 如果大/小或单/双整体极度失衡，对过热的那半边略加分
-  const bigFreq  = h40.filter(r => r.startsWith("大")).length / h40.length;
-  const oddFreq  = h40.filter(r => r.endsWith("单")).length / h40.length;
-  if (bigFreq > 0.6) {
-    scores["大单"] += 0.4;
-    scores["大双"] += 0.4;
-  } else if (bigFreq < 0.4) {
-    scores["小单"] += 0.4;
-    scores["小双"] += 0.4;
-  }
-  if (oddFreq > 0.6) {
-    scores["大单"] += 0.4;
-    scores["小单"] += 0.4;
-  } else if (oddFreq < 0.4) {
-    scores["大双"] += 0.4;
-    scores["小双"] += 0.4;
-  }
+  // ── F: 大/小 & 单/双 双面均衡修正 ────────────────────────────────────────
+  const h30 = history.slice(-Math.min(30, n));
+  const bigFreq = h30.filter(r => r.startsWith("大")).length / h30.length;
+  const oddFreq = h30.filter(r => r.endsWith("单")).length / h30.length;
+  if (bigFreq > 0.58) { scores["大单"] += 0.5; scores["大双"] += 0.5; }
+  else if (bigFreq < 0.42) { scores["小单"] += 0.5; scores["小双"] += 0.5; }
+  if (oddFreq > 0.58) { scores["大单"] += 0.5; scores["小单"] += 0.5; }
+  else if (oddFreq < 0.42) { scores["大双"] += 0.5; scores["小双"] += 0.5; }
 
-  // 杀综合分最高的那组
   const killed = (Object.entries(scores) as [KillGroupOption, number][])
     .sort((a, b) => b[1] - a[1])[0]![0];
   return killed;
