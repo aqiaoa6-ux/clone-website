@@ -857,7 +857,7 @@ export default function Dashboard() {
 
             {/* Stats */}
             <div className="grid grid-cols-4 gap-2">
-              <StatCard label="总投注" value={String(status.totalBets ?? 0)} />
+              <StatCard label="总投注" value={String(mainBets.length)} />
               <StatCard label="胜率" value={`${winRate}%`} valueClass={parseFloat(winRate) >= 50 ? "text-emerald-400" : "text-red-400"} />
               <StatCard label="最大连中" value={String(maxStreak)} valueClass="text-emerald-400" />
               <StatCard label="连亏" value={status.consecutiveLosses ? `${status.consecutiveLosses}局` : "-"}
