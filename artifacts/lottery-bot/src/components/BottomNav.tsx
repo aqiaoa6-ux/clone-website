@@ -2,35 +2,22 @@ import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 
 export default function BottomNav() {
-  const { user, card } = useAuth();
+  const { user, card, countdown } = useAuth();
   const [location, setLocation] = useLocation();
 
+  // Determine badge for card icon
+  const cardBadge = card?.active
+    ? (countdown ?? null)   // show live countdown
+    : "未激活";
+
+  // Warning color when < 1 hour remaining
+  const isUrgent = card?.active && countdown && !countdown.includes("天") && parseInt(countdown.split(":")[0] ?? "99") < 1;
+
   const items = [
-    {
-      path: "/",
-      icon: "🏠",
-      label: "主控台",
-      show: true,
-    },
-    {
-      path: "/trend",
-      icon: "📊",
-      label: "走势",
-      show: true,
-    },
-    {
-      path: "/card-key",
-      icon: "🎫",
-      label: "卡密",
-      show: true,
-      badge: card?.active ? null : "未激活",
-    },
-    {
-      path: "/admin",
-      icon: "⚙️",
-      label: "后台",
-      show: !!user?.isAdmin,
-    },
+    { path: "/",         icon: "🏠", label: "主控台", show: true },
+    { path: "/trend",    icon: "📊", label: "走势",   show: true },
+    { path: "/card-key", icon: "🎫", label: "卡密",   show: true },
+    { path: "/admin",    icon: "⚙️", label: "后台",   show: !!user?.isAdmin },
   ].filter(i => i.show);
 
   return (
@@ -38,6 +25,7 @@ export default function BottomNav() {
       <div className="max-w-lg mx-auto flex">
         {items.map(item => {
           const active = location === item.path;
+          const badge = item.path === "/card-key" ? cardBadge : null;
           return (
             <button
               key={item.path}
@@ -47,9 +35,14 @@ export default function BottomNav() {
             >
               <span className="text-xl leading-none">{item.icon}</span>
               <span className="text-[11px] font-medium">{item.label}</span>
-              {item.badge && (
-                <span className="absolute top-2 right-1/4 text-[9px] bg-red-500 text-white px-1 py-0.5 rounded-full leading-none">
-                  {item.badge}
+              {badge && (
+                <span className={`absolute top-1.5 right-[5%] text-[8px] px-1 py-0.5 rounded-full leading-none font-mono whitespace-nowrap
+                  ${card?.active
+                    ? isUrgent
+                      ? "bg-red-500/90 text-white animate-pulse"
+                      : "bg-emerald-700/80 text-emerald-100"
+                    : "bg-red-500 text-white"}`}>
+                  {badge}
                 </span>
               )}
               {active && (

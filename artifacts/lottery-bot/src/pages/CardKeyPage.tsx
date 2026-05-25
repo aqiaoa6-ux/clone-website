@@ -11,7 +11,7 @@ const CARD_TYPES = [
 ];
 
 export default function CardKeyPage() {
-  const { user, logout, refreshCard } = useAuth();
+  const { user, card, countdown, logout, refreshCard } = useAuth();
   const [, setLocation] = useLocation();
   const [key, setKey] = useState("");
   const [error, setError] = useState("");
@@ -50,6 +50,31 @@ export default function CardKeyPage() {
           </button>
         </div>
 
+        {/* Active card countdown banner */}
+        {card?.active && countdown && !success && (
+          <div className={`rounded-2xl px-5 py-4 mb-5 border ${
+            countdown.includes("天") || parseInt(countdown.split(":")[0] ?? "99") >= 1
+              ? "bg-emerald-500/10 border-emerald-500/30"
+              : "bg-red-500/10 border-red-500/30 animate-pulse"
+          }`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[11px] text-slate-400 mb-0.5">
+                  {card.type === "daily" ? "☀️ 天卡" : card.type === "weekly" ? "⭐ 周卡" : "👑 月卡"} · 有效期至
+                </div>
+                <div className="text-[11px] text-slate-500">{expiryStr(card.expiresAt!)}</div>
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] text-slate-500 mb-0.5">剩余</div>
+                <div className={`text-xl font-mono font-bold tabular-nums ${
+                  !countdown.includes("天") && parseInt(countdown.split(":")[0] ?? "99") < 1
+                    ? "text-red-400" : "text-emerald-400"
+                }`}>{countdown}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {success ? (
           <div className="bg-green-500/10 border border-green-500/30 rounded-2xl p-6 text-center mb-6">
             <div className="text-4xl mb-3">✅</div>
@@ -62,7 +87,7 @@ export default function CardKeyPage() {
         ) : (
           <>
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-6 mb-6">
-              <h2 className="text-white font-semibold mb-4">输入卡密</h2>
+              <h2 className="text-white font-semibold mb-4">{card?.active ? "续费 / 更换卡密" : "输入卡密"}</h2>
 
               {error && (
                 <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg px-4 py-3 mb-4">

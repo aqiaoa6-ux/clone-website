@@ -8,6 +8,9 @@ import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
 import { requireAuth, requireCard, requireAdmin } from "../middleware/requireAuth";
+import { db } from "@workspace/db";
+import { cardKeys } from "@workspace/db";
+import { eq, and, gt } from "drizzle-orm";
 
 const router = Router();
 
@@ -576,6 +579,32 @@ async function restoreAllSessions(): Promise<void> {
 }
 
 void restoreAllSessions();
+
+// ─── Periodic expiry enforcement ──────────────────────────────────────────────
+// Every 60s: disconnect TG sessions whose card has expired and delete the session file.
+setInterval(async () => {
+  if (tgSessions.size === 0) return;
+  try {
+    const now = new Date();
+    for (const [userId, session] of tgSessions) {
+      // Check if this user has any active (non-expired) card
+      const [active] = await db.select({ id: cardKeys.id })
+        .from(cardKeys)
+        .where(and(eq(cardKeys.userId, userId), gt(cardKeys.expiresAt!, now)))
+        .limit(1);
+      if (!active) {
+        logger.info({ userId }, "[tg] card expired — auto-disconnecting session");
+        stopAllTimers(session);
+        try { await session.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
+        try { await session.client.disconnect(); } catch { /* ok */ }
+        tgSessions.delete(userId);
+        try { fs.unlinkSync(sessionFile(userId)); } catch { /* ok */ }
+      }
+    }
+  } catch (err) {
+    logger.error(err, "[tg] expiry check failed");
+  }
+}, 60_000);
 
 // ─── Balance parsing ──────────────────────────────────────────────────────────
 
@@ -2015,7 +2044,7 @@ router.post("/admin/tg/sessions/:userId/send", requireAdmin, async (req, res) =>
   }
 });
 
-router.post("/tg/disconnect", requireCard, async (req, res) => {
+router.post("/tg/disconnect", requireAuth, async (req, res) => {
   const userId = req.user!.userId;
   const session = tgSessions.get(userId);
   if (session) {

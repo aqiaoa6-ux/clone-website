@@ -1,5 +1,21 @@
 [
   {
+    "id": "1779681484336-k6y18",
+    "timestamp": 1779681484336,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_success",
+    "text": "✅ 支付密码验证成功"
+  },
+  {
+    "id": "1779681484069-rflm8",
+    "timestamp": 1779681484069,
+    "userId": 2,
+    "username": "xbbty999",
+    "event": "pwd_sent",
+    "text": "441522"
+  },
+  {
     "id": "1779641895647-y236r",
     "timestamp": 1779641895647,
     "userId": 2,

@@ -483,7 +483,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { user, card, logout } = useAuth();
+  const { user, card, countdown: cardCountdown, logout } = useAuth();
   const [, setLocation] = useLocation();
 
   const [status, setStatus] = useState<TgStatus | null>(null);
@@ -649,9 +649,13 @@ export default function Dashboard() {
           <div className="flex items-center gap-2">
             <span className="text-xl">🎰</span>
             <span className="font-bold text-white">彩票机器人</span>
-            {card?.active && (
-              <span className="text-[10px] bg-blue-500/20 text-blue-400 border border-blue-500/30 px-1.5 py-0.5 rounded">
-                {card.type === "daily" ? "天卡" : card.type === "weekly" ? "周卡" : "月卡"} {cardDaysLeft}天
+            {card?.active && cardCountdown && (
+              <span className={`text-[10px] border px-1.5 py-0.5 rounded font-mono tabular-nums ${
+                !cardCountdown.includes("天") && parseInt(cardCountdown.split(":")[0] ?? "99") < 1
+                  ? "bg-red-500/20 text-red-400 border-red-500/30 animate-pulse"
+                  : "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+              }`}>
+                {card.type === "daily" ? "天卡" : card.type === "weekly" ? "周卡" : "月卡"} {cardCountdown}
               </span>
             )}
           </div>
