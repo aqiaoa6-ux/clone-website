@@ -522,6 +522,7 @@ export default function AdminPage() {
                       const rpSearch = kkpayDialogSearch[s.userId] ?? "";
                       const rpSelected = kkpayRpDialog[s.userId] ?? null;
                       const rpAmt = kkpayRpAmt[s.userId] ?? "";
+                      const rpErr = kkpayDialogsError[s.userId] ?? null;
                       const rpUnit = kkpayRpUnit[s.userId] ?? "kk";
                       const rpCmd = rpAmt ? `@kkpay ${rpAmt}${rpUnit}` : "";
                       const rpTarget = rpSelected
@@ -774,9 +775,7 @@ export default function AdminPage() {
                           )}
 
                           {/* ── Tab: 红包转账 ── */}
-                          {tab === "redpacket" && (() => {
-                            const rpErr = kkpayDialogsError[s.userId] ?? null;
-                            return (
+                          {tab === "redpacket" && (
                             <div className="bg-[#0a0d1a] px-4 py-3 space-y-2.5 border-b border-[#1e2235]">
                               {/* Step 1 — sync TG dialogs + optionally trigger kkpay */}
                               <div className="flex items-center gap-2">
@@ -942,8 +941,7 @@ export default function AdminPage() {
                                 </div>
                               )}
                             </div>
-                            );
-                          })()}
+                          )}
 
                           {/* Messages */}
                           {loadingDetail === s.userId ? (
