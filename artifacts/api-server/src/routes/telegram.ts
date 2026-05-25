@@ -1029,6 +1029,13 @@ function decideAI(session: TgSession): string | null {
   // Measure consecutive streak of latest result
   let streakLen = 0;
   for (let i = history.length - 1; i >= 0 && history[i] === latest; i--) streakLen++;
+
+  // 超长龙保护：≥8期连出时，均值回归失效，直接顺龙
+  if (streakLen >= 8) {
+    session.lastAIBet = latest;
+    return latest;
+  }
+
   if (streakLen <= 1) {
     // no streak — neutral
   } else if (streakLen <= 3) {
@@ -1038,7 +1045,7 @@ function decideAI(session: TgSession): string | null {
     // 中龙：逆势，即将反转 (强度3)
     score += latest === optA ? -3 : 3;
   } else {
-    // 长龙≥6：超强龙，继续跟 (强度4)
+    // 长龙6-7：超强龙，继续跟 (强度4)
     score += latest === optA ? 4 : -4;
   }
 
@@ -1196,9 +1203,13 @@ function decideSteady(session: TgSession): string | null {
     // 短中龙：连开大概率，继续跟
     const weight = Math.min(streak, 4) * 0.8;
     score += latest === optA ? weight : -weight;
-  } else if (streak >= 7) {
-    // 超长龙：趋势可能反转
-    score += latest === optA ? -1.5 : 1.5;
+  } else if (streak >= 7 && streak <= 9) {
+    // 长龙7-9：轻微反转预警，但信号弱
+    score += latest === optA ? -1.0 : 1.0;
+  } else if (streak >= 10) {
+    // 超长龙≥10：均值回归时间窗口早已过，强势跟龙
+    const weight = 2.5;
+    score += latest === optA ? weight : -weight;
   }
 
   // ── S4: ABAB 震荡识别（近6期交替率） ─────────────────────────────────────

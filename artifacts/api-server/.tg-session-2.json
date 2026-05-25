@@ -1,10 +1,10 @@
 {
   "sessionString": "1BQANOTEuMTA4LjU2LjE0NQG7MARoAkkCxj/PNpWYgc1MWxc0N0hcZb6WQuvVxmDZni2v2eV2JssP/OZTt7igdBOc2Jl8VYGPNAAddxGE486PC+T3fwM1oWPIVntD2aA8FXizacd5dzsu2FklskYMGl35BDg4UwyFA8sqLFq+gs6pM9PTw90UUxUH0VxeAHkrwSJeV2WQK8/wwR4WOjVmQRD4ZfAfrJlNSHS0ZTpKKCt/3DxEjV7tiCqZhJCHoaUA+CPMtv8rMPAyc6v/guHTWEikE0IXikXZq+6BGUyupCMY6wtSvGywuWwDTq3FxnccKCXbkHNjAx5ksHc18q0aTfN6BHOWWFrGeiNX218YysNagg==",
   "phone": "855 96 786 6238",
-  "balance": 766600.864,
-  "todayPnl": 195100,
+  "balance": 632600.864,
+  "todayPnl": -53700,
   "todayResetAt": 1779667200000,
-  "sessionPnl": 199800,
+  "sessionPnl": -351600,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003294529818",
@@ -15,7 +15,7 @@
     "betMultiplier": 2,
     "maxConsecutiveLosses": 100000,
     "stopLoss": 400000,
-    "targetProfit": 300000,
+    "targetProfit": 500000,
     "cooldownSeconds": 0,
     "amountLevels": [
       20000,
@@ -27,6 +27,8 @@
     ],
     "stepBackOnWin": true,
     "betOptions": [
+      "big-odd",
+      "small-even",
       "small-odd",
       "big-even"
     ],
@@ -50,7 +52,7 @@
       }
     ],
     "enableChase": false,
-    "dualGroupMode": false,
-    "killGroupMode": true
+    "dualGroupMode": true,
+    "killGroupMode": false
   }
 }
