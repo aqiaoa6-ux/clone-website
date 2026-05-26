@@ -975,40 +975,70 @@ export default function Dashboard() {
 
             {/* Algo Leaderboard */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-              <div className="px-5 py-3 border-b border-[#252a3d]">
+              <div className="px-5 py-3 border-b border-[#252a3d] flex items-center justify-between">
                 <h3 className="text-white font-semibold text-sm">🏆 算法排行榜</h3>
+                <span className="text-slate-600 text-[10px]">基于近期走势回测</span>
               </div>
               {algoStats.length === 0 ? (
-                <div className="text-center text-slate-600 text-xs py-6">暂无记录，投注结算后自动显示</div>
+                <div className="text-center text-slate-600 text-xs py-6">请先在设置中选择算法</div>
               ) : (
                 <div className="divide-y divide-[#1e2235]">
                   {algoStats.map((s, i) => {
-                    const label: Record<string, string> = {
+                    const ALGO_LABELS: Record<string, string> = {
                       ai_trend: "AI趋势", steady_ai: "升级版AI", adaptive_switch: "自适应切换",
                       signal_follow: "跟信号", signal_reverse: "反信号", streak_follow: "跟龙",
                       cold_pick: "冷号", random: "随机", dragon_ride: "顺龙",
                       dragon_break: "破龙", momentum: "动量", anti_streak: "反连",
                     };
-                    const name = label[s.algoId] ?? s.algoId;
-                    const rate = parseFloat(s.winRate);
-                    const rateColor = rate >= 55 ? "text-emerald-400" : rate >= 45 ? "text-yellow-400" : "text-red-400";
+                    const name = ALGO_LABELS[s.algoId] ?? s.algoId;
+                    // 主要指标：走势回测胜率；次要：实战统计
+                    const simRate = s.simWinRate ? parseFloat(s.simWinRate) : null;
+                    const rateColor = simRate === null ? "text-slate-500"
+                      : simRate >= 55 ? "text-emerald-400"
+                      : simRate >= 45 ? "text-yellow-400"
+                      : "text-red-400";
                     return (
-                      <div key={s.algoId} className="flex items-center gap-3 px-4 py-2.5">
-                        <span className="text-slate-500 text-xs w-4 flex-shrink-0">#{i + 1}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-white text-xs font-medium">{name}</span>
-                            <span className="text-slate-600 text-[10px]">{s.total}次</span>
+                      <div key={s.algoId} className="px-4 py-2.5">
+                        <div className="flex items-center gap-3">
+                          <span className="text-slate-500 text-xs w-4 flex-shrink-0">#{i + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-white text-xs font-medium">{name}</span>
+                              {s.canSimulate ? (
+                                <span className="text-slate-600 text-[10px]">回测{s.simTotal}期</span>
+                              ) : (
+                                <span className="text-slate-600 text-[10px]">信号算法</span>
+                              )}
+                            </div>
+                            {/* 走势回测 */}
+                            {s.canSimulate && s.simTotal > 0 && (
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-slate-500 text-[9px]">走势</span>
+                                <span className="text-emerald-400 text-[10px]">中{s.simWins}</span>
+                                <span className="text-red-400 text-[10px]">未{s.simLosses}</span>
+                              </div>
+                            )}
+                            {/* 实战统计 */}
+                            {s.total > 0 && (
+                              <div className="flex items-center gap-2 mt-0.5">
+                                <span className="text-slate-500 text-[9px]">实战</span>
+                                <span className="text-emerald-400 text-[10px]">中{s.wins}</span>
+                                <span className="text-red-400 text-[10px]">未{s.losses}</span>
+                                <span className={`text-[9px] ${s.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                                  {s.pnl >= 0 ? "+" : ""}{s.pnl.toLocaleString()}
+                                </span>
+                              </div>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-emerald-400 text-[10px]">中{s.wins}</span>
-                            <span className="text-red-400 text-[10px]">未{s.losses}</span>
-                          </div>
-                        </div>
-                        <div className="text-right flex-shrink-0">
-                          <div className={`text-sm font-bold ${rateColor}`}>{s.winRate}%</div>
-                          <div className={`text-[10px] font-medium mt-0.5 ${s.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-                            {s.pnl >= 0 ? "+" : ""}{s.pnl.toLocaleString()}
+                          <div className="text-right flex-shrink-0">
+                            {s.canSimulate && s.simWinRate ? (
+                              <div className={`text-sm font-bold ${rateColor}`}>{s.simWinRate}%</div>
+                            ) : (
+                              <div className="text-slate-600 text-sm">—</div>
+                            )}
+                            {s.total > 0 && s.winRate && (
+                              <div className="text-slate-500 text-[10px] mt-0.5">实{s.winRate}%</div>
+                            )}
                           </div>
                         </div>
                       </div>

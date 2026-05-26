@@ -2384,39 +2384,117 @@ router.delete("/tg/bets", requireCard, (req, res) => {
   res.json({ ok: true });
 });
 
+/**
+ * 对单个算法在历史开奖数据上做回测。
+ * 临时替换 lotteryHistoryCache（Node.js 单线程同步安全），
+ * 让 decideAI/decideSteady 等算法只能看到"过去"数据。
+ */
+function backtestAlgo(algoId: AlgorithmId, fullHistory: string[]): { wins: number; losses: number; canSimulate: boolean } {
+  // 信号算法需要外部信号文本，无法回测；random 无意义
+  if (algoId === "signal_follow" || algoId === "signal_reverse" || algoId === "random") {
+    return { wins: 0, losses: 0, canSimulate: false };
+  }
+
+  const MIN_HIST = 5;
+  if (fullHistory.length <= MIN_HIST) return { wins: 0, losses: 0, canSimulate: true };
+
+  let wins = 0, losses = 0;
+  const labels = ["大", "小"];
+  const origCache = lotteryHistoryCache;
+
+  try {
+    for (let i = MIN_HIST; i < fullHistory.length; i++) {
+      const pastSlice = fullHistory.slice(0, i);
+      const actual = fullHistory[i]!;
+
+      // 只给算法看当前时间点之前的数据
+      lotteryHistoryCache = pastSlice.slice(-50);
+
+      const fakeSession = {
+        recentResults: pastSlice.slice(-30),
+        lastAIBet: null as string | null,
+        currentPattern: "neutral" as MarketPattern,
+        algIndex: 0,
+        cfg: {
+          betOptions: ["big", "small"] as BetOption[],
+          algorithms: [algoId],
+          dualGroupMode: false,
+          betAmount: 10,
+          chaseEnabled: false,
+          chaseSteps: [],
+          stopLoss: 0,
+          takeProfitSession: 0,
+          maxConsecLoss: 0,
+          cooldownAfterLoss: 0,
+          watchGroupId: "",
+          watchGroupTitle: "",
+          kkpayGroupId: "",
+          kkpayGroupTitle: "",
+          enabled: false,
+          adaptiveSwitch: false,
+          killGroupEnabled: false,
+        },
+      } as unknown as TgSession;
+
+      let prediction: string | null = null;
+      try { prediction = runAlgo(fakeSession, algoId, labels); } catch { /* skip */ }
+      if (!prediction) continue;
+
+      const won = (prediction === "大" && actual.startsWith("大")) ||
+                  (prediction === "小" && actual.startsWith("小")) ||
+                  prediction === actual;
+      if (won) wins++; else losses++;
+    }
+  } finally {
+    lotteryHistoryCache = origCache;
+  }
+
+  return { wins, losses, canSimulate: true };
+}
+
 router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session) { res.json({ stats: [] }); return; }
 
-  // 实时从 betLog 计算（最近 200 条），兼容无 algoId 的旧注单（fallback 到主算法）
-  const primaryAlgo = session.cfg.algorithms[0] ?? "unknown";
-  const live: Record<string, { wins: number; losses: number; pnl: number }> = {};
+  const configuredAlgos = session.cfg.algorithms;
+  if (!configuredAlgos.length) { res.json({ stats: [] }); return; }
+
+  // 历史数据快照（oldest→newest），用于回测
+  const fullHistory = [...lotteryHistoryCache];
+
+  // 实际投注统计（从 betLog 计算，兼容无 algoId 的旧注单）
+  const primaryAlgo = configuredAlgos[0]!;
+  const actualMap: Record<string, { wins: number; losses: number; pnl: number }> = {};
   for (const b of session.betLog) {
     if (b.isChase || b.won === undefined) continue;
     const key = b.algoId ?? primaryAlgo;
-    if (!live[key]) live[key] = { wins: 0, losses: 0, pnl: 0 };
-    if (b.won) live[key]!.wins++;
-    else live[key]!.losses++;
-    if (b.pnl !== undefined) live[key]!.pnl += b.pnl;
+    if (!actualMap[key]) actualMap[key] = { wins: 0, losses: 0, pnl: 0 };
+    if (b.won) actualMap[key]!.wins++;
+    else actualMap[key]!.losses++;
+    if (b.pnl !== undefined) actualMap[key]!.pnl += b.pnl;
   }
 
-  // 合并持久化的历史统计（betLog 之外的历史投注）——避免重复计：
-  // algoStats 只统计 betLog 范围之外的历史，因此仅在 live 中无该 algoId 时才合并
-  for (const [algoId, s] of Object.entries(session.algoStats)) {
-    if (!live[algoId]) live[algoId] = { wins: s.wins, losses: s.losses, pnl: s.pnl };
-  }
-
-  const rows = Object.entries(live)
-    .map(([algoId, s]) => ({
+  const rows = configuredAlgos.map(algoId => {
+    const bt = backtestAlgo(algoId, fullHistory);
+    const act = actualMap[algoId] ?? { wins: 0, losses: 0, pnl: 0 };
+    const simTotal = bt.wins + bt.losses;
+    return {
       algoId,
-      wins: s.wins,
-      losses: s.losses,
-      total: s.wins + s.losses,
-      winRate: s.wins + s.losses > 0 ? ((s.wins / (s.wins + s.losses)) * 100).toFixed(1) : "0.0",
-      pnl: s.pnl,
-    }))
-    .filter(r => r.total > 0)
-    .sort((a, b) => b.wins - a.wins || b.total - a.total);
+      // 回测胜率（走势历史）
+      simWins: bt.wins,
+      simLosses: bt.losses,
+      simTotal,
+      simWinRate: simTotal > 0 ? ((bt.wins / simTotal) * 100).toFixed(1) : null,
+      canSimulate: bt.canSimulate,
+      // 实战统计（实际投注）
+      wins: act.wins,
+      losses: act.losses,
+      total: act.wins + act.losses,
+      winRate: act.wins + act.losses > 0 ? ((act.wins / (act.wins + act.losses)) * 100).toFixed(1) : null,
+      pnl: act.pnl,
+    };
+  });
+
   res.json({ stats: rows });
 });
 

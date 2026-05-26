@@ -206,10 +206,17 @@ export interface BetRecord {
 
 export interface AlgoStat {
   algoId: string;
+  // 走势回测（历史开奖数据模拟）
+  simWins: number;
+  simLosses: number;
+  simTotal: number;
+  simWinRate: string | null;
+  canSimulate: boolean;
+  // 实战统计（实际投注记录）
   wins: number;
   losses: number;
   total: number;
-  winRate: string;
+  winRate: string | null;
   pnl: number;
 }
 
