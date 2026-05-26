@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type TgStatus, type BetRecord, type TgGroup } from "../lib/api";
+import { api, type TgStatus, type BetRecord, type TgGroup, type AlgoStat } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -591,6 +591,7 @@ export default function Dashboard() {
   const [toggleLoading, setToggleLoading] = useState(false);
   const [clearLoading, setClearLoading] = useState(false);
   const [sseAlert, setSseAlert] = useState<string | null>(null);
+  const [algoStats, setAlgoStats] = useState<AlgoStat[]>([]);
 
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
@@ -637,6 +638,13 @@ export default function Dashboard() {
     } catch { /* ignore */ }
   }, []);
 
+  const fetchAlgoLeaderboard = useCallback(async () => {
+    try {
+      const { stats } = await api.tg.algoLeaderboard();
+      setAlgoStats(stats);
+    } catch { /* ignore */ }
+  }, []);
+
   // ─── SSE stream ──────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -663,7 +671,10 @@ export default function Dashboard() {
         }
         if (ev.type === "bet:new" || ev.type === "bet:result") {
           void fetchBets();
-          if (ev.type === "bet:result") void fetchStatus();
+          if (ev.type === "bet:result") {
+            void fetchStatus();
+            void fetchAlgoLeaderboard();
+          }
         }
         if (ev.type === "balance:update") {
           setStatus(prev => prev ? { ...prev, balance: ev.balance as number, balanceSource: ev.balanceSource as string, balanceUpdatedAt: ev.balanceUpdatedAt as number } : prev);
@@ -682,7 +693,7 @@ export default function Dashboard() {
     };
 
     return () => { es.close(); sseRef.current = null; };
-  }, [fetchBets, fetchStatus]);
+  }, [fetchBets, fetchStatus, fetchAlgoLeaderboard]);
 
   // ─── Init & polling ──────────────────────────────────────────────────────
 
@@ -690,11 +701,12 @@ export default function Dashboard() {
     void fetchStatus();
     void fetchBets();
     void fetchDraw();
+    void fetchAlgoLeaderboard();
     const statusInterval = setInterval(() => void fetchStatus(), 10_000);
     const drawInterval = setInterval(() => void fetchDraw(), 60_000);
     const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
     return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
-  }, [fetchStatus, fetchBets, fetchDraw]);
+  }, [fetchStatus, fetchBets, fetchDraw, fetchAlgoLeaderboard]);
 
   // ─── Derived state ───────────────────────────────────────────────────────
 
@@ -960,6 +972,48 @@ export default function Dashboard() {
                 </button>
               </div>
             </div>
+
+            {/* Algo Leaderboard */}
+            {algoStats.length > 0 && (
+              <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+                <div className="px-5 py-3 border-b border-[#252a3d]">
+                  <h3 className="text-white font-semibold text-sm">🏆 算法排行榜</h3>
+                </div>
+                <div className="divide-y divide-[#1e2235]">
+                  {algoStats.map((s, i) => {
+                    const label = {
+                      ai_trend: "AI趋势", steady_ai: "升级版AI", adaptive_switch: "自适应切换",
+                      signal_follow: "跟信号", signal_reverse: "反信号", streak_follow: "跟龙",
+                      cold_pick: "冷号", random: "随机", dragon_ride: "顺龙",
+                      dragon_break: "破龙", momentum: "动量", anti_streak: "反连",
+                    }[s.algoId] ?? s.algoId;
+                    const rate = parseFloat(s.winRate);
+                    const rateColor = rate >= 55 ? "text-emerald-400" : rate >= 45 ? "text-yellow-400" : "text-red-400";
+                    return (
+                      <div key={s.algoId} className="flex items-center gap-3 px-4 py-2.5">
+                        <span className="text-slate-500 text-xs w-4 flex-shrink-0">#{i + 1}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="text-white text-xs font-medium">{label}</span>
+                            <span className="text-slate-600 text-[10px]">{s.total}次</span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="text-emerald-400 text-[10px]">中{s.wins}</span>
+                            <span className="text-red-400 text-[10px]">未{s.losses}</span>
+                          </div>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <div className={`text-sm font-bold ${rateColor}`}>{s.winRate}%</div>
+                          <div className={`text-[10px] font-medium mt-0.5 ${s.pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                            {s.pnl >= 0 ? "+" : ""}{s.pnl.toLocaleString()}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Bet History */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">

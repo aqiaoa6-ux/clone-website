@@ -62,6 +62,7 @@ export const api = {
     config: (cfg: Record<string, unknown>) => api.post<{ ok: boolean; cfg: BetCfg }>("/tg/config", cfg),
     bets: () => api.get<{ bets: BetRecord[] }>("/tg/bets"),
     clearBets: () => api.del<{ ok: boolean }>("/tg/bets"),
+    algoLeaderboard: () => api.get<{ stats: AlgoStat[] }>("/tg/algo-leaderboard"),
     setKkpay: (username: string) => api.post<{ ok: boolean }>("/tg/kkpay", { username }),
   },
 
@@ -200,6 +201,16 @@ export interface BetRecord {
   isChase?: boolean;
   failReason?: string;
   isAdaptiveKillBet?: boolean;
+  algoId?: string;
+}
+
+export interface AlgoStat {
+  algoId: string;
+  wins: number;
+  losses: number;
+  total: number;
+  winRate: string;
+  pnl: number;
 }
 
 export interface TgChatMessage {

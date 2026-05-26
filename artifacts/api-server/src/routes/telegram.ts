@@ -68,6 +68,7 @@ interface BetRecord {
   isChase?: boolean;
   failReason?: string; // human-readable error if status="failed"
   isAdaptiveKillBet?: boolean; // adaptive_switch: this bet was placed in kill-group phase
+  algoId?: string; // which algorithm placed this bet
 }
 
 // Extract a short, human-readable error code from a GramJS/Telegram error.
@@ -156,6 +157,8 @@ interface TgSession {
   lastAIBet: string | null;
   // adaptive_switch algorithm state
   adaptiveSwitchKillMode: boolean; // false = 大小模式, true = 杀组模式
+  // per-algorithm win/loss stats (accumulated for the session lifetime)
+  algoStats: Record<string, { wins: number; losses: number; pnl: number }>;
 }
 
 interface PersistedData {
@@ -585,6 +588,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       lastSignalText: "",
       lastAIBet: null,
       adaptiveSwitchKillMode: false,
+      algoStats: {},
       recentResults: [],
       chatLog: [],
       balance: data.balance ?? 1000000,
@@ -753,6 +757,15 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
     if (pnl !== undefined) record.pnl = pnl;
     if (result) record.lotteryResult = result;
     if (period && !record.period) record.period = period;
+
+    // 累计算法排行榜统计（仅主注，非追号）
+    if (!isChase && record.algoId) {
+      const key = record.algoId;
+      if (!session.algoStats[key]) session.algoStats[key] = { wins: 0, losses: 0, pnl: 0 };
+      if (won) session.algoStats[key]!.wins++;
+      else session.algoStats[key]!.losses++;
+      if (pnl !== undefined) session.algoStats[key]!.pnl += pnl;
+    }
   }
 
   if (result && !isChase) {
@@ -1402,6 +1415,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
 
   const status = succeeded ? "sent" : "failed";
 
+  const algoId = session.lastAlgoUsed;
   if (dualItems) {
     // 双组模式：合并为一条记录，betContent = "大单+小双"
     const dualRec: BetRecord = {
@@ -1409,6 +1423,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       messageText: message, betContent: dualItems.join("+"), amount: mainAmount,
       timestamp: now, status,
       ...(failReason ? { failReason } : {}),
+      ...(algoId ? { algoId } : {}),
     };
     betLog.unshift(dualRec);
     pushEvent(session, "bet:new", { bet: dualRec });
@@ -1419,6 +1434,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       messageText: message, betContent: direction, amount: mainAmount,
       timestamp: now, status,
       ...(failReason ? { failReason } : {}),
+      ...(algoId ? { algoId } : {}),
     };
     betLog.unshift(mainRec);
     pushEvent(session, "bet:new", { bet: mainRec });
@@ -1656,12 +1672,14 @@ async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOpti
   const status = succeeded ? "sent" : "failed";
 
   // 三组合并为一条记录，betContent = "大双+大单+小双"
+  const killAlgoId = session.lastAlgoUsed ?? "adaptive_switch";
   const combinedRec: BetRecord = {
     id: `kill-${now}`, groupId: targetId, groupTitle,
     messageText: message, betContent: toBet.join("+"), amount,
     timestamp: now, status,
     ...(failReason ? { failReason } : {}),
     ...(isAdaptive ? { isAdaptiveKillBet: true } : {}),
+    algoId: killAlgoId,
   };
   betLog.unshift(combinedRec);
   pushEvent(session, "bet:new", { bet: combinedRec });
@@ -2135,6 +2153,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
       betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "", lastAIBet: null,
+      algoStats: {},
       recentResults: [], chatLog: [],
       globalHandler: null, globalHandlerBuilder: null,
       balance: 1000000,
@@ -2355,6 +2374,22 @@ router.delete("/tg/bets", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (session) session.betLog.length = 0;
   res.json({ ok: true });
+});
+
+router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session) { res.json({ stats: [] }); return; }
+  const rows = Object.entries(session.algoStats)
+    .map(([algoId, s]) => ({
+      algoId,
+      wins: s.wins,
+      losses: s.losses,
+      total: s.wins + s.losses,
+      winRate: s.wins + s.losses > 0 ? ((s.wins / (s.wins + s.losses)) * 100).toFixed(1) : "0.0",
+      pnl: s.pnl,
+    }))
+    .sort((a, b) => b.wins - a.wins || b.total - a.total);
+  res.json({ stats: rows });
 });
 
 router.get("/tg/events", requireAuth, (req, res) => {
