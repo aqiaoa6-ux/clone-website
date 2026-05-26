@@ -18,9 +18,9 @@ interface DrawState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const ALGO_LABELS: Record<string, string> = {
-  ai_trend:       "AI趋势",
-  steady_ai:      "升级版AI",
-  adaptive_switch: "自适应切换",
+  ai_trend:        "算法1",
+  steady_ai:       "算法2",
+  adaptive_switch: "算法3",
 };
 
 const BET_OPT_LABELS: Record<string, string> = {
@@ -985,7 +985,7 @@ export default function Dashboard() {
                 <div className="divide-y divide-[#1e2235]">
                   {algoStats.map((s, i) => {
                     const ALGO_LABELS: Record<string, string> = {
-                      ai_trend: "AI趋势", steady_ai: "升级版AI", adaptive_switch: "自适应切换",
+                      ai_trend: "算法1", steady_ai: "算法2", adaptive_switch: "算法3",
                       signal_follow: "跟信号", signal_reverse: "反信号", streak_follow: "跟龙",
                       cold_pick: "冷号", random: "随机", dragon_ride: "顺龙",
                       dragon_break: "破龙", momentum: "动量", anti_streak: "反连",
