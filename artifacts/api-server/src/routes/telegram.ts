@@ -213,6 +213,24 @@ const BET_OPTION_LABELS: Record<BetOption, string> = {
 const tgSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
 
+// ─── 独立走势缓存预热（不依赖 TG 会话，服务启动即运行）────────────────────────
+async function warmLotteryCache(): Promise<void> {
+  try {
+    const r = await fetch("http://pc20.net/api/fengpan", {
+      headers: { "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", "Referer": "http://pc20.net/" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) return;
+    const data = await r.json() as { message?: { all?: { keno28?: { data?: DrawItem[] } } } };
+    const items = data?.message?.all?.keno28?.data ?? [];
+    const labels = items.map(d => d.r3).filter((x): x is string => !!x).reverse();
+    if (labels.length) lotteryHistoryCache = labels.slice(-50);
+  } catch { /* ignore */ }
+}
+// 启动时立即预热，之后每 30 秒刷新
+void warmLotteryCache();
+setInterval(() => void warmLotteryCache(), 30_000);
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getCredentials() {
@@ -2507,7 +2525,13 @@ const ALL_SIMULATABLE_ALGOS: AlgorithmId[] = [
 router.get("/tg/algo-rates", requireAuth, (req, res) => {
   const fullHistory = [...lotteryHistoryCache];
 
-  const rows = ALL_SIMULATABLE_ALGOS.map(algoId => {
+  // 优先用该用户 session 里配置的算法，无 session 时才用全部可回测算法
+  const session = tgSessions.get(req.user!.userId);
+  const algosToShow: AlgorithmId[] = (session?.cfg.algorithms.length
+    ? session.cfg.algorithms.filter(a => a !== "signal_follow" && a !== "signal_reverse" && a !== "random")
+    : ALL_SIMULATABLE_ALGOS) as AlgorithmId[];
+
+  const rows = algosToShow.map(algoId => {
     const bt = backtestAlgo(algoId, fullHistory);
 
     // 当前预测：recentResults=[] → buildHistory 直接用 lotteryHistoryCache

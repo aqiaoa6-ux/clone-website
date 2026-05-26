@@ -4,7 +4,7 @@
   "balance": 271540.864,
   "todayPnl": 177840,
   "todayResetAt": 1779753600000,
-  "sessionPnl": -20000,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003294529818",
