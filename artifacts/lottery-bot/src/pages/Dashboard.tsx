@@ -668,6 +668,8 @@ export default function Dashboard() {
   const [kuaisanDice, setKuaisanDice] = useState<number[]>([]);
   const [kuaisanChatLog, setKuaisanChatLog] = useState<Array<{ text: string; ts: number; chatId?: string }>>([]);
   const [showChatLog, setShowChatLog] = useState(false);
+  const [debugResult, setDebugResult] = useState<string | null>(null);
+  const [debugLoading, setDebugLoading] = useState(false);
 
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
@@ -991,18 +993,49 @@ export default function Dashboard() {
                 )}
 
                 {/* Group message debug log */}
-                <div>
-                  <button
-                    onClick={() => setShowChatLog(v => !v)}
-                    className="text-[11px] text-slate-500 hover:text-slate-300 transition flex items-center gap-1"
-                  >
-                    <span>{showChatLog ? "▲" : "▶"}</span>
-                    群消息日志 {kuaisanChatLog.length > 0 ? `(${kuaisanChatLog.length})` : "(无)"}
-                  </button>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowChatLog(v => !v)}
+                      className="text-[11px] text-slate-500 hover:text-slate-300 transition flex items-center gap-1"
+                    >
+                      <span>{showChatLog ? "▲" : "▶"}</span>
+                      群消息日志 {kuaisanChatLog.length > 0 ? `(${kuaisanChatLog.length})` : "(无)"}
+                    </button>
+                    <button
+                      disabled={debugLoading}
+                      onClick={async () => {
+                        setDebugLoading(true);
+                        setDebugResult(null);
+                        try {
+                          const r = await api.tg.debugGroup();
+                          if (!r.ok) {
+                            setDebugResult(`❌ 错误: ${r.error}`);
+                          } else if (!r.messages?.length) {
+                            setDebugResult(`⚠️ 群组 ${r.watchGroupId} 无消息`);
+                          } else {
+                            const lines = r.messages.map(m =>
+                              `[${new Date(m.ts).toLocaleTimeString("zh-CN")}]${m.hasMedia ? "📷" : ""} ${m.text || "(无文字)"}`
+                            ).join("\n");
+                            setDebugResult(`✅ 群ID: ${r.watchGroupId}\n最近消息:\n${lines}`);
+                          }
+                        } catch { setDebugResult("❌ 请求失败"); }
+                        setDebugLoading(false);
+                      }}
+                      className="text-[11px] text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded px-2 py-0.5 transition disabled:opacity-50"
+                    >
+                      {debugLoading ? "拉取中..." : "🔍 测试群连接"}
+                    </button>
+                  </div>
+                  {debugResult && (
+                    <div className="bg-[#0f1220] border border-[#252a3d] rounded-lg p-2 text-[11px] text-slate-300 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                      {debugResult}
+                    </div>
+                  )}
                   {showChatLog && (
-                    <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
                       {kuaisanChatLog.length === 0 ? (
-                        <div className="text-xs text-slate-600 italic">尚未收到群消息。请确认已选择正确群组，并且群内有新消息发出。</div>
+                        <div className="text-xs text-slate-600 italic">尚未收到实时消息。先点"测试群连接"看能否读取历史消息。</div>
                       ) : kuaisanChatLog.map((m, i) => (
                         <div key={i} className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5">
                           <div className="text-[10px] text-slate-500 mb-0.5">{new Date(m.ts).toLocaleTimeString("zh-CN")}</div>

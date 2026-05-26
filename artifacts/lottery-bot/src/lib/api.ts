@@ -65,6 +65,7 @@ export const api = {
     algoLeaderboard: () => api.get<{ stats: AlgoStat[] }>("/tg/algo-leaderboard"),
     algoRates: () => api.get<{ rates: AlgoRate[]; historyCount: number }>("/tg/algo-rates"),
     setKkpay: (username: string) => api.post<{ ok: boolean }>("/tg/kkpay", { username }),
+    debugGroup: () => api.get<{ ok: boolean; watchGroupId?: string; messages?: Array<{ id: number; text: string; ts: number; hasMedia: boolean }>; error?: string }>("/tg/debug-group"),
   },
 
   lottery: {

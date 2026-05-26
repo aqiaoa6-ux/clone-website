@@ -2169,27 +2169,28 @@ function startKuaisanListener(session: TgSession): void {
   }
   const targetId = session.watchGroupId;
 
+  // Warm up the update pipeline for this specific chat (async, non-blocking)
+  void session.client.getMessages(targetId, { limit: 1 }).catch(() => { /* ignore */ });
+
   session.kuaisanHandler = async (event: NewMessageEvent) => {
     const msg = event.message;
     if (msg.out) return;
-    const chatId = String(msg.chatId);
-    // Normalize: strip leading minus and optional 100-prefix so "−1001234" ≡ "1234"
-    const normalizeId = (id: string) => id.replace(/^-100/, "").replace(/^-/, "");
-    const chatIdNorm = normalizeId(chatId);
-    const targetNorm = normalizeId(targetId ?? "");
-    if (chatId !== targetId && `-100${chatId}` !== targetId && chatIdNorm !== targetNorm) {
-      // Log occasional misses to help diagnose group ID format
-      if (Math.random() < 0.05) logger.debug({ chatId, targetId }, "[ks] msg from non-watched chat");
-      return;
-    }
+    const rawChatId = String(msg.chatId ?? "");
     const text = msg.message ?? "";
-    // Push all received group messages to chatLog for diagnosis
+
+    // Always log ALL incoming messages to chatLog for diagnosis (shows if GramJS is receiving ANYTHING)
     if (text) {
-      const logEntry = { text: text.slice(0, 200), ts: Date.now(), chatId };
+      const logEntry = { text: `[${rawChatId}] ${text.slice(0, 180)}`, ts: Date.now(), chatId: rawChatId };
       if (!session.chatLog) session.chatLog = [];
       session.chatLog.unshift(logEntry as unknown as typeof session.chatLog[number]);
       if (session.chatLog.length > 50) session.chatLog.pop();
     }
+
+    // ChatId filter — only act on the watched group
+    const normalizeId = (id: string) => id.replace(/^-100/, "").replace(/^-/, "");
+    const chatIdNorm = normalizeId(rawChatId);
+    const targetNorm = normalizeId(targetId ?? "");
+    if (rawChatId !== targetId && `-100${rawChatId}` !== targetId && chatIdNorm !== targetNorm) return;
 
     // 1. Dice detection: "🎲 骰子有效，识别点数为: X"
     const diceMatch = text.match(/骰子有效[，,]?\s*识别点数为[：:]\s*(\d)/);
@@ -2549,6 +2550,25 @@ router.get("/tg/status", requireCard, (req, res) => {
     kuaisanChatLog: (session.chatLog ?? []).slice(0, 20),
     ...stats,
   });
+});
+
+// Debug: directly fetch last N messages from watched group to test GramJS connectivity
+router.get("/tg/debug-group", requireCard, async (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session?.client) { res.status(401).json({ error: "未连接" }); return; }
+  if (!session.watchGroupId) { res.status(400).json({ error: "未设置群组" }); return; }
+  try {
+    const msgs = await session.client.getMessages(session.watchGroupId, { limit: 5 });
+    const result = msgs.map((m: Api.Message) => ({
+      id: m.id,
+      text: (m.message ?? "").slice(0, 200),
+      ts: (m.date ?? 0) * 1000,
+      hasMedia: !!m.media,
+    }));
+    res.json({ ok: true, watchGroupId: session.watchGroupId, messages: result });
+  } catch (err) {
+    res.json({ ok: false, error: String(err) });
+  }
 });
 
 router.get("/tg/groups", requireCard, async (req, res) => {
