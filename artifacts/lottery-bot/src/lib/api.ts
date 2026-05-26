@@ -139,6 +139,19 @@ export interface BetCfg {
   odds: number;
   chaseNumbers: Array<{ num: number; amount: number }>;
   enableChase: boolean;
+  gameMode?: string;
+  kuaisanBetOptions?: string[];
+}
+
+export interface KuaisanResultItem {
+  dice: [number, number, number];
+  sum: number;
+  big: boolean;
+  odd: boolean;
+  leopard: boolean;
+  dragon: boolean;
+  tiger: boolean;
+  label: string;
 }
 
 export interface TgStatus {
@@ -184,6 +197,12 @@ export interface TgStatus {
   wins?: number;
   maxStreak?: number;
   winRate?: string;
+  gameMode?: string;
+  kuaisanBetOptions?: string[];
+  kuaisanPhase?: string;
+  kuaisanPeriod?: string | null;
+  kuaisanLastDice?: number[];
+  kuaisanResults?: KuaisanResultItem[];
 }
 
 export interface BetRecord {

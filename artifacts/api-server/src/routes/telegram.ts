@@ -43,6 +43,8 @@ interface BetCfg {
   enableChase: boolean;
   dualGroupMode: boolean;
   killGroupMode: boolean;
+  gameMode: "lottery" | "kuaisan";
+  kuaisanBetOptions: string[];
 }
 
 interface GroupInfo {
@@ -159,6 +161,13 @@ interface TgSession {
   adaptiveSwitchKillMode: boolean; // false = 大小模式, true = 杀组模式
   // per-algorithm win/loss stats (accumulated for the session lifetime)
   algoStats: Record<string, { wins: number; losses: number; pnl: number }>;
+  // kuaisan state
+  diceBuffer: { value: number; time: number }[];
+  kuaisanPhase: "idle" | "betting" | "closed";
+  kuaisanPeriod: string | null;
+  kuaisanResults: KuaisanResult[];
+  kuaisanHandler: ((event: NewMessageEvent) => Promise<void>) | null;
+  kuaisanHandlerBuilder: NewMessage | null;
 }
 
 interface PersistedData {
@@ -201,11 +210,34 @@ const DEFAULT_CFG: BetCfg = {
   enableChase: false,
   dualGroupMode: false,
   killGroupMode: false,
+  gameMode: "lottery",
+  kuaisanBetOptions: ["big", "small"],
 };
 
 const BET_OPTION_LABELS: Record<BetOption, string> = {
   big: "大", small: "小", odd: "单", even: "双",
   "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
+};
+
+// ─── Kuaisan (快三) types & constants ─────────────────────────────────────────
+
+interface KuaisanResult {
+  dice: [number, number, number];
+  sum: number;
+  big: boolean;
+  odd: boolean;
+  leopard: boolean;
+  dragon: boolean;
+  tiger: boolean;
+  label: string; // e.g. "大单龙", "小双虎", "豹子"
+}
+
+const KS_BET_LABELS: Record<string, string> = {
+  big: "大", small: "小", odd: "单", even: "双",
+  dragon: "龙", tiger: "虎",
+  "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
+  "big-dragon": "大龙", "small-tiger": "小虎",
+  leopard: "豹子",
 };
 
 // ─── Module state ─────────────────────────────────────────────────────────────
@@ -609,6 +641,8 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       algoStats: {},
       recentResults: [],
       chatLog: [],
+      diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
+      kuaisanHandler: null, kuaisanHandlerBuilder: null,
       balance: data.balance ?? 1000000,
       todayPnl: data.todayPnl ?? 0,
       todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -1918,6 +1952,7 @@ function stopPoller(session: TgSession): void {
 
 function startGroupListener(session: TgSession): void {
   if (!session.watchGroupId) return;
+  if (session.cfg.gameMode === "kuaisan") { startKuaisanListener(session); return; }
   if (session.messageHandler && session.messageHandlerBuilder) {
     try { session.client.removeEventHandler(session.messageHandler, session.messageHandlerBuilder); } catch { /* ok */ }
     session.messageHandler = null; session.messageHandlerBuilder = null;
@@ -1991,6 +2026,206 @@ function startGroupListener(session: TgSession): void {
 
   session.messageHandlerBuilder = new NewMessage({});
   session.client.addEventHandler(session.messageHandler, session.messageHandlerBuilder);
+}
+
+// ─── Kuaisan (快三) functions ─────────────────────────────────────────────────
+
+function computeKuaisanResult(dice: [number, number, number]): KuaisanResult {
+  const [d1, d2, d3] = dice;
+  const sum = d1 + d2 + d3;
+  const leopard = d1 === d2 && d2 === d3;
+  const big = !leopard && sum >= 11;
+  const odd = !leopard && sum % 2 === 1;
+  const dragon = !leopard && d1 > d3;
+  const tiger = !leopard && d1 < d3;
+  let label: string;
+  if (leopard) {
+    label = "豹子";
+  } else {
+    label = `${big ? "大" : "小"}${odd ? "单" : "双"}${dragon ? "龙" : tiger ? "虎" : "和"}`;
+  }
+  return { dice, sum, big, odd, leopard, dragon, tiger, label };
+}
+
+function evaluateKuaisanBet(betLabel: string, r: KuaisanResult): boolean {
+  if (r.leopard) {
+    if (betLabel === "豹子") return true;
+    if (/^指定豹(\d)$/.test(betLabel)) return r.dice[0] === parseInt(betLabel.slice(3));
+    return false;
+  }
+  switch (betLabel) {
+    case "大": return r.big;
+    case "小": return !r.big;
+    case "单": return r.odd;
+    case "双": return !r.odd;
+    case "龙": return r.dragon;
+    case "虎": return r.tiger;
+    case "大单": return r.big && r.odd;
+    case "大双": return r.big && !r.odd;
+    case "小单": return !r.big && r.odd;
+    case "小双": return !r.big && !r.odd;
+    case "大龙": return r.big && r.dragon;
+    case "小虎": return !r.big && r.tiger;
+    case "豹子": return false;
+    default: {
+      const m = betLabel.match(/^总和(\d+)$/);
+      return m ? r.sum === parseInt(m[1]) : false;
+    }
+  }
+}
+
+function getKuaisanOdds(betLabel: string): number {
+  if (betLabel === "豹子") return 33;
+  if (/^指定豹\d$/.test(betLabel)) return 200;
+  if (["大单", "小双"].includes(betLabel)) return 3.4;
+  if (["小单", "大双", "大龙", "小虎"].includes(betLabel)) return 4.4;
+  const m = betLabel.match(/^总和(\d+)$/);
+  if (m) {
+    const n = parseInt(m[1]);
+    const tbl: Record<number, number> = { 4:60, 5:30, 6:18, 7:12, 8:9, 9:8, 10:7, 11:7, 12:8, 13:9, 14:12, 15:18, 16:30, 17:60 };
+    return tbl[n] ?? 1.97;
+  }
+  return 1.97;
+}
+
+function settleKuaisanBets(session: TgSession, result: KuaisanResult): void {
+  const pending = session.betLog.filter(b => b.status === "sent");
+  // Push result to recentResults once (for algorithm history)
+  session.recentResults.push(result.label);
+  if (session.recentResults.length > 30) session.recentResults.shift();
+  for (const bet of pending) {
+    const won = evaluateKuaisanBet(bet.betContent, result);
+    const odds = getKuaisanOdds(bet.betContent);
+    const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
+    bet.lotteryResult = result.label;
+    // Pass no `result` string → settleBet won't double-push recentResults
+    settleBet(session, { won, pnl, betId: bet.id, period: 0 });
+  }
+}
+
+async function runKuaisanAutoBet(session: TgSession): Promise<void> {
+  if (!session.cfg.autoBet || !session.watchGroupId) return;
+  if (session.betLog.some(b => b.status === "sent")) return;
+  if (session.betPlacedThisCycle) return;
+  const risk = checkRisk(session);
+  if (!risk.ok) return;
+
+  const optLabels = (session.cfg.kuaisanBetOptions ?? ["big", "small"]).map(o => KS_BET_LABELS[o] ?? o);
+  const labels = optLabels.length >= 2 ? optLabels : ["大", "小"];
+  const algoId = (session.cfg.algorithms[session.algIndex] ?? "ai_trend") as AlgorithmId;
+  const direction = runAlgo(session, algoId, labels);
+  if (!direction) return;
+
+  session.betPlacedThisCycle = true;
+  const amount = session.currentBet;
+  const targetId = session.watchGroupId;
+  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
+  const msgText = `${direction} ${amount}`;
+
+  let succeeded = false;
+  let failReason: string | undefined;
+  try {
+    await session.client.sendMessage(targetId, { message: msgText });
+    session.lastBetAt = Date.now();
+    succeeded = true;
+  } catch (err) {
+    failReason = extractTgError(err);
+    handleBetSendError(session, failReason);
+  }
+
+  const betRecord: BetRecord = {
+    id: `ks-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    groupId: targetId, groupTitle,
+    messageText: msgText,
+    betContent: direction,
+    amount,
+    timestamp: Date.now(),
+    status: succeeded ? "sent" : "failed",
+    algoId,
+    ...(failReason ? { failReason } : {}),
+  };
+  session.betLog.unshift(betRecord);
+  if (session.betLog.length > 200) session.betLog.length = 200;
+  pushEvent(session, "bet:new", { bet: betRecord });
+}
+
+function stopKuaisanListener(session: TgSession): void {
+  if (session.kuaisanHandler && session.kuaisanHandlerBuilder) {
+    try { session.client.removeEventHandler(session.kuaisanHandler as Parameters<typeof session.client.removeEventHandler>[0], session.kuaisanHandlerBuilder); } catch { /* ok */ }
+  }
+  session.kuaisanHandler = null;
+  session.kuaisanHandlerBuilder = null;
+}
+
+function startKuaisanListener(session: TgSession): void {
+  if (!session.watchGroupId) return;
+  stopKuaisanListener(session);
+  // Remove any existing lottery handler
+  if (session.messageHandler && session.messageHandlerBuilder) {
+    try { session.client.removeEventHandler(session.messageHandler as Parameters<typeof session.client.removeEventHandler>[0], session.messageHandlerBuilder); } catch { /* ok */ }
+    session.messageHandler = null; session.messageHandlerBuilder = null;
+  }
+  const targetId = session.watchGroupId;
+
+  session.kuaisanHandler = async (event: NewMessageEvent) => {
+    const msg = event.message;
+    if (msg.out) return;
+    const chatId = String(msg.chatId);
+    if (chatId !== targetId && `-100${chatId}` !== targetId) return;
+    const text = msg.message ?? "";
+
+    // 1. Dice detection: "🎲 骰子有效，识别点数为: X"
+    const diceMatch = text.match(/骰子有效[，,]?\s*识别点数为[：:]\s*(\d)/);
+    if (diceMatch) {
+      const value = parseInt(diceMatch[1]);
+      if (value >= 1 && value <= 6) {
+        const now = Date.now();
+        if (!session.diceBuffer) session.diceBuffer = [];
+        session.diceBuffer = session.diceBuffer.filter(d => now - d.time < 90_000);
+        session.diceBuffer.push({ value, time: now });
+        pushEvent(session, "kuaisan:dice", { buffer: session.diceBuffer.map(d => d.value) });
+        if (session.diceBuffer.length >= 3) {
+          const three = session.diceBuffer.slice(-3);
+          session.diceBuffer = [];
+          const dice = three.map(d => d.value) as [number, number, number];
+          const result = computeKuaisanResult(dice);
+          if (!session.kuaisanResults) session.kuaisanResults = [];
+          session.kuaisanResults.unshift(result);
+          if (session.kuaisanResults.length > 50) session.kuaisanResults.pop();
+          pushEvent(session, "kuaisan:result", {
+            dice: result.dice, sum: result.sum, label: result.label,
+            big: result.big, odd: result.odd, dragon: result.dragon, tiger: result.tiger, leopard: result.leopard,
+          });
+          settleKuaisanBets(session, result);
+          session.kuaisanPhase = "closed";
+          session.betPlacedThisCycle = false;
+          session.chasePlacedThisCycle = false;
+        }
+      }
+      return;
+    }
+
+    // 2. "开始下注" phase: message has 期号 + 封盘/下注 keywords
+    if (text.includes("期号") && (text.includes("封盘时间") || text.includes("封盘") || text.includes("下注"))) {
+      const periodMatch = text.match(/期号[：:]\s*([a-fA-F0-9]{8,})/);
+      session.kuaisanPhase = "betting";
+      session.kuaisanPeriod = periodMatch?.[1] ?? null;
+      if (!session.diceBuffer) session.diceBuffer = [];
+      session.diceBuffer = [];
+      pushEvent(session, "kuaisan:phase", { phase: "betting", period: session.kuaisanPeriod });
+      if (session.cfg.autoBet) void runKuaisanAutoBet(session);
+      return;
+    }
+
+    // 3. "封盘" / "停止下注"
+    if (/停止下注|停止投注|已封盘/.test(text)) {
+      session.kuaisanPhase = "closed";
+      pushEvent(session, "kuaisan:phase", { phase: "closed" });
+    }
+  };
+
+  session.kuaisanHandlerBuilder = new NewMessage({});
+  session.client.addEventHandler(session.kuaisanHandler, session.kuaisanHandlerBuilder);
 }
 
 // ─── KKPay listener ───────────────────────────────────────────────────────────
@@ -2187,6 +2422,8 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       kkpayUsername: "kkpay", kkpayEntityId: undefined,
       balanceSource: "manual", balanceUpdatedAt: 0,
       adaptiveSwitchKillMode: false,
+      diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
+      kuaisanHandler: null, kuaisanHandlerBuilder: null,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
@@ -2278,6 +2515,12 @@ router.get("/tg/status", requireCard, (req, res) => {
     lastAlgoUsed: session.lastAlgoUsed,
     currentPattern: session.currentPattern,
     adaptiveSwitchKillMode: session.adaptiveSwitchKillMode,
+    gameMode: session.cfg.gameMode,
+    kuaisanBetOptions: session.cfg.kuaisanBetOptions,
+    kuaisanPhase: session.kuaisanPhase,
+    kuaisanPeriod: session.kuaisanPeriod,
+    kuaisanLastDice: session.diceBuffer?.map(d => d.value),
+    kuaisanResults: session.kuaisanResults?.slice(0, 20),
     ...stats,
   });
 });
@@ -2350,6 +2593,8 @@ router.post("/tg/config", requireCard, (req, res) => {
     enableChase: body.enableChase ?? prev.enableChase,
     dualGroupMode: body.dualGroupMode ?? prev.dualGroupMode,
     killGroupMode: body.killGroupMode ?? prev.killGroupMode,
+    gameMode: (body.gameMode as BetCfg["gameMode"]) ?? prev.gameMode,
+    kuaisanBetOptions: body.kuaisanBetOptions ?? prev.kuaisanBetOptions,
   };
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
@@ -2359,7 +2604,17 @@ router.post("/tg/config", requireCard, (req, res) => {
     session.consecutiveLosses = 0;
   }
   if (body.algorithms !== undefined) session.algIndex = 0;
-  if (session.watchGroupId) startGroupListener(session);
+
+  // Restart the appropriate listener when group or mode changes
+  if (session.watchGroupId) {
+    if (session.cfg.gameMode === "kuaisan") {
+      stopPoller(session);
+      startKuaisanListener(session);
+    } else {
+      stopKuaisanListener(session);
+      startGroupListener(session);
+    }
+  }
 
   if (body.autoBet === false && prev.autoBet) stopPoller(session);
   if (body.autoBet === true && !prev.autoBet && session.watchGroupId) {
@@ -2370,9 +2625,12 @@ router.post("/tg/config", requireCard, (req, res) => {
       : session.cfg.betAmount;
     session.consecutiveLosses = 0;
     session.betPlacedThisCycle = false;
-    session.lastSeenLotteryPeriod = 0;
-    startPoller(session);
-    void pollLottery(session);
+    // For lottery mode only: start poller
+    if (session.cfg.gameMode !== "kuaisan") {
+      session.lastSeenLotteryPeriod = 0;
+      startPoller(session);
+      void pollLottery(session);
+    }
   }
   saveSession(session);
   res.json({ ok: true, cfg: session.cfg });

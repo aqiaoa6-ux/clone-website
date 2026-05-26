@@ -33,6 +33,14 @@ const BET_OPT_LABELS: Record<string, string> = {
   big: "大", small: "小", odd: "单", even: "双",
 };
 
+const KS_OPT_LABELS: Record<string, string> = {
+  big: "大", small: "小", odd: "单", even: "双",
+  dragon: "龙", tiger: "虎",
+  "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
+  "big-dragon": "大龙", "small-tiger": "小虎",
+  leopard: "豹子",
+};
+
 const STRATEGY_LABELS: Record<string, string> = {
   normal: "固定", martingale: "马丁", "anti-martingale": "反马丁",
 };
@@ -250,6 +258,8 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
   const [dualGroupMode, setDualGroupMode] = useState<boolean>(!!(status as unknown as { dualGroupMode?: boolean }).dualGroupMode);
   const [killGroupMode, setKillGroupMode] = useState<boolean>(!!(status as unknown as { killGroupMode?: boolean }).killGroupMode);
+  const [gameMode, setGameMode] = useState<"lottery" | "kuaisan">((status.gameMode ?? "lottery") as "lottery" | "kuaisan");
+  const [kuaisanOpts, setKuaisanOpts] = useState<string[]>(status.kuaisanBetOptions ?? ["big", "small"]);
   const [kkpay, setKkpay] = useState(status.kkpayUsername ?? "kkpay");
   const [levels, setLevels] = useState<string[]>(initLevels.map(String));
   const [stepBackOnWin, setStepBackOnWin] = useState(status.stepBackOnWin ?? true);
@@ -294,6 +304,8 @@ function SettingsDrawer({ status, onClose, onSave }: {
           .map(c => ({ num: Number(c.num), amount: Number(c.amount) }))
           .filter(c => c.num >= 0 && c.num <= 27 && c.amount > 0),
         enableChase,
+        gameMode,
+        kuaisanBetOptions: kuaisanOpts,
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
       onClose();
@@ -317,7 +329,50 @@ function SettingsDrawer({ status, onClose, onSave }: {
         <div className="p-5 flex-1 space-y-0">
           <div className={sectionCls}>
             <h4 className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-2">玩法策略</h4>
+
+            {/* Game mode toggle */}
             <div>
+              <label className={labelCls}>游戏模式</label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setGameMode("lottery")}
+                  className={`flex-1 py-2 rounded-lg text-xs font-medium border transition ${gameMode === "lottery" ? "bg-blue-600 border-blue-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50"}`}
+                >
+                  🎰 彩票
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGameMode("kuaisan")}
+                  className={`flex-1 py-2 rounded-lg text-xs font-medium border transition ${gameMode === "kuaisan" ? "bg-emerald-600 border-emerald-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-emerald-500/50"}`}
+                >
+                  🎲 快三
+                </button>
+              </div>
+            </div>
+
+            {/* Kuaisan bet options */}
+            {gameMode === "kuaisan" && (
+              <div>
+                <label className={labelCls}>快三下注选项</label>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(KS_OPT_LABELS).map(([k, v]) => (
+                    <span
+                      key={k}
+                      className={tagCls(kuaisanOpts.includes(k))}
+                      onClick={() => setKuaisanOpts(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])}
+                    >
+                      {v}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-600 mt-1">选中的选项由算法从中选取一个方向下注</p>
+              </div>
+            )}
+
+            {/* Lottery-specific bet options (hidden in kuaisan mode) */}
+            {gameMode === "lottery" && (
+              <div>
               <label className={labelCls}>下注选项</label>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(BET_OPT_LABELS).map(([k, v]) => (
@@ -373,6 +428,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
                 )}
               </div>
             </div>
+            )}
             <div>
               <label className={labelCls}>算法选择</label>
               <div className="flex flex-wrap gap-2">
@@ -606,6 +662,10 @@ export default function Dashboard() {
   const [toggleLoading, setToggleLoading] = useState(false);
   const [clearLoading, setClearLoading] = useState(false);
   const [sseAlert, setSseAlert] = useState<string | null>(null);
+  const [kuaisanPhase, setKuaisanPhase] = useState<string>("idle");
+  const [kuaisanPeriod, setKuaisanPeriod] = useState<string | null>(null);
+  const [kuaisanResults, setKuaisanResults] = useState<Array<{ label: string; dice: number[]; sum: number; leopard: boolean }>>([]);
+  const [kuaisanDice, setKuaisanDice] = useState<number[]>([]);
 
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
@@ -634,6 +694,10 @@ export default function Dashboard() {
     try {
       const s = await api.tg.status();
       setStatus(s);
+      if (s.kuaisanPhase) setKuaisanPhase(s.kuaisanPhase);
+      if (s.kuaisanPeriod !== undefined) setKuaisanPeriod(s.kuaisanPeriod ?? null);
+      if (s.kuaisanLastDice) setKuaisanDice(s.kuaisanLastDice);
+      if (s.kuaisanResults?.length) setKuaisanResults(s.kuaisanResults.map(r => ({ label: r.label, dice: Array.from(r.dice), sum: r.sum, leopard: r.leopard })));
       if (!s.connected) { setTgStep("login"); return; }
       if (!s.watchGroupId) {
         const { groups: g } = await api.tg.groups();
@@ -694,6 +758,25 @@ export default function Dashboard() {
           const msg = ev.msg as string;
           setSseAlert(msg);
           // Auto-stop detected on backend; sync status so the toggle reflects the new state
+          void fetchStatus();
+        }
+        if (ev.type === "kuaisan:phase") {
+          setKuaisanPhase(ev.phase as string);
+          if (ev.period !== undefined) setKuaisanPeriod(ev.period as string | null);
+        }
+        if (ev.type === "kuaisan:dice") {
+          setKuaisanDice((ev.buffer as number[]) ?? []);
+        }
+        if (ev.type === "kuaisan:result") {
+          setKuaisanDice([]);
+          setKuaisanPhase("closed");
+          setKuaisanResults(prev => [{
+            label: ev.label as string,
+            dice: ev.dice as number[],
+            sum: ev.sum as number,
+            leopard: ev.leopard as boolean,
+          }, ...prev].slice(0, 30));
+          void fetchBets();
           void fetchStatus();
         }
       } catch { /* ignore */ }
@@ -848,7 +931,66 @@ export default function Dashboard() {
               </div>
             </div>
 
-            {/* Period & Countdown */}
+            {/* ── Kuaisan (快三) Panel ── */}
+            {status.gameMode === "kuaisan" && (
+              <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 space-y-4">
+                {/* Phase + period */}
+                <div className="flex justify-between items-center">
+                  <div>
+                    <span className="text-slate-400 text-xs">快三模式</span>
+                    <div className="text-white font-bold text-lg">
+                      {kuaisanPhase === "betting" ? "🟢 下注中" : kuaisanPhase === "closed" ? "🔴 已封盘" : "⚪ 等待中"}
+                    </div>
+                    {kuaisanPeriod && <div className="text-slate-500 text-[10px] mt-0.5 font-mono">{kuaisanPeriod}</div>}
+                  </div>
+                  {/* Dice buffer visualizer */}
+                  <div className="flex gap-1.5 items-center">
+                    {[0, 1, 2].map(i => (
+                      <div key={i} className={`w-9 h-9 rounded-lg border-2 flex items-center justify-center text-xl font-bold transition-all ${kuaisanDice[i] ? "border-emerald-500 bg-emerald-500/15 text-white" : "border-[#252a3d] bg-[#0f1220] text-slate-600"}`}>
+                        {kuaisanDice[i] ? ["", "⚀", "⚁", "⚂", "⚃", "⚄", "⚅"][kuaisanDice[i]] : "?"}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* AutoBet active indicator */}
+                {status.autoBet && kuaisanPhase === "betting" && (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-2 text-center">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-2 align-middle" />
+                    <span className="text-emerald-400 text-sm font-semibold">自动下注已激活</span>
+                  </div>
+                )}
+
+                {/* Risk blocked */}
+                {status.riskBlocked && (
+                  <div className="bg-orange-500/10 border border-orange-500/20 rounded-xl px-4 py-2 text-center">
+                    <span className="text-orange-400 text-xs">⚠️ {status.riskReason}</span>
+                  </div>
+                )}
+
+                {/* Recent results */}
+                {kuaisanResults.length > 0 && (
+                  <div>
+                    <div className="text-xs text-slate-500 mb-2">近期结果</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {kuaisanResults.slice(0, 12).map((r, i) => (
+                        <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
+                          r.leopard ? "bg-amber-500/20 text-amber-400 border-amber-500/40" :
+                          r.label.startsWith("大") ? "bg-red-500/15 text-red-400 border-red-500/25" :
+                          "bg-blue-500/15 text-blue-400 border-blue-500/25"
+                        }`}>
+                          {r.label}
+                          <span className="text-slate-600 ml-1 text-[9px]">{r.dice.join("-")}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Period & Countdown (lottery mode only) */}
+            {status.gameMode !== "kuaisan" && (
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5">
               <div className="flex justify-between items-center mb-3">
                 <div>
@@ -931,6 +1073,7 @@ export default function Dashboard() {
                 </div>
               )}
             </div>
+            )}
 
             {/* Stats */}
             <div className="grid grid-cols-4 gap-2">
