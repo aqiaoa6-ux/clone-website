@@ -63,6 +63,7 @@ export const api = {
     bets: () => api.get<{ bets: BetRecord[] }>("/tg/bets"),
     clearBets: () => api.del<{ ok: boolean }>("/tg/bets"),
     algoLeaderboard: () => api.get<{ stats: AlgoStat[] }>("/tg/algo-leaderboard"),
+    algoRates: () => api.get<{ rates: AlgoRate[]; historyCount: number }>("/tg/algo-rates"),
     setKkpay: (username: string) => api.post<{ ok: boolean }>("/tg/kkpay", { username }),
   },
 
@@ -202,6 +203,15 @@ export interface BetRecord {
   failReason?: string;
   isAdaptiveKillBet?: boolean;
   algoId?: string;
+}
+
+export interface AlgoRate {
+  algoId: string;
+  simWins: number;
+  simLosses: number;
+  simTotal: number;
+  simWinRate: string | null;
+  currentPrediction: string | null;
 }
 
 export interface AlgoStat {

@@ -2498,6 +2498,57 @@ router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
   res.json({ stats: rows });
 });
 
+// 所有可回测算法（不依赖外部信号），任意登录用户可访问，无需持有卡密
+const ALL_SIMULATABLE_ALGOS: AlgorithmId[] = [
+  "adaptive_switch", "steady_ai", "ai_trend", "streak_follow",
+  "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick",
+];
+
+router.get("/tg/algo-rates", requireAuth, (req, res) => {
+  const fullHistory = [...lotteryHistoryCache];
+
+  const rows = ALL_SIMULATABLE_ALGOS.map(algoId => {
+    const bt = backtestAlgo(algoId, fullHistory);
+
+    // 当前预测：recentResults=[] → buildHistory 直接用 lotteryHistoryCache
+    const fakeSession = {
+      recentResults: [] as string[],
+      lastAIBet: null as string | null,
+      currentPattern: "neutral" as MarketPattern,
+      algIndex: 0,
+      cfg: {
+        betOptions: ["big", "small"] as BetOption[],
+        algorithms: [algoId],
+        dualGroupMode: false, betAmount: 10, chaseEnabled: false, chaseSteps: [],
+        stopLoss: 0, takeProfitSession: 0, maxConsecLoss: 0, cooldownAfterLoss: 0,
+        watchGroupId: "", watchGroupTitle: "", kkpayGroupId: "", kkpayGroupTitle: "",
+        enabled: false, adaptiveSwitch: false, killGroupEnabled: false,
+      },
+    } as unknown as TgSession;
+
+    let currentPrediction: string | null = null;
+    try { currentPrediction = runAlgo(fakeSession, algoId, ["大", "小"]); } catch { /* skip */ }
+
+    const simTotal = bt.wins + bt.losses;
+    return {
+      algoId,
+      simWins: bt.wins,
+      simLosses: bt.losses,
+      simTotal,
+      simWinRate: simTotal > 0 ? ((bt.wins / simTotal) * 100).toFixed(1) : null,
+      currentPrediction,
+    };
+  });
+
+  rows.sort((a, b) => {
+    const rA = a.simWinRate ? parseFloat(a.simWinRate) : 0;
+    const rB = b.simWinRate ? parseFloat(b.simWinRate) : 0;
+    return rB - rA;
+  });
+
+  res.json({ rates: rows, historyCount: fullHistory.length });
+});
+
 router.get("/tg/events", requireAuth, (req, res) => {
   const userId = req.user!.userId;
   res.setHeader("Content-Type", "text/event-stream");

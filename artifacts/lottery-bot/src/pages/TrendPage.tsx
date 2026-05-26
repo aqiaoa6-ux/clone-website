@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { api, type LotteryData } from "../lib/api";
+import { api, type LotteryData, type AlgoRate } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -37,9 +37,7 @@ function extreme(sum: number): { label: string; cls: string } {
 
 function shape(a: number, b: number, c: number): { label: string; cls: string } {
   const vals = [a, b, c].sort((x, y) => x - y);
-  // 对子: any two equal
   if (a === b || b === c || a === c) return { label: "对子", cls: "text-amber-400" };
-  // 顺子: three consecutive
   if (vals[1]! - vals[0]! === 1 && vals[2]! - vals[1]! === 1)
     return { label: "顺子", cls: "text-emerald-400" };
   return { label: "杂六", cls: "text-slate-400" };
@@ -82,11 +80,80 @@ function streakInfo(items: DrawItem[]): string {
   return count >= 2 ? `连${count}期${label}` : "";
 }
 
+// ─── Algo label map ───────────────────────────────────────────────────────────
+const ALGO_LABELS: Record<string, string> = {
+  adaptive_switch: "自适应", steady_ai: "升级AI", ai_trend: "AI趋势",
+  streak_follow: "跟龙", dragon_ride: "顺龙", dragon_break: "破龙",
+  momentum: "动量", anti_streak: "反连", cold_pick: "冷号",
+};
+
+// ─── Algo Rates Panel ─────────────────────────────────────────────────────────
+function AlgoRatesPanel({ rates, historyCount }: { rates: AlgoRate[]; historyCount: number }) {
+  if (!rates.length) {
+    return (
+      <div className="bg-[#0f1220] border border-[#1e2235] rounded-2xl px-4 py-5 text-center text-slate-600 text-xs">
+        加载算法分析中…
+      </div>
+    );
+  }
+  return (
+    <div className="bg-[#0f1220] border border-[#1e2235] rounded-2xl overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-[#1e2235] flex items-center justify-between">
+        <span className="text-white text-sm font-semibold">算法命中率</span>
+        <span className="text-slate-600 text-[10px]">回测近 {historyCount} 期走势</span>
+      </div>
+      <div className="grid grid-cols-3 divide-x divide-[#1e2235]">
+        {rates.map((r, i) => {
+          const rate = r.simWinRate ? parseFloat(r.simWinRate) : null;
+          const rateColor = rate === null ? "text-slate-500"
+            : rate >= 55 ? "text-emerald-400"
+            : rate >= 45 ? "text-yellow-400"
+            : "text-red-400";
+          const isBig = r.currentPrediction === "大";
+          const isSmall = r.currentPrediction === "小";
+          const rankBadge = i < 3
+            ? ["text-yellow-400", "text-slate-300", "text-amber-600"][i]
+            : "text-slate-600";
+          return (
+            <div key={r.algoId} className={`flex flex-col items-center py-3 px-1 gap-1 ${i % 3 !== 0 ? "" : ""}`}>
+              <div className="flex items-center gap-1">
+                <span className={`text-[9px] font-bold ${rankBadge}`}>#{i + 1}</span>
+                <span className="text-white text-[11px] font-medium">{ALGO_LABELS[r.algoId] ?? r.algoId}</span>
+              </div>
+              {/* 当前预测方向 */}
+              <div className={`text-base font-bold leading-none ${isBig ? "text-rose-400" : isSmall ? "text-blue-400" : "text-slate-600"}`}>
+                {r.currentPrediction ?? "—"}
+              </div>
+              {/* 命中率 */}
+              <div className={`text-sm font-bold ${rateColor}`}>
+                {r.simWinRate ? `${r.simWinRate}%` : "—"}
+              </div>
+              <div className="text-slate-600 text-[9px]">
+                {r.simTotal > 0 ? `${r.simWins}中/${r.simTotal}期` : "数据不足"}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function TrendPage() {
-  const [items,       setItems]       = useState<DrawItem[]>([]);
-  const [loading,     setLoading]     = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [items,        setItems]        = useState<DrawItem[]>([]);
+  const [loading,      setLoading]      = useState(true);
+  const [lastUpdated,  setLastUpdated]  = useState<Date | null>(null);
+  const [algoRates,    setAlgoRates]    = useState<AlgoRate[]>([]);
+  const [historyCount, setHistoryCount] = useState(0);
+
+  const refreshRates = useCallback(async () => {
+    try {
+      const { rates, historyCount: hc } = await api.tg.algoRates();
+      setAlgoRates(rates);
+      setHistoryCount(hc);
+    } catch { /* ignore */ }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -95,7 +162,8 @@ export default function TrendPage() {
       setLastUpdated(new Date());
     } catch { /* ignore */ }
     finally { setLoading(false); }
-  }, []);
+    void refreshRates();
+  }, [refreshRates]);
 
   useEffect(() => {
     void refresh();
@@ -108,11 +176,6 @@ export default function TrendPage() {
 
   const fmt = (d: Date) =>
     `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
-
-  // quick stats for top bar
-  const bigCnt   = items.filter(i => i.big).length;
-  const oddCnt   = items.filter(i => i.odd).length;
-  const n        = items.length || 1;
 
   return (
     <div className="min-h-screen bg-[#0b0e1a] flex flex-col pb-20">
@@ -133,21 +196,8 @@ export default function TrendPage() {
 
       <div className="px-3 py-3 space-y-3">
 
-        {/* ── Quick stats ── */}
-        <div className="grid grid-cols-4 gap-2">
-          {[
-            { label: "大", count: bigCnt,       color: "text-rose-400",    bg: "bg-rose-500/10" },
-            { label: "小", count: n - bigCnt,   color: "text-blue-400",    bg: "bg-blue-500/10" },
-            { label: "单", count: oddCnt,        color: "text-amber-400",   bg: "bg-amber-500/10" },
-            { label: "双", count: n - oddCnt,    color: "text-emerald-400", bg: "bg-emerald-500/10" },
-          ].map(s => (
-            <div key={s.label} className={`rounded-xl p-2.5 flex flex-col items-center gap-0.5 ${s.bg}`}>
-              <span className={`text-[11px] font-semibold ${s.color}`}>{s.label}</span>
-              <span className={`text-lg font-bold ${s.color}`}>{s.count}</span>
-              <span className="text-[10px] text-slate-500">{Math.round(s.count * 100 / n)}%</span>
-            </div>
-          ))}
-        </div>
+        {/* ── Algo rates ── */}
+        <AlgoRatesPanel rates={algoRates} historyCount={historyCount} />
 
         {/* ── History table ── */}
         {loading ? (
@@ -181,14 +231,11 @@ export default function TrendPage() {
                         key={item.term}
                         className={`border-b border-[#1e2235]/50 ${isLatest ? "bg-blue-500/5" : "hover:bg-white/[0.015]"}`}
                       >
-                        {/* 回合 */}
                         <td className="px-2 py-2 text-center whitespace-nowrap">
                           <span className={`text-[11px] ${isLatest ? "text-blue-300 font-semibold" : "text-slate-500"}`}>
                             {String(item.term).slice(-7)} 期
                           </span>
                         </td>
-
-                        {/* 结果 balls */}
                         <td className="px-1 py-2 text-center">
                           <div className="flex items-center gap-1 justify-center">
                             <Ball n={item.a} />
@@ -198,15 +245,11 @@ export default function TrendPage() {
                             <Ball n={item.c} />
                           </div>
                         </td>
-
-                        {/* 和值 */}
                         <td className="px-2 py-2 text-center whitespace-nowrap">
                           <span className={`text-xs font-bold ${item.big ? "text-rose-400" : "text-blue-400"}`}>
                             = {item.sum}
                           </span>
                         </td>
-
-                        {/* 双面 */}
                         <td className="px-2 py-2 text-center">
                           <div className="flex items-center gap-1 justify-center">
                             <span className={`font-semibold text-xs ${item.big ? "text-rose-400" : "text-blue-400"}`}>
@@ -217,17 +260,9 @@ export default function TrendPage() {
                             </span>
                           </div>
                         </td>
-
-                        {/* 极值 */}
                         <td className={`px-2 py-2 text-center text-xs ${ext.cls}`}>{ext.label}</td>
-
-                        {/* 形态 */}
                         <td className={`px-2 py-2 text-center text-xs ${shp.cls}`}>{shp.label}</td>
-
-                        {/* 龙虎 */}
                         <td className={`px-2 py-2 text-center text-xs font-medium ${dt.cls}`}>{dt.label}</td>
-
-                        {/* 边路 */}
                         <td className={`px-2 py-2 text-center text-xs ${er.cls}`}>{er.label}</td>
                       </tr>
                     );
@@ -239,7 +274,7 @@ export default function TrendPage() {
         )}
 
         <p className="text-[10px] text-slate-600 text-center">
-          显示近 {display.length} 期 · 统计基于近 {items.length} 期 · 每 30 秒自动刷新
+          显示近 {display.length} 期 · 每 30 秒自动刷新
         </p>
       </div>
 
