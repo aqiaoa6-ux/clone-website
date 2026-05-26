@@ -974,19 +974,22 @@ export default function Dashboard() {
             </div>
 
             {/* Algo Leaderboard */}
-            {algoStats.length > 0 && (
-              <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-                <div className="px-5 py-3 border-b border-[#252a3d]">
-                  <h3 className="text-white font-semibold text-sm">🏆 算法排行榜</h3>
-                </div>
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+              <div className="px-5 py-3 border-b border-[#252a3d]">
+                <h3 className="text-white font-semibold text-sm">🏆 算法排行榜</h3>
+              </div>
+              {algoStats.length === 0 ? (
+                <div className="text-center text-slate-600 text-xs py-6">暂无记录，投注结算后自动显示</div>
+              ) : (
                 <div className="divide-y divide-[#1e2235]">
                   {algoStats.map((s, i) => {
-                    const label = {
+                    const label: Record<string, string> = {
                       ai_trend: "AI趋势", steady_ai: "升级版AI", adaptive_switch: "自适应切换",
                       signal_follow: "跟信号", signal_reverse: "反信号", streak_follow: "跟龙",
                       cold_pick: "冷号", random: "随机", dragon_ride: "顺龙",
                       dragon_break: "破龙", momentum: "动量", anti_streak: "反连",
-                    }[s.algoId] ?? s.algoId;
+                    };
+                    const name = label[s.algoId] ?? s.algoId;
                     const rate = parseFloat(s.winRate);
                     const rateColor = rate >= 55 ? "text-emerald-400" : rate >= 45 ? "text-yellow-400" : "text-red-400";
                     return (
@@ -994,7 +997,7 @@ export default function Dashboard() {
                         <span className="text-slate-500 text-xs w-4 flex-shrink-0">#{i + 1}</span>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="text-white text-xs font-medium">{label}</span>
+                            <span className="text-white text-xs font-medium">{name}</span>
                             <span className="text-slate-600 text-[10px]">{s.total}次</span>
                           </div>
                           <div className="flex items-center gap-2 mt-0.5">
@@ -1012,8 +1015,8 @@ export default function Dashboard() {
                     );
                   })}
                 </div>
-              </div>
-            )}
+              )}
+            </div>
 
             {/* Bet History */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">

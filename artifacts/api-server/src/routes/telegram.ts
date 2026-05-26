@@ -1736,6 +1736,9 @@ async function runAutoBet(session: TgSession): Promise<void> {
     const bigSmallSession = { ...session, cfg: { ...session.cfg, betOptions: ["big", "small"] as BetOption[] } };
     const direction = decideBetAuto(bigSmallSession);
     if (!direction) return;
+    // 同步 lastAlgoUsed 回原 session（bigSmallSession 是浅拷贝，algo 决策结果需同步）
+    session.lastAlgoUsed = bigSmallSession.lastAlgoUsed;
+    session.algIndex = bigSmallSession.algIndex;
     await placeAllBets(session, direction);
     return;
   }
@@ -1951,7 +1954,12 @@ function startGroupListener(session: TgSession): void {
         // 大小模式：强制只用大/小选项
         const bigSmallSession = { ...session, cfg: { ...session.cfg, betOptions: ["big", "small"] as BetOption[] } };
         const direction = decideBet(bigSmallSession, text);
-        if (direction) void placeAllBets(session, direction);
+        if (direction) {
+          // 同步 lastAlgoUsed 回原 session
+          session.lastAlgoUsed = bigSmallSession.lastAlgoUsed;
+          session.algIndex = bigSmallSession.algIndex;
+          void placeAllBets(session, direction);
+        }
       }
       return;
     }
@@ -2379,7 +2387,26 @@ router.delete("/tg/bets", requireCard, (req, res) => {
 router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session) { res.json({ stats: [] }); return; }
-  const rows = Object.entries(session.algoStats)
+
+  // 实时从 betLog 计算（最近 200 条），兼容无 algoId 的旧注单（fallback 到主算法）
+  const primaryAlgo = session.cfg.algorithms[0] ?? "unknown";
+  const live: Record<string, { wins: number; losses: number; pnl: number }> = {};
+  for (const b of session.betLog) {
+    if (b.isChase || b.won === undefined) continue;
+    const key = b.algoId ?? primaryAlgo;
+    if (!live[key]) live[key] = { wins: 0, losses: 0, pnl: 0 };
+    if (b.won) live[key]!.wins++;
+    else live[key]!.losses++;
+    if (b.pnl !== undefined) live[key]!.pnl += b.pnl;
+  }
+
+  // 合并持久化的历史统计（betLog 之外的历史投注）——避免重复计：
+  // algoStats 只统计 betLog 范围之外的历史，因此仅在 live 中无该 algoId 时才合并
+  for (const [algoId, s] of Object.entries(session.algoStats)) {
+    if (!live[algoId]) live[algoId] = { wins: s.wins, losses: s.losses, pnl: s.pnl };
+  }
+
+  const rows = Object.entries(live)
     .map(([algoId, s]) => ({
       algoId,
       wins: s.wins,
@@ -2388,6 +2415,7 @@ router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
       winRate: s.wins + s.losses > 0 ? ((s.wins / (s.wins + s.losses)) * 100).toFixed(1) : "0.0",
       pnl: s.pnl,
     }))
+    .filter(r => r.total > 0)
     .sort((a, b) => b.wins - a.wins || b.total - a.total);
   res.json({ stats: rows });
 });
