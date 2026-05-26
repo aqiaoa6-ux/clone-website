@@ -34,6 +34,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     await api.auth.logout();
+    sessionStorage.removeItem("session_confirmed");
     setUser(null);
     setCard(null);
     setCountdown(null);

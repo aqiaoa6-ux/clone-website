@@ -7,6 +7,11 @@ import Dashboard from "./pages/Dashboard";
 import AdminPage from "./pages/AdminPage";
 import TrendPage from "./pages/TrendPage";
 
+// sessionStorage key: set after user explicitly confirms "this is my account"
+// sessionStorage is per-tab and cleared when the tab/browser closes,
+// so every new session requires one confirmation click on the login page.
+export const SESSION_CONFIRMED_KEY = "session_confirmed";
+
 function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: {
   children: React.ReactNode;
   requireCard?: boolean;
@@ -23,6 +28,13 @@ function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: 
   }
 
   if (!user) return <Redirect to="/login" />;
+
+  // Require identity confirmation once per browser session.
+  // Prevents another person on the same browser from silently inheriting the session.
+  if (!sessionStorage.getItem(SESSION_CONFIRMED_KEY)) {
+    return <Redirect to="/login" />;
+  }
+
   if (requireAdmin && !user.isAdmin) return <Redirect to="/" />;
   // Admins bypass card requirement — they need to access /admin to generate keys
   if (requireCard && !card?.active && !user.isAdmin) return <Redirect to="/card-key" />;
@@ -41,7 +53,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (user) {
+  if (user && sessionStorage.getItem(SESSION_CONFIRMED_KEY)) {
     // Admins go straight to dashboard (they don't need a card)
     if (user.isAdmin) return <Redirect to="/" />;
     if (!card?.active) return <Redirect to="/card-key" />;
@@ -55,7 +67,7 @@ export default function AppRoutes() {
   return (
     <Switch>
       <Route path="/login">
-        <PublicRoute><LoginPage /></PublicRoute>
+        <LoginPage />
       </Route>
       <Route path="/register">
         <PublicRoute><RegisterPage /></PublicRoute>
