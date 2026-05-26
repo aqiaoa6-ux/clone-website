@@ -80,102 +80,10 @@ function streakInfo(items: DrawItem[]): string {
   return count >= 2 ? `连${count}期${label}` : "";
 }
 
-// ─── Algo label map ───────────────────────────────────────────────────────────
-// 算法玩法说明
-const ALGO_DESC: Record<string, string> = {
-  adaptive_switch:  "走势自适应：龙市顺龙，震荡时反向，自动切换",
-  steady_ai:        "升级AI：多维评分，识别龙形/震荡/AABB等形态",
-  ai_trend:         "AI趋势：追踪历史规律，超长龙直接顺龙保护",
-  streak_follow:    "跟龙：近3期多数方向即为投注方向",
-  dragon_ride:      "顺龙：连龙≥3期才入场，顺势跟注",
-  dragon_break:     "破龙：连龙≥4期时反向押注，等待破龙",
-  momentum:         "动量：加权频率，近期权重更高决策方向",
-  anti_streak:      "反连：震荡ABAB市场反向押注",
-  cold_pick:        "冷号：选近期出现次数最少的方向",
-  signal_follow:    "跟信号：跟随外部消息信号方向",
-  signal_reverse:   "反信号：反向操作外部消息信号",
-  random:           "随机：纯随机选择大或小",
+// ─── Algo num map ─────────────────────────────────────────────────────────────
+const ALGO_NUM: Record<string, number> = {
+  ai_trend: 1, steady_ai: 2, adaptive_switch: 3,
 };
-
-// ─── Algo Rates Panel ─────────────────────────────────────────────────────────
-function AlgoRatesPanel({ rates, historyCount }: { rates: AlgoRate[]; historyCount: number }) {
-  if (!rates.length) {
-    return (
-      <div className="bg-[#0f1220] border border-[#1e2235] rounded-2xl px-4 py-5 text-center text-slate-600 text-xs">
-        加载算法分析中…
-      </div>
-    );
-  }
-
-  // 按命中率排序（前端已收到排好序的数据，但保留排名对应原顺序索引）
-  const ranked = [...rates].sort((a, b) => {
-    const ra = a.simWinRate ? parseFloat(a.simWinRate) : 0;
-    const rb = b.simWinRate ? parseFloat(b.simWinRate) : 0;
-    return rb - ra;
-  });
-  // 原始顺序映射 → 算法N编号
-  const algoNum: Record<string, number> = {};
-  rates.forEach((r, i) => { algoNum[r.algoId] = i + 1; });
-
-  return (
-    <div className="bg-[#0f1220] border border-[#1e2235] rounded-2xl overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-[#1e2235] flex items-center justify-between">
-        <span className="text-white text-sm font-semibold">算法命中率</span>
-        <span className="text-slate-600 text-[10px]">回测近 {historyCount} 期走势</span>
-      </div>
-      <div className="divide-y divide-[#1e2235]">
-        {ranked.map((r, rank) => {
-          const rate = r.simWinRate ? parseFloat(r.simWinRate) : null;
-          const rateColor = rate === null ? "text-slate-500"
-            : rate >= 55 ? "text-emerald-400"
-            : rate >= 45 ? "text-yellow-400"
-            : "text-red-400";
-          const isBig   = r.currentPrediction === "大";
-          const isSmall = r.currentPrediction === "小";
-          const medalColors = ["text-yellow-400", "text-slate-300", "text-amber-600"];
-          const medalColor  = rank < 3 ? medalColors[rank]! : "text-slate-600";
-          const num = algoNum[r.algoId] ?? (rank + 1);
-
-          return (
-            <div key={r.algoId} className="flex items-center gap-3 px-4 py-3">
-              {/* 排名奖牌 */}
-              <span className={`text-xs font-bold w-5 text-center flex-shrink-0 ${medalColor}`}>
-                #{rank + 1}
-              </span>
-
-              {/* 名称 + 玩法说明 */}
-              <div className="flex-1 min-w-0">
-                <div className="text-white text-sm font-bold">算法{num}</div>
-                <div className="text-slate-500 text-[10px] mt-0.5 leading-snug">
-                  {ALGO_DESC[r.algoId] ?? r.algoId}
-                </div>
-                <div className="text-slate-600 text-[9px] mt-0.5">
-                  {r.simTotal > 0 ? `${r.simWins}中 / ${r.simTotal}期` : "数据不足"}
-                </div>
-              </div>
-
-              {/* 当前预测 */}
-              <div className="flex flex-col items-center flex-shrink-0 gap-0.5 min-w-[40px]">
-                <span className="text-slate-500 text-[9px]">本期</span>
-                <span className={`text-lg font-bold leading-none ${isBig ? "text-rose-400" : isSmall ? "text-blue-400" : "text-slate-600"}`}>
-                  {r.currentPrediction ?? "—"}
-                </span>
-              </div>
-
-              {/* 命中率 */}
-              <div className="flex flex-col items-end flex-shrink-0 min-w-[52px]">
-                <span className="text-slate-500 text-[9px]">命中率</span>
-                <span className={`text-base font-bold ${rateColor}`}>
-                  {r.simWinRate ? `${r.simWinRate}%` : "—"}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function TrendPage() {
@@ -235,7 +143,33 @@ export default function TrendPage() {
       <div className="px-3 py-3 space-y-3">
 
         {/* ── Algo rates ── */}
-        <AlgoRatesPanel rates={algoRates} historyCount={historyCount} />
+        {algoRates.length > 0 && (
+          <div className="grid grid-cols-3 gap-2">
+            {algoRates.map((r) => {
+              const num = ALGO_NUM[r.algoId] ?? 0;
+              if (!num) return null;
+              const rate = r.simWinRate ? parseFloat(r.simWinRate) : null;
+              const rateColor = rate === null ? "text-slate-500"
+                : rate >= 55 ? "text-emerald-400"
+                : rate >= 45 ? "text-yellow-400"
+                : "text-red-400";
+              const isBig   = r.currentPrediction === "大";
+              const isSmall = r.currentPrediction === "小";
+              return (
+                <div key={r.algoId} className="bg-[#0f1220] border border-[#1e2235] rounded-xl px-3 py-3 flex flex-col items-center gap-1">
+                  <span className="text-slate-400 text-[11px] font-medium">算法{num}</span>
+                  <span className={`text-2xl font-bold leading-none ${isBig ? "text-rose-400" : isSmall ? "text-blue-400" : "text-slate-600"}`}>
+                    {r.currentPrediction ?? "—"}
+                  </span>
+                  <span className={`text-sm font-bold ${rateColor}`}>
+                    {r.simWinRate ? `${r.simWinRate}%` : "—"}
+                  </span>
+                  <span className="text-slate-600 text-[9px]">命中率</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* ── History table ── */}
         {loading ? (

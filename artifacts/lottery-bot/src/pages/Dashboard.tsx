@@ -23,6 +23,12 @@ const ALGO_LABELS: Record<string, string> = {
   adaptive_switch: "算法3",
 };
 
+const ALGO_DESC: Record<string, string> = {
+  ai_trend:        "算法1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
+  steady_ai:       "算法2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
+  adaptive_switch: "算法3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
+};
+
 const BET_OPT_LABELS: Record<string, string> = {
   big: "大", small: "小", odd: "单", even: "双",
 };
@@ -372,6 +378,13 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   <span key={k} className={tagCls(algos.includes(k))} onClick={() => toggleAlgo(k)}>{v}</span>
                 ))}
               </div>
+              {algos.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  {algos.filter(k => ALGO_DESC[k]).map(k => (
+                    <div key={k} className="text-[11px] text-slate-400 leading-snug">{ALGO_DESC[k]}</div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
 
