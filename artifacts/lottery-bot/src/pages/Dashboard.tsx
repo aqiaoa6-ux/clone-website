@@ -740,8 +740,16 @@ export default function Dashboard() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-slate-500 text-xs">{user?.username}</span>
-            <button onClick={() => void logout()} className="text-slate-500 hover:text-slate-300 text-xs transition">退出</button>
+            <span className="flex items-center gap-1 bg-slate-700/60 border border-slate-600/50 rounded-full px-2.5 py-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0" />
+              <span className="text-slate-200 text-xs font-medium max-w-[80px] truncate">{user?.username}</span>
+            </span>
+            <button
+              onClick={() => void logout()}
+              className="text-xs px-2.5 py-0.5 rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition"
+            >
+              退出
+            </button>
           </div>
         </div>
       </div>
