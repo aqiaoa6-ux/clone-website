@@ -975,16 +975,25 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "momentum") return momentum(session);
   if (algoId === "anti_streak") return antiStreak(session);
   if (algoId === "streak_follow") return streakFollow(session);
-  if (algoId === "signal_follow") {
-    const p = parseBetLabel(signalText);
-    return p ? (labels.includes(p) ? p : (labels[0] ?? null)) : null;
-  }
-  if (algoId === "signal_reverse") {
+  if (algoId === "signal_follow" || algoId === "signal_reverse") {
     const p = parseBetLabel(signalText);
     if (!p) return null;
+    // Detect strong oscillation in the current labels dimension
+    const h8sig = [...lotteryHistoryCache, ...session.recentResults].slice(-8);
+    const mappedSig = h8sig.map(r => mapR3ToEnabled(r, labels)).filter((x): x is string => x !== null);
+    let altSig = 0;
+    for (let i = 1; i < mappedSig.length; i++) if (mappedSig[i] !== mappedSig[i - 1]) altSig++;
+    const altRatioSig = mappedSig.length > 1 ? altSig / (mappedSig.length - 1) : 0.5;
+    const strongOscillation = altRatioSig >= 0.75; // ABAB pattern → signal direction will likely flip
+    const strongStreak = altRatioSig <= 0.25;     // streak market → signal direction will likely continue
     const opp: Record<string, string> = { 大:"小", 小:"大", 单:"双", 双:"单", 大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单" };
-    const rev = opp[p];
-    return (rev && labels.includes(rev)) ? rev : (labels[0] ?? null);
+    // signal_follow: follow signal, but auto-flip in strong oscillation (signal = last result = wrong direction)
+    // signal_reverse: counter signal, but skip counter in strong streak (signal = last result = right direction)
+    const baseFollow = algoId === "signal_follow"
+      ? (strongOscillation ? (opp[p] ?? p) : p)   // oscillation: flip
+      : (strongStreak     ? p : (opp[p] ?? p));    // reverse: skip counter in streak
+    const candidate = labels.includes(baseFollow) ? baseFollow : (labels.includes(p) ? p : (labels[0] ?? null));
+    return candidate;
   }
   const history = buildHistory(session);
   return freqPick(history, labels, algoId === "cold_pick");
@@ -1519,10 +1528,39 @@ function decideKillGroup(session: TgSession): KillGroupOption {
   const h30 = history.slice(-Math.min(30, n));
   const bigFreq = h30.filter(r => r.startsWith("大")).length / h30.length;
   const oddFreq = h30.filter(r => r.endsWith("单")).length / h30.length;
-  if (bigFreq > 0.58) { scores["大单"] += 0.5; scores["大双"] += 0.5; }
-  else if (bigFreq < 0.42) { scores["小单"] += 0.5; scores["小双"] += 0.5; }
-  if (oddFreq > 0.58) { scores["大单"] += 0.5; scores["小单"] += 0.5; }
-  else if (oddFreq < 0.42) { scores["大双"] += 0.5; scores["小双"] += 0.5; }
+  if (bigFreq > 0.58) { scores["大单"] += 0.8; scores["大双"] += 0.8; }
+  else if (bigFreq < 0.42) { scores["小单"] += 0.8; scores["小双"] += 0.8; }
+  if (oddFreq > 0.58) { scores["大单"] += 0.8; scores["小单"] += 0.8; }
+  else if (oddFreq < 0.42) { scores["大双"] += 0.8; scores["小双"] += 0.8; }
+
+  // ── G: 市场形态感知（自适应杀策略）─────────────────────────────────────────
+  // 龙形市场（低交替率）：热组有惯性会继续出 → 不应杀热组，改杀"冷"组
+  // 震荡市场（高交替率）：刚出的组下期大概率不出 → 加强杀热组
+  const patternH = history.slice(-Math.min(8, n));
+  let patternAlt = 0;
+  for (let i = 1; i < patternH.length; i++) if (patternH[i] !== patternH[i - 1]) patternAlt++;
+  const patternRatio = patternH.length > 1 ? patternAlt / (patternH.length - 1) : 0.5;
+
+  if (patternRatio <= 0.30) {
+    // 龙形市场：活跃组有惯性，应杀"最冷"组（长期未出的不会突然出现）
+    // 反转 A 模块热度分：热度越高 → 杀分降低；冷度越高 → 杀分升高
+    for (const opt of KILL_GROUP_ALL) {
+      if (scores[opt] > -900) { // 不干扰趋势保护
+        const coldness = absence[opt];                              // 0=刚出，大=冷
+        const hotness = maxAb > 0 ? (maxAb - absence[opt]) / maxAb : 0; // 0=冷，1=热
+        scores[opt] += coldness * 1.2 - hotness * 4.0; // 冷加分、热减分（抵消A模块并反向）
+      }
+    }
+  } else if (patternRatio >= 0.70) {
+    // 强震荡市场：当前逻辑方向正确，额外加权刚出现的组
+    for (const opt of KILL_GROUP_ALL) {
+      if (scores[opt] > -900) {
+        if (absence[opt] === 0) scores[opt] += 2.5; // 刚出，震荡中大概率不再出
+        else if (absence[opt] === 1) scores[opt] += 1.0;
+      }
+    }
+  }
+  // 中性市场：保持原有统计逻辑，不额外调整
 
   const killed = (Object.entries(scores) as [KillGroupOption, number][])
     .sort((a, b) => b[1] - a[1])[0]![0];
