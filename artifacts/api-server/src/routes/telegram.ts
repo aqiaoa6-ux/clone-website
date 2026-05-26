@@ -19,7 +19,8 @@ const router = Router();
 type BetStrategy = "normal" | "martingale" | "anti-martingale";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
-  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch";
+  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
+  | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart";
 
 interface BetCfg {
   autoBet: boolean;
@@ -909,11 +910,11 @@ function buildHistory(session: TgSession): string[] {
 type MarketPattern = "streak" | "oscillating" | "neutral";
 
 /** 长龙形态适用算法 */
-const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "ai_trend", "adaptive_switch"];
+const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "ai_trend", "adaptive_switch", "ks_follow", "ks_bb"];
 /** 震荡形态适用算法 */
-const OSCILLATING_ALGOS: AlgorithmId[] = ["anti_streak", "dragon_break", "signal_reverse"];
+const OSCILLATING_ALGOS: AlgorithmId[] = ["anti_streak", "dragon_break", "signal_reverse", "ks_reverse", "ks_bb"];
 /** 中性算法（兜底） */
-const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick", "steady_ai"];
+const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick", "steady_ai", "ks_smart"];
 
 /**
  * 检测最近 8 期走势形态：
@@ -1052,7 +1053,72 @@ function parseBetLabel(text: string): string | null {
   return null;
 }
 
+// ─── 快三专用算法 ──────────────────────────────────────────────────────────────
+
+/** 从 session.kuaisanResults（只含快三数据）构造算法用历史，oldest→newest */
+function buildKsHistory(session: TgSession, labels: string[]): string[] {
+  return (session.kuaisanResults ?? [])
+    .slice().reverse() // kuaisanResults is newest-first; reverse to oldest-first
+    .map(r => mapR3ToEnabled(r.label, labels))
+    .filter((x): x is string => x !== null);
+}
+
+/** 跟上期：直接跟上一局快三结果的方向 */
+function ksFollow(session: TgSession, labels: string[]): string | null {
+  const h = buildKsHistory(session, labels);
+  if (!h.length) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  return h[h.length - 1] ?? null;
+}
+
+/** 反上期：押上一局的反方向 */
+function ksReverse(session: TgSession, labels: string[]): string | null {
+  const h = buildKsHistory(session, labels);
+  if (!h.length) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  const last = h[h.length - 1]!;
+  return labels.find(l => l !== last) ?? last;
+}
+
+/**
+ * AABB 形态识别：
+ * - 连续两期相同 (AA) → 跟上期（顺势）
+ * - 两期不同 (AB)     → 押反（震荡反转）
+ */
+function ksBB(session: TgSession, labels: string[]): string | null {
+  const h = buildKsHistory(session, labels);
+  if (h.length < 2) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  const last = h[h.length - 1]!;
+  const prev = h[h.length - 2]!;
+  if (last === prev) return last;                       // AA → 顺
+  return labels.find(l => l !== last) ?? last;          // AB → 反
+}
+
+/**
+ * 智能均值回归：
+ * - 近5期某方向 ≥4次 → 押另一方向（强回归信号）
+ * - 其余情况跟近3期多数
+ */
+function ksSmart(session: TgSession, labels: string[]): string | null {
+  if (labels.length < 2) return labels[0] ?? null;
+  const [optA, optB] = [labels[0]!, labels[1]!];
+  const h = buildKsHistory(session, labels);
+  if (h.length < 3) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  const r5 = h.slice(-5);
+  const cntA = r5.filter(x => x === optA).length;
+  const cntB = r5.length - cntA;
+  if (cntA >= 4) return optB;
+  if (cntB >= 4) return optA;
+  // 近3期多数投票
+  const r3 = h.slice(-3);
+  const vA = r3.filter(x => x === optA).length;
+  const vB = r3.length - vA;
+  return vA >= vB ? optA : optB;
+}
+
 function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
+  if (algoId === "ks_follow")  return ksFollow(session, labels);
+  if (algoId === "ks_reverse") return ksReverse(session, labels);
+  if (algoId === "ks_bb")     return ksBB(session, labels);
+  if (algoId === "ks_smart")  return ksSmart(session, labels);
   if (algoId === "ai_trend")       return decideAI(session);
   if (algoId === "steady_ai")      return decideSteady(session);
   if (algoId === "adaptive_switch") return decideSteady(session); // 大小阶段用升级版AI决策
