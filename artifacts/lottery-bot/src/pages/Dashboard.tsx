@@ -332,6 +332,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
                     const next = !dualGroupMode;
                     setDualGroupMode(next);
                     if (next) setBetOpts(["big-odd", "small-even", "small-odd", "big-even"]);
+                    else setBetOpts(["big", "small"]);
                   }}
                   className={`w-full py-2 rounded-lg text-xs font-medium border transition ${
                     dualGroupMode
@@ -354,7 +355,8 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   onClick={() => {
                     const next = !killGroupMode;
                     setKillGroupMode(next);
-                    if (next) setDualGroupMode(false);
+                    if (next) { setDualGroupMode(false); setBetOpts(["big", "small"]); }
+                    else setBetOpts(["big", "small"]);
                   }}
                   className={`w-full py-2 rounded-lg text-xs font-medium border transition ${
                     killGroupMode
