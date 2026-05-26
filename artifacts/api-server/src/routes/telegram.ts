@@ -1334,7 +1334,13 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     "大单小双": ["大单", "小双"],
     "小单大双": ["小单", "大双"],
   };
-  const dualItems = session.cfg.dualGroupMode ? (DUAL_GROUP_MAP[direction] ?? [direction]) : null;
+  // 非 ai_trend/steady_ai 算法可能只返回单个标签（如 "小单"），在双组模式下自动提升为复合方向
+  let effectiveDirection = direction;
+  if (session.cfg.dualGroupMode && !DUAL_GROUP_MAP[direction]) {
+    if (direction === "大单" || direction === "小双") effectiveDirection = "大单小双";
+    else if (direction === "小单" || direction === "大双") effectiveDirection = "小单大双";
+  }
+  const dualItems = session.cfg.dualGroupMode ? (DUAL_GROUP_MAP[effectiveDirection] ?? [effectiveDirection]) : null;
 
   // Only include chase entries if not already sent this cycle
   const chaseEntries = (!session.chasePlacedThisCycle && session.cfg.enableChase ? session.cfg.chaseNumbers : [])
