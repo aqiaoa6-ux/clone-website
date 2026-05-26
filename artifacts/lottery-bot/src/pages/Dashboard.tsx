@@ -981,7 +981,7 @@ export default function Dashboard() {
                       {kuaisanResults.slice(0, 12).map((r, i) => (
                         <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
                           r.leopard ? "bg-amber-500/20 text-amber-400 border-amber-500/40" :
-                          r.label.startsWith("大") ? "bg-red-500/15 text-red-400 border-red-500/25" :
+                          r.label?.startsWith("大") ? "bg-red-500/15 text-red-400 border-red-500/25" :
                           "bg-blue-500/15 text-blue-400 border-blue-500/25"
                         }`}>
                           {r.label}

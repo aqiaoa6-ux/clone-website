@@ -2117,8 +2117,13 @@ async function runKuaisanAutoBet(session: TgSession): Promise<void> {
   const optLabels = (session.cfg.kuaisanBetOptions ?? ["big", "small"]).map(o => KS_BET_LABELS[o] ?? o);
   const labels = optLabels.length >= 2 ? optLabels : ["大", "小"];
   const algoId = (session.cfg.algorithms[session.algIndex] ?? "ai_trend") as AlgorithmId;
-  const direction = runAlgo(session, algoId, labels);
+  // Override betOptions so all internal algo functions use kuaisan bet labels
+  const ksSession: TgSession = { ...session, cfg: { ...session.cfg, betOptions: (session.cfg.kuaisanBetOptions ?? ["big", "small"]) as BetOption[] } };
+  const direction = runAlgo(ksSession, algoId, labels);
   if (!direction) return;
+  // Advance rotation index and record last algo used
+  session.algIndex++;
+  session.lastAlgoUsed = algoId;
 
   session.betPlacedThisCycle = true;
   const amount = session.currentBet;
@@ -2168,7 +2173,7 @@ function stopKuaisanListener(session: TgSession): void {
 }
 
 /** Process a single text message from the kuaisan group */
-function processKuaisanMessage(session: TgSession, text: string, msgId: number): void {
+async function processKuaisanMessage(session: TgSession, text: string, msgId: number): Promise<void> {
   if (!text) return;
 
   // Log to chatLog for frontend debugging
@@ -2224,7 +2229,7 @@ function processKuaisanMessage(session: TgSession, text: string, msgId: number):
     session.betPlacedThisCycle = false;
     pushEvent(session, "kuaisan:phase", { phase: "betting", period: session.kuaisanPeriod });
     logger.info({ msgId, period: session.kuaisanPeriod }, "[ks] bet open detected via poll");
-    if (session.cfg.autoBet) void runKuaisanAutoBet(session);
+    if (session.cfg.autoBet) await runKuaisanAutoBet(session);
     return;
   }
 
@@ -2271,7 +2276,7 @@ function startKuaisanListener(session: TgSession): void {
           if (msg.id <= session.kuaisanLastMsgId) continue;
           session.kuaisanLastMsgId = msg.id;
           const text = msg.message ?? "";
-          processKuaisanMessage(session, text, msg.id);
+          await processKuaisanMessage(session, text, msg.id);
         }
       } catch { /* network hiccup — retry next cycle */ }
     })();
