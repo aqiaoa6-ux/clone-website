@@ -2105,7 +2105,9 @@ function settleKuaisanBets(session: TgSession, result: KuaisanResult): void {
 
 async function runKuaisanAutoBet(session: TgSession): Promise<void> {
   if (!session.cfg.autoBet || !session.watchGroupId) return;
-  if (session.betLog.some(b => b.status === "sent")) return;
+  // Only block on recent kuaisan bets (sent within last 5 min) to avoid stale lottery bets blocking
+  const recentPending = session.betLog.filter(b => b.status === "sent" && Date.now() - b.timestamp < 300_000);
+  if (recentPending.length > 0) return;
   if (session.betPlacedThisCycle) return;
   const risk = checkRisk(session);
   if (!risk.ok) return;
@@ -2205,23 +2207,35 @@ function startKuaisanListener(session: TgSession): void {
       return;
     }
 
-    // 2. "开始下注" phase: message has 期号 + 封盘/下注 keywords
-    if (text.includes("期号") && (text.includes("封盘时间") || text.includes("封盘") || text.includes("下注"))) {
-      const periodMatch = text.match(/期号[：:]\s*([a-fA-F0-9]{8,})/);
+    // 2. "开始下注" phase — flexible detection for different bot formats
+    const isBetOpen =
+      text.includes("开始下注") ||
+      text.includes("开始投注") ||
+      text.includes("现在开始") ||
+      (text.includes("期号") && (text.includes("封盘") || text.includes("下注") || text.includes("开奖")));
+
+    if (isBetOpen && session.kuaisanPhase !== "betting") {
+      // Period: support both decimal (20251201001234) and hex (a3f2b8c1) formats
+      const periodMatch = text.match(/期[号码][：:\s]*([a-fA-F0-9\d]{6,})/);
       session.kuaisanPhase = "betting";
       session.kuaisanPeriod = periodMatch?.[1] ?? null;
       if (!session.diceBuffer) session.diceBuffer = [];
       session.diceBuffer = [];
+      session.betPlacedThisCycle = false;
       pushEvent(session, "kuaisan:phase", { phase: "betting", period: session.kuaisanPeriod });
       if (session.cfg.autoBet) void runKuaisanAutoBet(session);
       return;
     }
 
     // 3. "封盘" / "停止下注"
-    if (/停止下注|停止投注|已封盘/.test(text)) {
+    if (/停止下注|停止投注|已封盘|封盘/.test(text) && session.kuaisanPhase === "betting") {
       session.kuaisanPhase = "closed";
       pushEvent(session, "kuaisan:phase", { phase: "closed" });
     }
+
+    // 4. Log all group messages to chatLog for debugging (max 50)
+    if (session.chatLog.length >= 50) session.chatLog.pop();
+    session.chatLog.unshift({ text: text.slice(0, 200), ts: Date.now() });
   };
 
   session.kuaisanHandlerBuilder = new NewMessage({});
