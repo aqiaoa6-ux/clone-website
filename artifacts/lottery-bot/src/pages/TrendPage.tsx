@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { api, type LotteryData, type AlgoRate } from "../lib/api";
+import { api, type LotteryData } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,26 +80,11 @@ function streakInfo(items: DrawItem[]): string {
   return count >= 2 ? `连${count}期${label}` : "";
 }
 
-// ─── Algo num map ─────────────────────────────────────────────────────────────
-const ALGO_NUM: Record<string, number> = {
-  ai_trend: 1, steady_ai: 2, adaptive_switch: 3,
-};
-
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function TrendPage() {
-  const [items,        setItems]        = useState<DrawItem[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [lastUpdated,  setLastUpdated]  = useState<Date | null>(null);
-  const [algoRates,    setAlgoRates]    = useState<AlgoRate[]>([]);
-  const [historyCount, setHistoryCount] = useState(0);
-
-  const refreshRates = useCallback(async () => {
-    try {
-      const { rates, historyCount: hc } = await api.tg.algoRates();
-      setAlgoRates(rates);
-      setHistoryCount(hc);
-    } catch { /* ignore */ }
-  }, []);
+  const [items,       setItems]       = useState<DrawItem[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -108,8 +93,7 @@ export default function TrendPage() {
       setLastUpdated(new Date());
     } catch { /* ignore */ }
     finally { setLoading(false); }
-    void refreshRates();
-  }, [refreshRates]);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -141,35 +125,6 @@ export default function TrendPage() {
       </div>
 
       <div className="px-3 py-3 space-y-3">
-
-        {/* ── Algo rates ── */}
-        {algoRates.length > 0 && (
-          <div className="grid grid-cols-3 gap-2">
-            {algoRates.map((r) => {
-              const num = ALGO_NUM[r.algoId] ?? 0;
-              if (!num) return null;
-              const rate = r.simWinRate ? parseFloat(r.simWinRate) : null;
-              const rateColor = rate === null ? "text-slate-500"
-                : rate >= 55 ? "text-emerald-400"
-                : rate >= 45 ? "text-yellow-400"
-                : "text-red-400";
-              const isBig   = r.currentPrediction === "大";
-              const isSmall = r.currentPrediction === "小";
-              return (
-                <div key={r.algoId} className="bg-[#0f1220] border border-[#1e2235] rounded-xl px-3 py-3 flex flex-col items-center gap-1">
-                  <span className="text-slate-400 text-[11px] font-medium">算法{num}</span>
-                  <span className={`text-2xl font-bold leading-none ${isBig ? "text-rose-400" : isSmall ? "text-blue-400" : "text-slate-600"}`}>
-                    {r.currentPrediction ?? "—"}
-                  </span>
-                  <span className={`text-sm font-bold ${rateColor}`}>
-                    {r.simWinRate ? `${r.simWinRate}%` : "—"}
-                  </span>
-                  <span className="text-slate-600 text-[9px]">命中率</span>
-                </div>
-              );
-            })}
-          </div>
-        )}
 
         {/* ── History table ── */}
         {loading ? (
