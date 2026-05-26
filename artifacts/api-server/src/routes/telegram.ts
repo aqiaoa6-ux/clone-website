@@ -1617,13 +1617,14 @@ async function runAutoBet(session: TgSession): Promise<void> {
     return;
   }
 
-  // For signal-based algos, use the cached last signal; otherwise use the auto decider
+  // For signal-based algos, use the cached last signal if available; otherwise fall back to auto decider
   const isSignalAlgo = session.cfg.algorithms.includes("signal_follow") || session.cfg.algorithms.includes("signal_reverse");
-  const direction = isSignalAlgo
+  const hasSignal = isSignalAlgo && !!session.lastSignalText;
+  const direction = hasSignal
     ? decideBet(session, session.lastSignalText)
     : decideBetAuto(session);
   if (!direction) {
-    if (isSignalAlgo) logger.info("[auto-bet] signal algo but no cached signal yet, skip");
+    logger.info({ isSignalAlgo, hasSignal }, "[auto-bet] no direction decided, skip");
     return;
   }
   await placeAllBets(session, direction);
