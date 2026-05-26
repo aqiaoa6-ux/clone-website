@@ -2107,9 +2107,7 @@ function settleKuaisanBets(session: TgSession, result: KuaisanResult): void {
 
 async function runKuaisanAutoBet(session: TgSession): Promise<void> {
   if (!session.cfg.autoBet || !session.watchGroupId) return;
-  // Only block on recent kuaisan bets (sent within last 5 min) to avoid stale lottery bets blocking
-  const recentPending = session.betLog.filter(b => b.status === "sent" && Date.now() - b.timestamp < 300_000);
-  if (recentPending.length > 0) return;
+  // betPlacedThisCycle is cleared on every new "开始下注"; that's the only guard needed.
   if (session.betPlacedThisCycle) return;
   const risk = checkRisk(session);
   if (!risk.ok) return;
@@ -2307,13 +2305,12 @@ function startKuaisanListener(session: TgSession): void {
         if (!msgs.length) return;
         // getMessages returns newest-first; reverse to process oldest-first
         const sorted = [...msgs].sort((a, b) => a.id - b.id);
-        // Auto-expire bets stuck in "sent" for > 120s (prevents blocking next rounds)
+        // Auto-expire bets stuck in "sent" for > 120s — call settleBet so
+        // computeNextBet runs and currentBet is updated for martingale strategy.
         const now = Date.now();
         for (const stale of session.betLog.filter(b => b.status === "sent" && now - b.timestamp > 120_000)) {
-          logger.warn({ betId: stale.id, age: Math.round((now - stale.timestamp) / 1000) }, "[ks] stale bet expired");
-          stale.status = "lost";
-          stale.won = false;
-          stale.pnl = -stale.amount;
+          logger.warn({ betId: stale.id, age: Math.round((now - stale.timestamp) / 1000) }, "[ks] stale bet auto-expired as lost");
+          settleBet(session, { won: false, pnl: -stale.amount, betId: stale.id });
         }
 
         for (const msg of sorted) {
