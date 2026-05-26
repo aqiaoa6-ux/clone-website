@@ -2182,38 +2182,23 @@ async function processKuaisanMessage(session: TgSession, text: string, msgId: nu
   session.chatLog.unshift(logEntry as unknown as typeof session.chatLog[number]);
   if (session.chatLog.length > 50) session.chatLog.pop();
 
-  // 1. Dice detection
-  const diceMatch = text.match(/骰子有效[，,]?\s*识别点数为[：:]\s*(\d)/);
-  if (diceMatch) {
-    const value = parseInt(diceMatch[1]);
-    if (value >= 1 && value <= 6) {
-      const now = Date.now();
-      if (!session.diceBuffer) session.diceBuffer = [];
-      session.diceBuffer = session.diceBuffer.filter(d => now - d.time < 90_000);
-      session.diceBuffer.push({ value, time: now });
-      pushEvent(session, "kuaisan:dice", { buffer: session.diceBuffer.map(d => d.value) });
-      if (session.diceBuffer.length >= 3) {
-        const three = session.diceBuffer.slice(-3);
-        session.diceBuffer = [];
-        const dice = three.map(d => d.value) as [number, number, number];
-        const result = computeKuaisanResult(dice);
-        if (!session.kuaisanResults) session.kuaisanResults = [];
-        session.kuaisanResults.unshift(result);
-        if (session.kuaisanResults.length > 50) session.kuaisanResults.pop();
-        pushEvent(session, "kuaisan:result", {
-          dice: result.dice, sum: result.sum, label: result.label,
-          big: result.big, odd: result.odd, dragon: result.dragon, tiger: result.tiger, leopard: result.leopard,
-        });
-        settleKuaisanBets(session, result);
-        session.kuaisanPhase = "closed";
-        session.betPlacedThisCycle = false;
-        session.chasePlacedThisCycle = false;
-      }
-    }
-    return;
-  }
+  // Helper: publish a computed kuaisan result + settle pending bets
+  const publishResult = (result: KuaisanResult) => {
+    if (!session.kuaisanResults) session.kuaisanResults = [];
+    session.kuaisanResults.unshift(result);
+    if (session.kuaisanResults.length > 50) session.kuaisanResults.pop();
+    pushEvent(session, "kuaisan:result", {
+      dice: result.dice, sum: result.sum, label: result.label,
+      big: result.big, odd: result.odd, dragon: result.dragon, tiger: result.tiger, leopard: result.leopard,
+    });
+    logger.info({ dice: Array.from(result.dice), label: result.label }, "[ks] result → settling bets");
+    settleKuaisanBets(session, result);
+    session.kuaisanPhase = "closed";
+    session.betPlacedThisCycle = false;
+    session.chasePlacedThisCycle = false;
+  };
 
-  // 2. "开始下注" phase — flexible detection
+  // ── 0. Detect "开始下注" FIRST so it can't be misidentified as a result ──────
   const isBetOpen =
     text.includes("开始下注") ||
     text.includes("开始投注") ||
@@ -2233,10 +2218,60 @@ async function processKuaisanMessage(session: TgSession, text: string, msgId: nu
     return;
   }
 
-  // 3. Closing phase
+  // ── 1. Closing phase ────────────────────────────────────────────────────────
   if (/停止下注|停止投注|已封盘|封盘/.test(text) && session.kuaisanPhase === "betting") {
     session.kuaisanPhase = "closed";
     pushEvent(session, "kuaisan:phase", { phase: "closed" });
+    return;
+  }
+
+  // ── 2a. Dice buffer: one value per message ("骰子有效，识别点数为: X") ────────
+  const diceMatch = text.match(/骰子有效[，,]?\s*识别点数为[：:]\s*([1-6])/);
+  if (diceMatch) {
+    const value = parseInt(diceMatch[1]!);
+    const now = Date.now();
+    if (!session.diceBuffer) session.diceBuffer = [];
+    session.diceBuffer = session.diceBuffer.filter(d => now - d.time < 90_000);
+    session.diceBuffer.push({ value, time: now });
+    pushEvent(session, "kuaisan:dice", { buffer: session.diceBuffer.map(d => d.value) });
+    if (session.diceBuffer.length >= 3) {
+      const three = session.diceBuffer.slice(-3);
+      session.diceBuffer = [];
+      publishResult(computeKuaisanResult(three.map(d => d.value) as [number, number, number]));
+    }
+    return;
+  }
+
+  // ── 2b. Single-message 3-dice result (e.g. "开奖：2-4-5 大单虎") ────────────
+  // Only trigger on explicit result-announcement keywords (not betting-round keywords)
+  const isResultAnnouncement = /开奖|结果|本期[：:是]|上期[：:是]|点数[：:是]/.test(text);
+  if (isResultAnnouncement) {
+    const threeInOne = text.match(/([1-6])[^\d]([1-6])[^\d]([1-6])/);
+    if (threeInOne) {
+      const d1 = parseInt(threeInOne[1]!), d2 = parseInt(threeInOne[2]!), d3 = parseInt(threeInOne[3]!);
+      if (d1 >= 1 && d1 <= 6 && d2 >= 1 && d2 <= 6 && d3 >= 1 && d3 <= 6) {
+        session.diceBuffer = [];
+        logger.info({ msgId, d1, d2, d3, text: text.slice(0, 80) }, "[ks] 3-dice result from single msg");
+        publishResult(computeKuaisanResult([d1, d2, d3]));
+        return;
+      }
+    }
+    // Fallback: result label only (e.g. "本期：大单龙")
+    const labelMatch = text.match(/(豹子|(大|小)(单|双)(龙|虎|和)?)/);
+    if (labelMatch) {
+      const lbl = labelMatch[0]!;
+      const big = lbl.includes("大");
+      const odd = lbl.includes("单");
+      const leopard = lbl === "豹子";
+      const dragon = lbl.includes("龙");
+      const tiger = lbl.includes("虎");
+      const sum = leopard ? 6 : big ? (odd ? 11 : 12) : (odd ? 9 : 8);
+      const synth: KuaisanResult = { dice: [0, 0, 0], sum, big: leopard ? false : big, odd: leopard ? false : odd, leopard, dragon, tiger, label: lbl };
+      session.diceBuffer = [];
+      logger.info({ msgId, label: lbl, text: text.slice(0, 80) }, "[ks] label-only result");
+      publishResult(synth);
+      return;
+    }
   }
 }
 
@@ -2272,6 +2307,15 @@ function startKuaisanListener(session: TgSession): void {
         if (!msgs.length) return;
         // getMessages returns newest-first; reverse to process oldest-first
         const sorted = [...msgs].sort((a, b) => a.id - b.id);
+        // Auto-expire bets stuck in "sent" for > 120s (prevents blocking next rounds)
+        const now = Date.now();
+        for (const stale of session.betLog.filter(b => b.status === "sent" && now - b.timestamp > 120_000)) {
+          logger.warn({ betId: stale.id, age: Math.round((now - stale.timestamp) / 1000) }, "[ks] stale bet expired");
+          stale.status = "lost";
+          stale.won = false;
+          stale.pnl = -stale.amount;
+        }
+
         for (const msg of sorted) {
           if (msg.id <= session.kuaisanLastMsgId) continue;
           session.kuaisanLastMsgId = msg.id;
