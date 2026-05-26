@@ -18,8 +18,9 @@ interface DrawState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const ALGO_LABELS: Record<string, string> = {
-  ai_trend:  "AI趋势",
-  steady_ai: "升级版AI",
+  ai_trend:       "AI趋势",
+  steady_ai:      "升级版AI",
+  adaptive_switch: "自适应切换",
 };
 
 const BET_OPT_LABELS: Record<string, string> = {
@@ -914,7 +915,10 @@ export default function Dashboard() {
                     {status.autoBet ? (() => {
                       const patternLabel = status.currentPattern === "streak" ? "📈长龙局" : status.currentPattern === "oscillating" ? "🔄震荡局" : null;
                       const algoLabel = ALGO_LABELS[status.lastAlgoUsed ?? status.algorithms?.[0] ?? ""] ?? "未知算法";
-                      return `运行中 · ${patternLabel ? patternLabel + " · " : ""}${algoLabel}`;
+                      const adaptiveLabel = status.algorithms?.includes("adaptive_switch")
+                        ? (status.adaptiveSwitchKillMode ? " · 🎯杀组中" : " · 大小中")
+                        : "";
+                      return `运行中 · ${patternLabel ? patternLabel + " · " : ""}${algoLabel}${adaptiveLabel}`;
                     })() : "已停止"}
                   </div>
                 </div>

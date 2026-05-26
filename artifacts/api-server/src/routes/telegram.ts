@@ -19,7 +19,7 @@ const router = Router();
 type BetStrategy = "normal" | "martingale" | "anti-martingale";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
-  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai";
+  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch";
 
 interface BetCfg {
   autoBet: boolean;
@@ -67,6 +67,7 @@ interface BetRecord {
   period?: number;
   isChase?: boolean;
   failReason?: string; // human-readable error if status="failed"
+  isAdaptiveKillBet?: boolean; // adaptive_switch: this bet was placed in kill-group phase
 }
 
 // Extract a short, human-readable error code from a GramJS/Telegram error.
@@ -153,6 +154,8 @@ interface TgSession {
   lastSeenLotteryPeriod: number;
   lastSignalText: string;
   lastAIBet: string | null;
+  // adaptive_switch algorithm state
+  adaptiveSwitchKillMode: boolean; // false = 大小模式, true = 杀组模式
 }
 
 interface PersistedData {
@@ -581,6 +584,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       currentCloseTimeMs: 0,
       lastSignalText: "",
       lastAIBet: null,
+      adaptiveSwitchKillMode: false,
       recentResults: [],
       chatLog: [],
       balance: data.balance ?? 1000000,
@@ -760,6 +764,21 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
   if (!isChase) {
     session.consecutiveLosses = won ? 0 : session.consecutiveLosses + 1;
     session.currentBet = computeNextBet(session, won);
+
+    // adaptive_switch: 大小未中→切杀组；杀组中奖→切回大小
+    if (session.cfg.algorithms.includes("adaptive_switch") && record) {
+      if (record.isAdaptiveKillBet) {
+        if (won) {
+          session.adaptiveSwitchKillMode = false;
+          pushEvent(session, "bet:alert", { message: "✅ 杀组命中，切回大小模式", level: "info" });
+        }
+      } else {
+        if (!won) {
+          session.adaptiveSwitchKillMode = true;
+          pushEvent(session, "bet:alert", { message: "🔄 大小未中，切换杀组模式", level: "warn" });
+        }
+      }
+    }
   }
 
   if (record) {
@@ -1570,7 +1589,7 @@ function decideKillGroup(session: TgSession): KillGroupOption {
 /**
  * 发出三注：下注除被杀组以外的三个选项，共享一条消息。
  */
-async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOption): Promise<void> {
+async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOption, isAdaptive = false): Promise<void> {
   const { betLog } = session;
   const targetId = session.watchGroupId!;
   const amount = session.currentBet;
@@ -1609,6 +1628,7 @@ async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOpti
     messageText: message, betContent: toBet.join("+"), amount,
     timestamp: now, status,
     ...(failReason ? { failReason } : {}),
+    ...(isAdaptive ? { isAdaptiveKillBet: true } : {}),
   };
   betLog.unshift(combinedRec);
   pushEvent(session, "bet:new", { bet: combinedRec });
@@ -1650,6 +1670,21 @@ async function runAutoBet(session: TgSession): Promise<void> {
     if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
       await placeChaseOnly(session);
     }
+    return;
+  }
+
+  // adaptive_switch 算法：大小未中自动切杀组，杀组中奖切回大小
+  if (session.cfg.algorithms.includes("adaptive_switch")) {
+    if (session.adaptiveSwitchKillMode) {
+      const killed = decideKillGroup(session);
+      pushEvent(session, "bet:kill", { killed, adaptive: true });
+      await placeKillGroupBets(session, killed, true);
+      return;
+    }
+    // 大小模式：走下方正常逻辑，用 decideBetAuto
+    const direction = decideBetAuto(session);
+    if (!direction) return;
+    await placeAllBets(session, direction);
     return;
   }
 
@@ -1850,6 +1885,15 @@ function startGroupListener(session: TgSession): void {
       if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
         void placeChaseOnly(session);
       }
+      return;
+    }
+    // adaptive_switch: 信号触发时同样根据当前状态决定大小还是杀组
+    if (session.cfg.algorithms.includes("adaptive_switch") && session.adaptiveSwitchKillMode) {
+      if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
+      if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
+      const killed = decideKillGroup(session);
+      pushEvent(session, "bet:kill", { killed, adaptive: true });
+      void placeKillGroupBets(session, killed, true);
       return;
     }
     const direction = decideBet(session, text);
@@ -2056,6 +2100,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       todayPnl: 0, todayResetAt: todayMidnight(),
       kkpayUsername: "kkpay", kkpayEntityId: undefined,
       balanceSource: "manual", balanceUpdatedAt: 0,
+      adaptiveSwitchKillMode: false,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
@@ -2146,6 +2191,7 @@ router.get("/tg/status", requireCard, (req, res) => {
     riskReason: checkRisk(session).reason,
     lastAlgoUsed: session.lastAlgoUsed,
     currentPattern: session.currentPattern,
+    adaptiveSwitchKillMode: session.adaptiveSwitchKillMode,
     ...stats,
   });
 });

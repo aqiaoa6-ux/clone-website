@@ -172,6 +172,7 @@ export interface TgStatus {
   riskReason?: string;
   lastAlgoUsed?: string;
   currentPattern?: "streak" | "oscillating" | "neutral";
+  adaptiveSwitchKillMode?: boolean;
   oddsBigOdd?: number;
   oddsBigEven?: number;
   oddsSmallOdd?: number;
@@ -198,6 +199,7 @@ export interface BetRecord {
   won?: boolean;
   isChase?: boolean;
   failReason?: string;
+  isAdaptiveKillBet?: boolean;
 }
 
 export interface TgChatMessage {
