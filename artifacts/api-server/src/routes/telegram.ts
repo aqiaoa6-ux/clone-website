@@ -1681,8 +1681,9 @@ async function runAutoBet(session: TgSession): Promise<void> {
       await placeKillGroupBets(session, killed, true);
       return;
     }
-    // 大小模式：走下方正常逻辑，用 decideBetAuto
-    const direction = decideBetAuto(session);
+    // 大小模式：强制只用大/小两个选项，不受 betOptions 配置影响
+    const bigSmallSession = { ...session, cfg: { ...session.cfg, betOptions: ["big", "small"] as BetOption[] } };
+    const direction = decideBetAuto(bigSmallSession);
     if (!direction) return;
     await placeAllBets(session, direction);
     return;
@@ -1888,12 +1889,19 @@ function startGroupListener(session: TgSession): void {
       return;
     }
     // adaptive_switch: 信号触发时同样根据当前状态决定大小还是杀组
-    if (session.cfg.algorithms.includes("adaptive_switch") && session.adaptiveSwitchKillMode) {
+    if (session.cfg.algorithms.includes("adaptive_switch")) {
       if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
       if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
-      const killed = decideKillGroup(session);
-      pushEvent(session, "bet:kill", { killed, adaptive: true });
-      void placeKillGroupBets(session, killed, true);
+      if (session.adaptiveSwitchKillMode) {
+        const killed = decideKillGroup(session);
+        pushEvent(session, "bet:kill", { killed, adaptive: true });
+        void placeKillGroupBets(session, killed, true);
+      } else {
+        // 大小模式：强制只用大/小选项
+        const bigSmallSession = { ...session, cfg: { ...session.cfg, betOptions: ["big", "small"] as BetOption[] } };
+        const direction = decideBet(bigSmallSession, text);
+        if (direction) void placeAllBets(session, direction);
+      }
       return;
     }
     const direction = decideBet(session, text);
