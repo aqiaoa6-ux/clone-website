@@ -66,6 +66,32 @@ interface BetRecord {
   lotteryResult?: string;
   period?: number;
   isChase?: boolean;
+  failReason?: string; // human-readable error if status="failed"
+}
+
+// Extract a short, human-readable error code from a GramJS/Telegram error.
+function extractTgError(err: unknown): string {
+  if (err instanceof Error) {
+    // GramJS RPC errors look like: "400: USER_BANNED_IN_CHANNEL (caused by messages.SendMessage)"
+    const m = err.message.match(/\d+:\s*([A-Z_]+)/);
+    if (m?.[1]) return m[1];
+    return err.message.slice(0, 80);
+  }
+  return String(err).slice(0, 80);
+}
+
+// If a critical error (ban, forbidden) is detected: stop autoBet and push an SSE alert.
+function handleBetSendError(session: TgSession, errMsg: string): void {
+  logger.warn({ userId: session.userId, errMsg }, "[bet] sendMessage failed");
+  const isBanned = errMsg.includes("USER_BANNED_IN_CHANNEL") || errMsg.includes("CHAT_WRITE_FORBIDDEN") || errMsg.includes("CHAT_SEND_FORBIDDEN");
+  if (isBanned && session.cfg.autoBet) {
+    session.cfg.autoBet = false;
+    saveSession(session);
+    pushEvent(session, "bet:alert", {
+      level: "error",
+      msg: `投注失败：账号已被群组封禁（${errMsg}），自动投注已停止。请在 Telegram 中解除封禁后重新开启。`,
+    });
+  }
 }
 
 interface TgSession {
@@ -1265,11 +1291,15 @@ async function placeChaseOnly(session: TgSession): Promise<void> {
   const message = chaseEntries.map(c => `${c.num}/${c.amount}`).join("  ");
   const now = Date.now();
   let succeeded = false;
+  let failReason: string | undefined;
   try {
     await session.client.sendMessage(targetId, { message });
     session.lastBetAt = now;
     succeeded = true;
-  } catch { /* fall through */ }
+  } catch (err) {
+    failReason = extractTgError(err);
+    handleBetSendError(session, failReason);
+  }
 
   session.chasePlacedThisCycle = true;
   const status = succeeded ? "sent" : "failed";
@@ -1278,6 +1308,7 @@ async function placeChaseOnly(session: TgSession): Promise<void> {
       id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
       messageText: message, betContent: String(num), amount,
       timestamp: now, status, isChase: true,
+      ...(failReason ? { failReason } : {}),
     };
     session.betLog.unshift(rec);
     pushEvent(session, "bet:new", { bet: rec });
@@ -1324,11 +1355,15 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
 
   const now = Date.now();
   let succeeded = false;
+  let failReason: string | undefined;
   try {
     await session.client.sendMessage(targetId, { message });
     session.lastBetAt = now;
     succeeded = true;
-  } catch { /* fall through — log as failed */ }
+  } catch (err) {
+    failReason = extractTgError(err);
+    handleBetSendError(session, failReason);
+  }
 
   const status = succeeded ? "sent" : "failed";
 
@@ -1338,6 +1373,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       id: `main-${now}`, groupId: targetId, groupTitle,
       messageText: message, betContent: dualItems.join("+"), amount: mainAmount,
       timestamp: now, status,
+      ...(failReason ? { failReason } : {}),
     };
     betLog.unshift(dualRec);
     pushEvent(session, "bet:new", { bet: dualRec });
@@ -1347,6 +1383,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       id: `main-${now}`, groupId: targetId, groupTitle,
       messageText: message, betContent: direction, amount: mainAmount,
       timestamp: now, status,
+      ...(failReason ? { failReason } : {}),
     };
     betLog.unshift(mainRec);
     pushEvent(session, "bet:new", { bet: mainRec });
@@ -1358,6 +1395,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
       messageText: message, betContent: String(num), amount,
       timestamp: now, status, isChase: true,
+      ...(failReason ? { failReason } : {}),
     };
     betLog.unshift(rec);
     pushEvent(session, "bet:new", { bet: rec });
@@ -1509,11 +1547,15 @@ async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOpti
   session.chasePlacedThisCycle = true;
 
   let succeeded = false;
+  let failReason: string | undefined;
   try {
     await session.client.sendMessage(targetId, { message });
     session.lastBetAt = now;
     succeeded = true;
-  } catch { /* fall through */ }
+  } catch (err) {
+    failReason = extractTgError(err);
+    handleBetSendError(session, failReason);
+  }
 
   const status = succeeded ? "sent" : "failed";
 
@@ -1522,6 +1564,7 @@ async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOpti
     id: `kill-${now}`, groupId: targetId, groupTitle,
     messageText: message, betContent: toBet.join("+"), amount,
     timestamp: now, status,
+    ...(failReason ? { failReason } : {}),
   };
   betLog.unshift(combinedRec);
   pushEvent(session, "bet:new", { bet: combinedRec });
@@ -1532,6 +1575,7 @@ async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOpti
       id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
       messageText: message, betContent: String(num), amount: amt,
       timestamp: now, status, isChase: true,
+      ...(failReason ? { failReason } : {}),
     };
     betLog.unshift(rec);
     pushEvent(session, "bet:new", { bet: rec });

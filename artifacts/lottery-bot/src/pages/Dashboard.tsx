@@ -572,6 +572,7 @@ export default function Dashboard() {
   const [tgStep, setTgStep] = useState<"checking" | "login" | "group" | "ready">("checking");
   const [toggleLoading, setToggleLoading] = useState(false);
   const [clearLoading, setClearLoading] = useState(false);
+  const [sseAlert, setSseAlert] = useState<string | null>(null);
 
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
@@ -653,6 +654,12 @@ export default function Dashboard() {
           // 追号中奖，后端已自动关闭 enableChase，刷新 status 以同步配置
           void fetchStatus();
         }
+        if (ev.type === "bet:alert") {
+          const msg = ev.msg as string;
+          setSseAlert(msg);
+          // Auto-stop detected on backend; sync status so the toggle reflects the new state
+          void fetchStatus();
+        }
       } catch { /* ignore */ }
     };
 
@@ -723,6 +730,14 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen bg-[#0b0e1a] text-white">
+      {/* SSE Alert Banner */}
+      {sseAlert && (
+        <div className="sticky top-0 z-50 bg-red-900/90 border-b border-red-700 px-4 py-3 flex items-start gap-3 backdrop-blur">
+          <span className="text-red-300 text-lg leading-none mt-0.5">⚠</span>
+          <span className="flex-1 text-sm text-red-100 leading-snug">{sseAlert}</span>
+          <button onClick={() => setSseAlert(null)} className="text-red-300 hover:text-white text-lg leading-none flex-shrink-0">×</button>
+        </div>
+      )}
       {/* Header */}
       <div className="sticky top-0 z-40 bg-[#0b0e1a]/95 border-b border-[#1e2235] backdrop-blur">
         <div className="max-w-lg mx-auto px-4 py-3 flex justify-between items-center">
@@ -953,6 +968,9 @@ export default function Dashboard() {
                         <div className="text-slate-600 text-[10px] mt-0.5">
                           {fmtDate(b.timestamp)} · {b.lotteryResult ?? b.messageText.slice(0, 20)}
                         </div>
+                        {b.status === "failed" && b.failReason && (
+                          <div className="text-red-400 text-[10px] mt-0.5 font-mono">{b.failReason}</div>
+                        )}
                       </div>
                       <div className="text-right flex-shrink-0">
                         <BetTag status={b.status} won={b.won} />

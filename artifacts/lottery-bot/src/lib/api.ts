@@ -197,6 +197,7 @@ export interface BetRecord {
   pnl?: number;
   won?: boolean;
   isChase?: boolean;
+  failReason?: string;
 }
 
 export interface TgChatMessage {
