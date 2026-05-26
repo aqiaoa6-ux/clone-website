@@ -1544,43 +1544,75 @@ function decideKillGroup(session: TgSession): KillGroupOption {
     else if (ab >= 3) scores[opt] -= 1;
   }
 
-  // ── F: 大/小 & 单/双 双面均衡修正 ────────────────────────────────────────
+  // ── F/G: 均衡修正 + 大/小维度龙形感知 + 4组形态感知 ─────────────────────
   const h30 = history.slice(-Math.min(30, n));
   const bigFreq = h30.filter(r => r.startsWith("大")).length / h30.length;
   const oddFreq = h30.filter(r => r.endsWith("单")).length / h30.length;
-  if (bigFreq > 0.58) { scores["大单"] += 0.8; scores["大双"] += 0.8; }
-  else if (bigFreq < 0.42) { scores["小单"] += 0.8; scores["小双"] += 0.8; }
+
+  // 单/双 均衡修正（始终生效：单或双极端偏斜时加杀分）
   if (oddFreq > 0.58) { scores["大单"] += 0.8; scores["小单"] += 0.8; }
   else if (oddFreq < 0.42) { scores["大双"] += 0.8; scores["小双"] += 0.8; }
 
-  // ── G: 市场形态感知（自适应杀策略）─────────────────────────────────────────
-  // 龙形市场（低交替率）：热组有惯性会继续出 → 不应杀热组，改杀"冷"组
-  // 震荡市场（高交替率）：刚出的组下期大概率不出 → 加强杀热组
+  // 大/小 维度独立形态检测（8期）
   const patternH = history.slice(-Math.min(8, n));
   let patternAlt = 0;
   for (let i = 1; i < patternH.length; i++) if (patternH[i] !== patternH[i - 1]) patternAlt++;
   const patternRatio = patternH.length > 1 ? patternAlt / (patternH.length - 1) : 0.5;
 
-  if (patternRatio <= 0.30) {
-    // 龙形市场：活跃组有惯性，应杀"最冷"组（长期未出的不会突然出现）
-    // 反转 A 模块热度分：热度越高 → 杀分降低；冷度越高 → 杀分升高
-    for (const opt of KILL_GROUP_ALL) {
-      if (scores[opt] > -900) { // 不干扰趋势保护
-        const coldness = absence[opt];                              // 0=刚出，大=冷
-        const hotness = maxAb > 0 ? (maxAb - absence[opt]) / maxAb : 0; // 0=冷，1=热
-        scores[opt] += coldness * 1.2 - hotness * 4.0; // 冷加分、热减分（抵消A模块并反向）
+  const bigSmallH = patternH.map(r => r.startsWith("大") ? "大" : "小");
+  let bsAlt = 0;
+  for (let i = 1; i < bigSmallH.length; i++) if (bigSmallH[i] !== bigSmallH[i - 1]) bsAlt++;
+  const bsRatio = bigSmallH.length > 1 ? bsAlt / (bigSmallH.length - 1) : 0.5;
+
+  if (bsRatio <= 0.30) {
+    // 大/小维度龙形：顺龙押注策略 —— 杀对立方（冷侧）的一个子组，保留热侧在注单
+    // 这样注单里始终包含热侧的两个子组（大单+大双 或 小单+小双）
+    if (bigFreq < 0.42) {
+      // 小龙（小侧连续出）：提高大侧杀分，压低小侧杀分 → 注单保留 小单+小双+一个大组
+      for (const opt of KILL_GROUP_ALL) {
+        if (scores[opt] > -900) {
+          if (opt.startsWith("大")) scores[opt] += 2.0;
+          if (opt.startsWith("小")) scores[opt] -= 2.0;
+        }
+      }
+    } else if (bigFreq > 0.58) {
+      // 大龙：提高小侧杀分，压低大侧杀分 → 注单保留 大单+大双+一个小组
+      for (const opt of KILL_GROUP_ALL) {
+        if (scores[opt] > -900) {
+          if (opt.startsWith("小")) scores[opt] += 2.0;
+          if (opt.startsWith("大")) scores[opt] -= 2.0;
+        }
       }
     }
-  } else if (patternRatio >= 0.70) {
-    // 强震荡市场：当前逻辑方向正确，额外加权刚出现的组
-    for (const opt of KILL_GROUP_ALL) {
-      if (scores[opt] > -900) {
-        if (absence[opt] === 0) scores[opt] += 2.5; // 刚出，震荡中大概率不再出
-        else if (absence[opt] === 1) scores[opt] += 1.0;
+    // bigFreq 接近0.5时大/小均衡，不作方向调整，继续用下方4组逻辑
+  } else {
+    // 非大/小龙形：大/小均衡修正（偏斜时加杀分纠偏）
+    if (bigFreq > 0.58) { scores["大单"] += 0.8; scores["大双"] += 0.8; }
+    else if (bigFreq < 0.42) { scores["小单"] += 0.8; scores["小双"] += 0.8; }
+  }
+
+  // 4组维度形态感知（在大/小非极端龙形时生效）
+  if (bsRatio > 0.20) {
+    if (patternRatio <= 0.30) {
+      // 4组龙形市场：活跃组有惯性 → 杀"最冷"组
+      for (const opt of KILL_GROUP_ALL) {
+        if (scores[opt] > -900) {
+          const coldness = absence[opt];
+          const hotness = maxAb > 0 ? (maxAb - absence[opt]) / maxAb : 0;
+          scores[opt] += coldness * 1.2 - hotness * 4.0;
+        }
+      }
+    } else if (patternRatio >= 0.70) {
+      // 4组强震荡市场：刚出的组大概率不再出 → 加权杀刚出现的组
+      for (const opt of KILL_GROUP_ALL) {
+        if (scores[opt] > -900) {
+          if (absence[opt] === 0) scores[opt] += 2.5;
+          else if (absence[opt] === 1) scores[opt] += 1.0;
+        }
       }
     }
   }
-  // 中性市场：保持原有统计逻辑，不额外调整
+  // 中性市场：保持基础统计逻辑，不额外调整
 
   const killed = (Object.entries(scores) as [KillGroupOption, number][])
     .sort((a, b) => b[1] - a[1])[0]![0];
