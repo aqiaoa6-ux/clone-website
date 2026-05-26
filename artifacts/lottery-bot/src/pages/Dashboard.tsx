@@ -666,6 +666,8 @@ export default function Dashboard() {
   const [kuaisanPeriod, setKuaisanPeriod] = useState<string | null>(null);
   const [kuaisanResults, setKuaisanResults] = useState<Array<{ label: string; dice: number[]; sum: number; leopard: boolean }>>([]);
   const [kuaisanDice, setKuaisanDice] = useState<number[]>([]);
+  const [kuaisanChatLog, setKuaisanChatLog] = useState<Array<{ text: string; ts: number; chatId?: string }>>([]);
+  const [showChatLog, setShowChatLog] = useState(false);
 
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
@@ -698,6 +700,7 @@ export default function Dashboard() {
       if (s.kuaisanPeriod !== undefined) setKuaisanPeriod(s.kuaisanPeriod ?? null);
       if (s.kuaisanLastDice) setKuaisanDice(s.kuaisanLastDice);
       if (s.kuaisanResults?.length) setKuaisanResults(s.kuaisanResults.map(r => ({ label: r.label, dice: Array.from(r.dice), sum: r.sum, leopard: r.leopard })));
+      if (s.kuaisanChatLog?.length) setKuaisanChatLog(s.kuaisanChatLog);
       if (!s.connected) { setTgStep("login"); return; }
       if (!s.watchGroupId) {
         const { groups: g } = await api.tg.groups();
@@ -986,6 +989,29 @@ export default function Dashboard() {
                     </div>
                   </div>
                 )}
+
+                {/* Group message debug log */}
+                <div>
+                  <button
+                    onClick={() => setShowChatLog(v => !v)}
+                    className="text-[11px] text-slate-500 hover:text-slate-300 transition flex items-center gap-1"
+                  >
+                    <span>{showChatLog ? "▲" : "▶"}</span>
+                    群消息日志 {kuaisanChatLog.length > 0 ? `(${kuaisanChatLog.length})` : "(无)"}
+                  </button>
+                  {showChatLog && (
+                    <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
+                      {kuaisanChatLog.length === 0 ? (
+                        <div className="text-xs text-slate-600 italic">尚未收到群消息。请确认已选择正确群组，并且群内有新消息发出。</div>
+                      ) : kuaisanChatLog.map((m, i) => (
+                        <div key={i} className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5">
+                          <div className="text-[10px] text-slate-500 mb-0.5">{new Date(m.ts).toLocaleTimeString("zh-CN")}</div>
+                          <div className="text-xs text-slate-300 break-all whitespace-pre-wrap">{m.text}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 

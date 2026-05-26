@@ -203,6 +203,7 @@ export interface TgStatus {
   kuaisanPeriod?: string | null;
   kuaisanLastDice?: number[];
   kuaisanResults?: KuaisanResultItem[];
+  kuaisanChatLog?: Array<{ text: string; ts: number; chatId?: string }>;
 }
 
 export interface BetRecord {

@@ -2173,8 +2173,23 @@ function startKuaisanListener(session: TgSession): void {
     const msg = event.message;
     if (msg.out) return;
     const chatId = String(msg.chatId);
-    if (chatId !== targetId && `-100${chatId}` !== targetId) return;
+    // Normalize: strip leading minus and optional 100-prefix so "−1001234" ≡ "1234"
+    const normalizeId = (id: string) => id.replace(/^-100/, "").replace(/^-/, "");
+    const chatIdNorm = normalizeId(chatId);
+    const targetNorm = normalizeId(targetId ?? "");
+    if (chatId !== targetId && `-100${chatId}` !== targetId && chatIdNorm !== targetNorm) {
+      // Log occasional misses to help diagnose group ID format
+      if (Math.random() < 0.05) logger.debug({ chatId, targetId }, "[ks] msg from non-watched chat");
+      return;
+    }
     const text = msg.message ?? "";
+    // Push all received group messages to chatLog for diagnosis
+    if (text) {
+      const logEntry = { text: text.slice(0, 200), ts: Date.now(), chatId };
+      if (!session.chatLog) session.chatLog = [];
+      session.chatLog.unshift(logEntry as unknown as typeof session.chatLog[number]);
+      if (session.chatLog.length > 50) session.chatLog.pop();
+    }
 
     // 1. Dice detection: "🎲 骰子有效，识别点数为: X"
     const diceMatch = text.match(/骰子有效[，,]?\s*识别点数为[：:]\s*(\d)/);
@@ -2232,10 +2247,6 @@ function startKuaisanListener(session: TgSession): void {
       session.kuaisanPhase = "closed";
       pushEvent(session, "kuaisan:phase", { phase: "closed" });
     }
-
-    // 4. Log all group messages to chatLog for debugging (max 50)
-    if (session.chatLog.length >= 50) session.chatLog.pop();
-    session.chatLog.unshift({ text: text.slice(0, 200), ts: Date.now() });
   };
 
   session.kuaisanHandlerBuilder = new NewMessage({});
@@ -2535,6 +2546,7 @@ router.get("/tg/status", requireCard, (req, res) => {
     kuaisanPeriod: session.kuaisanPeriod,
     kuaisanLastDice: session.diceBuffer?.map(d => d.value),
     kuaisanResults: session.kuaisanResults?.slice(0, 20),
+    kuaisanChatLog: (session.chatLog ?? []).slice(0, 20),
     ...stats,
   });
 });
