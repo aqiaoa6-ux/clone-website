@@ -842,11 +842,11 @@ function buildHistory(session: TgSession): string[] {
 type MarketPattern = "streak" | "oscillating" | "neutral";
 
 /** 长龙形态适用算法 */
-const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "ai_trend"];
+const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "ai_trend", "adaptive_switch"];
 /** 震荡形态适用算法 */
 const OSCILLATING_ALGOS: AlgorithmId[] = ["anti_streak", "dragon_break", "signal_reverse"];
 /** 中性算法（兜底） */
-const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick"];
+const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick", "steady_ai"];
 
 /**
  * 检测最近 8 期走势形态：
@@ -986,8 +986,9 @@ function parseBetLabel(text: string): string | null {
 }
 
 function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
-  if (algoId === "ai_trend")   return decideAI(session);
-  if (algoId === "steady_ai")  return decideSteady(session);
+  if (algoId === "ai_trend")       return decideAI(session);
+  if (algoId === "steady_ai")      return decideSteady(session);
+  if (algoId === "adaptive_switch") return decideSteady(session); // 大小阶段用升级版AI决策
   if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
   if (algoId === "dragon_ride") return dragonRide(session);
   if (algoId === "dragon_break") return dragonBreak(session);
