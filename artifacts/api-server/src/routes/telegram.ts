@@ -203,7 +203,7 @@ const DEFAULT_CFG: BetCfg = {
   amountLevels: [100, 200, 400, 800, 1600, 3200],
   stepBackOnWin: true,
   betOptions: ["big", "small"],
-  algorithms: ["signal_follow"],
+  algorithms: ["ai_trend"],
   odds: 1.98,
   oddsBigOdd: 1.98,
   oddsBigEven: 1.98,
@@ -2172,19 +2172,36 @@ function settleKuaisanBets(session: TgSession, result: KuaisanResult): void {
 }
 
 async function runKuaisanAutoBet(session: TgSession): Promise<void> {
-  if (!session.cfg.autoBet || !session.watchGroupId) return;
-  // betPlacedThisCycle is cleared on every new "开始下注"; that's the only guard needed.
-  if (session.betPlacedThisCycle) return;
+  if (!session.cfg.autoBet || !session.watchGroupId) {
+    logger.info({ autoBet: session.cfg.autoBet, watchGroupId: session.watchGroupId }, "[ks] autoBet skipped: not enabled or no group");
+    return;
+  }
+  if (session.betPlacedThisCycle) {
+    logger.info("[ks] autoBet skipped: already bet this cycle");
+    return;
+  }
   const risk = checkRisk(session);
-  if (!risk.ok) return;
+  if (!risk.ok) {
+    logger.info({ reason: risk.reason }, "[ks] autoBet skipped: risk check failed");
+    return;
+  }
 
   const optLabels = (session.cfg.kuaisanBetOptions ?? ["big", "small"]).map(o => KS_BET_LABELS[o] ?? o);
   const labels = optLabels.length >= 2 ? optLabels : ["大", "小"];
-  const algoId = (session.cfg.algorithms[session.algIndex] ?? "ai_trend") as AlgorithmId;
+  // signal_follow/signal_reverse need a live signal text; they always return null for kuaisan.
+  // Fall back to ks_bb for those, and to ai_trend for any other null result.
+  const SIGNAL_ALGOS: AlgorithmId[] = ["signal_follow", "signal_reverse"];
+  const rawAlgoId = (session.cfg.algorithms[session.algIndex % Math.max(session.cfg.algorithms.length, 1)] ?? "ai_trend") as AlgorithmId;
+  const algoId: AlgorithmId = SIGNAL_ALGOS.includes(rawAlgoId) ? "ks_bb" : rawAlgoId;
   // Override betOptions so all internal algo functions use kuaisan bet labels
   const ksSession: TgSession = { ...session, cfg: { ...session.cfg, betOptions: (session.cfg.kuaisanBetOptions ?? ["big", "small"]) as BetOption[] } };
-  const direction = runAlgo(ksSession, algoId, labels);
-  if (!direction) return;
+  let direction = runAlgo(ksSession, algoId, labels);
+  if (!direction) {
+    // Final fallback: ks_bb never returns null, but guard just in case
+    direction = ksBB(ksSession, labels) ?? labels[Math.floor(Math.random() * labels.length)] ?? "大";
+    logger.warn({ algoId, labels }, "[ks] algorithm returned null, fell back to ks_bb");
+  }
+  logger.info({ algoId, direction, amount: session.currentBet }, "[ks] placing bet");
   // Advance rotation index and record last algo used
   session.algIndex++;
   session.lastAlgoUsed = algoId;
