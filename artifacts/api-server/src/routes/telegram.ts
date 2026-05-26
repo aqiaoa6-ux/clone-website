@@ -168,6 +168,8 @@ interface TgSession {
   kuaisanResults: KuaisanResult[];
   kuaisanHandler: ((event: NewMessageEvent) => Promise<void>) | null;
   kuaisanHandlerBuilder: NewMessage | null;
+  kuaisanPollTimer?: ReturnType<typeof setInterval>;
+  kuaisanLastMsgId: number;
 }
 
 interface PersistedData {
@@ -642,7 +644,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       recentResults: [],
       chatLog: [],
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
-      kuaisanHandler: null, kuaisanHandlerBuilder: null,
+      kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
       balance: data.balance ?? 1000000,
       todayPnl: data.todayPnl ?? 0,
       todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -2152,11 +2154,85 @@ async function runKuaisanAutoBet(session: TgSession): Promise<void> {
 }
 
 function stopKuaisanListener(session: TgSession): void {
+  // Stop polling timer
+  if (session.kuaisanPollTimer) {
+    clearInterval(session.kuaisanPollTimer);
+    session.kuaisanPollTimer = undefined;
+  }
+  // Also clean up any legacy event handler
   if (session.kuaisanHandler && session.kuaisanHandlerBuilder) {
     try { session.client.removeEventHandler(session.kuaisanHandler as Parameters<typeof session.client.removeEventHandler>[0], session.kuaisanHandlerBuilder); } catch { /* ok */ }
   }
   session.kuaisanHandler = null;
   session.kuaisanHandlerBuilder = null;
+}
+
+/** Process a single text message from the kuaisan group */
+function processKuaisanMessage(session: TgSession, text: string, msgId: number): void {
+  if (!text) return;
+
+  // Log to chatLog for frontend debugging
+  const logEntry = { text: text.slice(0, 200), ts: Date.now(), chatId: session.watchGroupId ?? "" };
+  if (!session.chatLog) session.chatLog = [];
+  session.chatLog.unshift(logEntry as unknown as typeof session.chatLog[number]);
+  if (session.chatLog.length > 50) session.chatLog.pop();
+
+  // 1. Dice detection
+  const diceMatch = text.match(/骰子有效[，,]?\s*识别点数为[：:]\s*(\d)/);
+  if (diceMatch) {
+    const value = parseInt(diceMatch[1]);
+    if (value >= 1 && value <= 6) {
+      const now = Date.now();
+      if (!session.diceBuffer) session.diceBuffer = [];
+      session.diceBuffer = session.diceBuffer.filter(d => now - d.time < 90_000);
+      session.diceBuffer.push({ value, time: now });
+      pushEvent(session, "kuaisan:dice", { buffer: session.diceBuffer.map(d => d.value) });
+      if (session.diceBuffer.length >= 3) {
+        const three = session.diceBuffer.slice(-3);
+        session.diceBuffer = [];
+        const dice = three.map(d => d.value) as [number, number, number];
+        const result = computeKuaisanResult(dice);
+        if (!session.kuaisanResults) session.kuaisanResults = [];
+        session.kuaisanResults.unshift(result);
+        if (session.kuaisanResults.length > 50) session.kuaisanResults.pop();
+        pushEvent(session, "kuaisan:result", {
+          dice: result.dice, sum: result.sum, label: result.label,
+          big: result.big, odd: result.odd, dragon: result.dragon, tiger: result.tiger, leopard: result.leopard,
+        });
+        settleKuaisanBets(session, result);
+        session.kuaisanPhase = "closed";
+        session.betPlacedThisCycle = false;
+        session.chasePlacedThisCycle = false;
+      }
+    }
+    return;
+  }
+
+  // 2. "开始下注" phase — flexible detection
+  const isBetOpen =
+    text.includes("开始下注") ||
+    text.includes("开始投注") ||
+    text.includes("现在开始") ||
+    (text.includes("期号") && (text.includes("封盘") || text.includes("下注") || text.includes("开奖")));
+
+  if (isBetOpen && session.kuaisanPhase !== "betting") {
+    const periodMatch = text.match(/期[号码][：:\s]*([a-fA-F0-9\d]{6,})/);
+    session.kuaisanPhase = "betting";
+    session.kuaisanPeriod = periodMatch?.[1] ?? null;
+    if (!session.diceBuffer) session.diceBuffer = [];
+    session.diceBuffer = [];
+    session.betPlacedThisCycle = false;
+    pushEvent(session, "kuaisan:phase", { phase: "betting", period: session.kuaisanPeriod });
+    logger.info({ msgId, period: session.kuaisanPeriod }, "[ks] bet open detected via poll");
+    if (session.cfg.autoBet) void runKuaisanAutoBet(session);
+    return;
+  }
+
+  // 3. Closing phase
+  if (/停止下注|停止投注|已封盘|封盘/.test(text) && session.kuaisanPhase === "betting") {
+    session.kuaisanPhase = "closed";
+    pushEvent(session, "kuaisan:phase", { phase: "closed" });
+  }
 }
 
 function startKuaisanListener(session: TgSession): void {
@@ -2169,89 +2245,37 @@ function startKuaisanListener(session: TgSession): void {
   }
   const targetId = session.watchGroupId;
 
-  // Warm up the update pipeline for this specific chat (async, non-blocking)
-  void session.client.getMessages(targetId, { limit: 1 }).catch(() => { /* ignore */ });
-
-  session.kuaisanHandler = async (event: NewMessageEvent) => {
-    const msg = event.message;
-    if (msg.out) return;
-    const rawChatId = String(msg.chatId ?? "");
-    const text = msg.message ?? "";
-
-    // Always log ALL incoming messages to chatLog for diagnosis (shows if GramJS is receiving ANYTHING)
-    if (text) {
-      const logEntry = { text: `[${rawChatId}] ${text.slice(0, 180)}`, ts: Date.now(), chatId: rawChatId };
-      if (!session.chatLog) session.chatLog = [];
-      session.chatLog.unshift(logEntry as unknown as typeof session.chatLog[number]);
-      if (session.chatLog.length > 50) session.chatLog.pop();
+  // Initialise the baseline message ID (use current latest, don't re-process history)
+  void session.client.getMessages(targetId, { limit: 1 }).then((msgs: Api.Message[]) => {
+    if (msgs.length > 0) {
+      session.kuaisanLastMsgId = msgs[0].id;
+      logger.info({ targetId, baselineMsgId: session.kuaisanLastMsgId }, "[ks] poller started");
     }
+  }).catch(() => { /* ignore */ });
 
-    // ChatId filter — only act on the watched group
-    const normalizeId = (id: string) => id.replace(/^-100/, "").replace(/^-/, "");
-    const chatIdNorm = normalizeId(rawChatId);
-    const targetNorm = normalizeId(targetId ?? "");
-    if (rawChatId !== targetId && `-100${rawChatId}` !== targetId && chatIdNorm !== targetNorm) return;
-
-    // 1. Dice detection: "🎲 骰子有效，识别点数为: X"
-    const diceMatch = text.match(/骰子有效[，,]?\s*识别点数为[：:]\s*(\d)/);
-    if (diceMatch) {
-      const value = parseInt(diceMatch[1]);
-      if (value >= 1 && value <= 6) {
-        const now = Date.now();
-        if (!session.diceBuffer) session.diceBuffer = [];
-        session.diceBuffer = session.diceBuffer.filter(d => now - d.time < 90_000);
-        session.diceBuffer.push({ value, time: now });
-        pushEvent(session, "kuaisan:dice", { buffer: session.diceBuffer.map(d => d.value) });
-        if (session.diceBuffer.length >= 3) {
-          const three = session.diceBuffer.slice(-3);
-          session.diceBuffer = [];
-          const dice = three.map(d => d.value) as [number, number, number];
-          const result = computeKuaisanResult(dice);
-          if (!session.kuaisanResults) session.kuaisanResults = [];
-          session.kuaisanResults.unshift(result);
-          if (session.kuaisanResults.length > 50) session.kuaisanResults.pop();
-          pushEvent(session, "kuaisan:result", {
-            dice: result.dice, sum: result.sum, label: result.label,
-            big: result.big, odd: result.odd, dragon: result.dragon, tiger: result.tiger, leopard: result.leopard,
-          });
-          settleKuaisanBets(session, result);
-          session.kuaisanPhase = "closed";
-          session.betPlacedThisCycle = false;
-          session.chasePlacedThisCycle = false;
+  // Poll every 2 seconds for new messages
+  session.kuaisanPollTimer = setInterval(() => {
+    if (tgSessions.get(session.userId) !== session) {
+      clearInterval(session.kuaisanPollTimer); session.kuaisanPollTimer = undefined; return;
+    }
+    void (async () => {
+      try {
+        const msgs = await session.client.getMessages(targetId, {
+          limit: 20,
+          ...(session.kuaisanLastMsgId > 0 ? { minId: session.kuaisanLastMsgId } : {}),
+        }) as Api.Message[];
+        if (!msgs.length) return;
+        // getMessages returns newest-first; reverse to process oldest-first
+        const sorted = [...msgs].sort((a, b) => a.id - b.id);
+        for (const msg of sorted) {
+          if (msg.id <= session.kuaisanLastMsgId) continue;
+          session.kuaisanLastMsgId = msg.id;
+          const text = msg.message ?? "";
+          processKuaisanMessage(session, text, msg.id);
         }
-      }
-      return;
-    }
-
-    // 2. "开始下注" phase — flexible detection for different bot formats
-    const isBetOpen =
-      text.includes("开始下注") ||
-      text.includes("开始投注") ||
-      text.includes("现在开始") ||
-      (text.includes("期号") && (text.includes("封盘") || text.includes("下注") || text.includes("开奖")));
-
-    if (isBetOpen && session.kuaisanPhase !== "betting") {
-      // Period: support both decimal (20251201001234) and hex (a3f2b8c1) formats
-      const periodMatch = text.match(/期[号码][：:\s]*([a-fA-F0-9\d]{6,})/);
-      session.kuaisanPhase = "betting";
-      session.kuaisanPeriod = periodMatch?.[1] ?? null;
-      if (!session.diceBuffer) session.diceBuffer = [];
-      session.diceBuffer = [];
-      session.betPlacedThisCycle = false;
-      pushEvent(session, "kuaisan:phase", { phase: "betting", period: session.kuaisanPeriod });
-      if (session.cfg.autoBet) void runKuaisanAutoBet(session);
-      return;
-    }
-
-    // 3. "封盘" / "停止下注"
-    if (/停止下注|停止投注|已封盘|封盘/.test(text) && session.kuaisanPhase === "betting") {
-      session.kuaisanPhase = "closed";
-      pushEvent(session, "kuaisan:phase", { phase: "closed" });
-    }
-  };
-
-  session.kuaisanHandlerBuilder = new NewMessage({});
-  session.client.addEventHandler(session.kuaisanHandler, session.kuaisanHandlerBuilder);
+      } catch { /* network hiccup — retry next cycle */ }
+    })();
+  }, 2000);
 }
 
 // ─── KKPay listener ───────────────────────────────────────────────────────────
@@ -2449,7 +2473,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       balanceSource: "manual", balanceUpdatedAt: 0,
       adaptiveSwitchKillMode: false,
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
-      kuaisanHandler: null, kuaisanHandlerBuilder: null,
+      kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });

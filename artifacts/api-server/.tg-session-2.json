@@ -9,7 +9,7 @@
   "balanceSource": "kkpay",
   "watchGroupId": "-1002177529387",
   "cfg": {
-    "autoBet": true,
+    "autoBet": false,
     "betAmount": 100,
     "strategy": "normal",
     "betMultiplier": 2,
