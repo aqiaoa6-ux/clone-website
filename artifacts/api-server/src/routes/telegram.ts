@@ -1042,8 +1042,8 @@ function decideAI(session: TgSession): string | null {
     // 短龙：顺势 (强度2)
     score += latest === optA ? 2 : -2;
   } else if (streakLen <= 5) {
-    // 中龙：逆势，即将反转 (强度3)
-    score += latest === optA ? -3 : 3;
+    // 中龙4-5：仍然顺势，每期独立事件，均值回归无统计依据 (强度1.5)
+    score += latest === optA ? 1.5 : -1.5;
   } else {
     // 长龙6-7：超强龙，继续跟 (强度4)
     score += latest === optA ? 4 : -4;
@@ -1072,34 +1072,36 @@ function decideAI(session: TgSession): string | null {
     }
   }
 
-  // ── M3: 多周期频率偏差（均值回归）───────────────────────────────────────
-  const windows: [number, number][] = [[5, 2.0], [10, 1.5], [20, 1.0], [50, 0.6]];
+  // ── M3: 多周期频率偏差（轻度均值回归，仅极端偏差才介入）──────────────
+  // 权重大幅降低：彩票独立事件，强均值回归无统计依据；仅在极端情况给轻推
+  const windows: [number, number][] = [[5, 0.8], [10, 0.6], [20, 0.4], [50, 0.25]];
   for (const [w, wt] of windows) {
     const slice = last(w);
     if (slice.length < Math.min(w, 4)) continue;
     const r = ratioA(slice);
-    if      (r >= 0.70) score -= wt * 2.0;  // optA 严重过多 → 买 optB
-    else if (r >= 0.60) score -= wt * 1.0;
-    else if (r <= 0.30) score += wt * 2.0;  // optA 严重过少 → 买 optA
-    else if (r <= 0.40) score += wt * 1.0;
-    else score += r < 0.5 ? wt * 0.3 : -wt * 0.3;
+    if      (r >= 0.70) score -= wt * 2.0;  // optA 极端过多 → 轻推 optB
+    else if (r >= 0.60) score -= wt * 0.8;
+    else if (r <= 0.30) score += wt * 2.0;  // optA 极端过少 → 轻推 optA
+    else if (r <= 0.40) score += wt * 0.8;
+    // 50%±10% 区间：不干预，视为正常随机波动
   }
 
-  // ── M4: 指数衰减动量（时间越近权重越高）─────────────────────────────────
+  // ── M4: 指数衰减动量跟随（时间越近权重越高）──────────────────────────
+  // 原逻辑是"动量反转"（实为均值回归），改为真正的动量跟随：
+  // 近期偏 optA → 跟 optA；近期偏 optB → 跟 optB
   const h15 = last(15);
   let emoScore = 0;
   for (let i = 0; i < h15.length; i++) {
     const decay = Math.pow(1.25, i); // h15[0]=oldest(低权), h15[n-1]=newest(高权)
     emoScore += h15[i] === optA ? decay : -decay;
   }
-  // 动量反转：最近偏 optA 则下注 optB（均值回归）
-  score += emoScore > 0 ? -1.5 : 1.5;
+  score += emoScore > 0 ? 1.0 : -1.0; // 动量跟随（权重适中）
 
-  // ── M5: 统计极端偏差修正 ─────────────────────────────────────────────────
+  // ── M5: 统计偏差修正（仅极端情况轻推，不强制回归）───────────────────
   const h30 = last(30);
   if (h30.length >= 15) {
     const dev = (ratioA(h30) - 0.5) * 2; // -1~+1，正=偏A
-    score -= dev * 3.5; // 强制回归
+    score -= dev * 1.5; // 降低权重：3.5→1.5，避免与 M3/M4 叠加过度压制趋势
   }
 
   // ── M6: 区间突破动量 ──────────────────────────────────────────────────────
@@ -1129,6 +1131,7 @@ function decideAI(session: TgSession): string | null {
   }
 
   // ── M9: 双组防连方向（dualGroupMode 或对立选项专用）────────────────────
+  // 惩罚从 3.5 降到 2.0：避免在趋势市场中对抗强方向信号
   const isDualGroup = session.cfg.dualGroupMode || (() => {
     const ls = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
     return ls.length === 2 && (
@@ -1139,7 +1142,7 @@ function decideAI(session: TgSession): string | null {
   if (isDualGroup && session.lastAIBet !== null) {
     const tentative = score > 0 ? optA : optB;
     if (tentative === session.lastAIBet) {
-      score = score > 0 ? score - 3.5 : score + 3.5;
+      score = score > 0 ? score - 2.0 : score + 2.0;
     }
   }
 
@@ -1203,6 +1206,9 @@ function decideSteady(session: TgSession): string | null {
     // 短中龙：连开大概率，继续跟
     const weight = Math.min(streak, 4) * 0.8;
     score += latest === optA ? weight : -weight;
+  } else if (streak === 6) {
+    // 6连：仍然跟，不要在此处预测反转（每期独立事件）
+    score += latest === optA ? 1.5 : -1.5;
   } else if (streak >= 7 && streak <= 9) {
     // 长龙7-9：轻微反转预警，但信号弱
     score += latest === optA ? -1.0 : 1.0;
@@ -1234,7 +1240,7 @@ function decideSteady(session: TgSession): string | null {
   if (isDual && session.lastAIBet !== null) {
     const tentative = score >= 0 ? optA : optB;
     if (tentative === session.lastAIBet) {
-      score = score >= 0 ? score - 2.5 : score + 2.5;
+      score = score >= 0 ? score - 1.5 : score + 1.5; // 2.5→1.5，趋势市场不宜过强惩罚同向
     }
   }
 
