@@ -71,6 +71,13 @@ export const api = {
   lottery: {
     fengpan: () => api.get<LotteryData>("/lottery/fengpan"),
   },
+
+  canada: {
+    status: () => api.get<CanadaStatus>("/canada/status"),
+    config: (body: CanadaConfigBody) => api.post<{ ok: boolean; cfg: CanadaCfg; canadaGroupId: string | null }>("/canada/config", body),
+    bets: () => api.get<{ bets: BetRecord[] }>("/canada/bets"),
+    clearBets: () => api.del<{ ok: boolean }>("/canada/bets"),
+  },
 };
 
 // Types
@@ -281,6 +288,41 @@ export interface AdminTgSession {
   riskReason?: string;
   lastAlgoUsed?: string;
   currentPattern?: "streak" | "oscillating" | "neutral";
+}
+
+export interface CanadaResultItem {
+  number: number;
+  big: boolean;
+  odd: boolean;
+  label: string;
+  ts: number;
+}
+
+export interface CanadaCfg {
+  autoBet: boolean;
+  betAmount: number;
+  minStreak: number;
+  dimension: "big_small" | "odd_even";
+  strategy: "normal" | "martingale";
+  multiplier: number;
+  stopLoss: number;
+  targetProfit: number;
+}
+
+export interface CanadaConfigBody extends Partial<CanadaCfg> {
+  canadaGroupId?: string;
+}
+
+export interface CanadaStatus {
+  connected: boolean;
+  canadaGroupId: string | null;
+  phase: string;
+  cfg: CanadaCfg;
+  results: CanadaResultItem[];
+  recentBets: BetRecord[];
+  sessionPnl: number;
+  currentBet: number;
+  consecutiveLosses: number;
 }
 
 export interface LotteryData {

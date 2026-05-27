@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type TgStatus, type BetRecord, type TgGroup } from "../lib/api";
+import { api, type TgStatus, type BetRecord, type TgGroup, type CanadaStatus, type CanadaResultItem } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -682,6 +682,19 @@ export default function Dashboard() {
   const [showChatLog, setShowChatLog] = useState(false);
   const [debugResult, setDebugResult] = useState<string | null>(null);
   const [debugLoading, setDebugLoading] = useState(false);
+  // Canada game state
+  const [canadaStatus, setCanadaStatus] = useState<CanadaStatus | null>(null);
+  const [canadaResults, setCanadaResults] = useState<CanadaResultItem[]>([]);
+  const [canadaBets, setCanadaBets] = useState<BetRecord[]>([]);
+  const [canadaGroupLink, setCanadaGroupLink] = useState("");
+  const [canadaAutoBet, setCanadaAutoBet] = useState(false);
+  const [canadaBetAmount, setCanadaBetAmount] = useState(100);
+  const [canadaMinStreak, setCanadaMinStreak] = useState(3);
+  const [canadaDimension, setCanadaDimension] = useState<"big_small" | "odd_even">("big_small");
+  const [canadaStrategy, setCanadaStrategy] = useState<"normal" | "martingale">("normal");
+  const [canadaSaving, setCanadaSaving] = useState(false);
+  const [canadaClearLoading, setCanadaClearLoading] = useState(false);
+  const [canadaExpanded, setCanadaExpanded] = useState(false);
 
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
@@ -730,6 +743,26 @@ export default function Dashboard() {
     try {
       const { bets: b } = await api.tg.bets();
       setBets(b);
+    } catch { /* ignore */ }
+  }, []);
+
+  const fetchCanadaStatus = useCallback(async () => {
+    try {
+      const s = await api.canada.status();
+      setCanadaStatus(s);
+      if (s.results?.length) setCanadaResults(s.results);
+      setCanadaAutoBet(s.cfg?.autoBet ?? false);
+      setCanadaBetAmount(s.cfg?.betAmount ?? 100);
+      setCanadaMinStreak(s.cfg?.minStreak ?? 3);
+      setCanadaDimension(s.cfg?.dimension ?? "big_small");
+      setCanadaStrategy(s.cfg?.strategy ?? "normal");
+    } catch { /* ignore */ }
+  }, []);
+
+  const fetchCanadaBets = useCallback(async () => {
+    try {
+      const { bets: b } = await api.canada.bets();
+      setCanadaBets(b);
     } catch { /* ignore */ }
   }, []);
 
@@ -796,11 +829,24 @@ export default function Dashboard() {
           void fetchBets();
           void fetchStatus();
         }
+        if (ev.type === "canada:phase") {
+          setCanadaStatus(prev => prev ? { ...prev, phase: ev.phase as string } : prev);
+        }
+        if (ev.type === "canada:result") {
+          const r = (ev.result as CanadaResultItem);
+          setCanadaResults(prev => [r, ...prev].slice(0, 30));
+          setCanadaStatus(prev => prev ? { ...prev, phase: "closed" } : prev);
+          void fetchCanadaBets();
+          void fetchCanadaStatus();
+        }
+        if (ev.type === "canada:bet_new" || ev.type === "canada:bet_settled") {
+          void fetchCanadaBets();
+        }
       } catch { /* ignore */ }
     };
 
     return () => { es.close(); sseRef.current = null; };
-  }, [fetchBets, fetchStatus]);
+  }, [fetchBets, fetchStatus, fetchCanadaBets, fetchCanadaStatus]);
 
   // ─── Init & polling ──────────────────────────────────────────────────────
 
@@ -811,8 +857,11 @@ export default function Dashboard() {
     const statusInterval = setInterval(() => void fetchStatus(), 10_000);
     const drawInterval = setInterval(() => void fetchDraw(), 60_000);
     const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
-  }, [fetchStatus, fetchBets, fetchDraw]);
+    void fetchCanadaStatus();
+    void fetchCanadaBets();
+    const canadaInterval = setInterval(() => void fetchCanadaStatus(), 15_000);
+    return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); clearInterval(canadaInterval); };
+  }, [fetchStatus, fetchBets, fetchDraw, fetchCanadaStatus, fetchCanadaBets]);
 
   // ─── Derived state ───────────────────────────────────────────────────────
 
@@ -1235,6 +1284,212 @@ export default function Dashboard() {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Canada Game Panel ── */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+              {/* Header */}
+              <button
+                onClick={() => setCanadaExpanded(v => !v)}
+                className="w-full flex items-center justify-between px-5 py-3 hover:bg-[#1a1f35] transition"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-base">🍁</span>
+                  <span className="text-white font-semibold text-sm">加拿大顺龙</span>
+                  {canadaStatus?.canadaGroupId && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                      canadaStatus.phase === "betting" ? "bg-emerald-500/20 text-emerald-400" :
+                      canadaStatus.phase === "closed" ? "bg-red-500/20 text-red-400" :
+                      "bg-slate-500/20 text-slate-400"
+                    }`}>
+                      {canadaStatus.phase === "betting" ? "下注中" : canadaStatus.phase === "closed" ? "已封盘" : "等待"}
+                    </span>
+                  )}
+                  {canadaAutoBet && canadaStatus?.canadaGroupId && (
+                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+                      顺龙中
+                    </span>
+                  )}
+                </div>
+                <span className="text-slate-500 text-xs">{canadaExpanded ? "▲" : "▼"}</span>
+              </button>
+
+              {canadaExpanded && (
+                <div className="border-t border-[#252a3d] p-5 space-y-4">
+                  {/* Group config */}
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1.5">加拿大游戏群组 ID 或链接</div>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={canadaGroupLink}
+                        onChange={e => setCanadaGroupLink(e.target.value)}
+                        placeholder={canadaStatus?.canadaGroupId ?? "粘贴群 ID 或 t.me/... 链接"}
+                        className="flex-1 bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500 font-mono"
+                      />
+                    </div>
+                    {canadaStatus?.canadaGroupId && (
+                      <div className="text-[10px] text-slate-500 mt-1 font-mono">当前：{canadaStatus.canadaGroupId}</div>
+                    )}
+                  </div>
+
+                  {/* Strategy config */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">检测维度</div>
+                      <div className="flex gap-1">
+                        {(["big_small", "odd_even"] as const).map(d => (
+                          <button key={d} onClick={() => setCanadaDimension(d)}
+                            className={`flex-1 py-1.5 text-xs rounded-lg border transition ${canadaDimension === d ? "bg-blue-600 border-blue-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50"}`}>
+                            {d === "big_small" ? "大/小" : "单/双"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">触发龙长</div>
+                      <div className="flex gap-1">
+                        {[3, 4, 5].map(n => (
+                          <button key={n} onClick={() => setCanadaMinStreak(n)}
+                            className={`flex-1 py-1.5 text-xs rounded-lg border transition ${canadaMinStreak === n ? "bg-purple-600 border-purple-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-purple-500/50"}`}>
+                            {n}连
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">金额</div>
+                      <input type="number" value={canadaBetAmount} onChange={e => setCanadaBetAmount(Number(e.target.value))}
+                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500" />
+                    </div>
+                    <div>
+                      <div className="text-xs text-slate-500 mb-1">策略</div>
+                      <div className="flex gap-1">
+                        {(["normal", "martingale"] as const).map(s => (
+                          <button key={s} onClick={() => setCanadaStrategy(s)}
+                            className={`flex-1 py-1.5 text-xs rounded-lg border transition ${canadaStrategy === s ? "bg-emerald-600 border-emerald-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-emerald-500/50"}`}>
+                            {s === "normal" ? "固定" : "马丁"}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Auto-bet toggle + Save */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => setCanadaAutoBet(v => !v)}
+                        className={`relative w-12 h-6 rounded-full transition-colors ${canadaAutoBet ? "bg-emerald-600" : "bg-[#252a3d]"}`}
+                      >
+                        <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${canadaAutoBet ? "left-6" : "left-0.5"}`} />
+                      </button>
+                      <span className="text-sm text-slate-300">{canadaAutoBet ? "自动顺龙开启" : "自动下注关闭"}</span>
+                    </div>
+                    <button
+                      disabled={canadaSaving}
+                      onClick={async () => {
+                        setCanadaSaving(true);
+                        try {
+                          await api.canada.config({
+                            canadaGroupId: canadaGroupLink.trim() || undefined,
+                            autoBet: canadaAutoBet,
+                            betAmount: canadaBetAmount,
+                            minStreak: canadaMinStreak,
+                            dimension: canadaDimension,
+                            strategy: canadaStrategy,
+                          });
+                          await fetchCanadaStatus();
+                          setCanadaGroupLink("");
+                        } catch (e) { alert(e instanceof Error ? e.message : "保存失败"); }
+                        setCanadaSaving(false);
+                      }}
+                      className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs px-4 py-2 rounded-xl transition"
+                    >
+                      {canadaSaving ? "保存中..." : "保存"}
+                    </button>
+                  </div>
+
+                  {/* Stats row */}
+                  {canadaStatus && (
+                    <div className="grid grid-cols-3 gap-2">
+                      <StatCard label="本期盈亏" value={`${canadaStatus.sessionPnl >= 0 ? "+" : ""}${fmtNum(canadaStatus.sessionPnl)}`}
+                        valueClass={pnlColor(canadaStatus.sessionPnl)} />
+                      <StatCard label="当前注额" value={String(canadaStatus.currentBet)} />
+                      <StatCard label="连亏" value={canadaStatus.consecutiveLosses > 0 ? `${canadaStatus.consecutiveLosses}局` : "-"}
+                        valueClass={canadaStatus.consecutiveLosses >= 3 ? "text-red-400" : "text-white"} />
+                    </div>
+                  )}
+
+                  {/* Recent results */}
+                  {canadaResults.length > 0 && (
+                    <div>
+                      <div className="text-xs text-slate-500 mb-2">近期结果（{canadaMinStreak}连触发）</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {canadaResults.slice(0, 15).map((r, i) => (
+                          <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
+                            r.big ? "bg-red-500/15 text-red-400 border-red-500/25" : "bg-blue-500/15 text-blue-400 border-blue-500/25"
+                          }`}>
+                            {r.label}
+                            <span className="text-slate-600 ml-1 text-[9px]">{r.number}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Canada bet log */}
+                  {canadaBets.length > 0 && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-xs text-slate-500">投注记录 ({canadaBets.length})</div>
+                        <button
+                          disabled={canadaClearLoading}
+                          onClick={async () => {
+                            setCanadaClearLoading(true);
+                            try { await api.canada.clearBets(); await fetchCanadaBets(); await fetchCanadaStatus(); }
+                            catch { /* ignore */ }
+                            setCanadaClearLoading(false);
+                          }}
+                          className="text-xs text-red-400 hover:text-red-300 disabled:opacity-30 border border-red-500/20 px-2 py-0.5 rounded transition"
+                        >
+                          清空
+                        </button>
+                      </div>
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        {canadaBets.slice(0, 20).map(b => (
+                          <div key={b.id} className="flex items-center gap-2 bg-[#0f1220] border border-[#252a3d] rounded-lg px-3 py-2">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-white text-sm font-semibold">{b.betContent}</span>
+                                <span className="text-slate-500 text-xs">{b.amount.toLocaleString()}</span>
+                              </div>
+                              <div className="text-slate-600 text-[10px] mt-0.5">
+                                {fmtDate(b.timestamp)} {b.lotteryResult ? `· 结果：${b.lotteryResult}` : ""}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <BetTag status={b.status} won={b.won} />
+                              {b.pnl !== undefined && (
+                                <div className={`text-xs font-semibold mt-0.5 ${pnlColor(b.pnl)}`}>
+                                  {b.pnl >= 0 ? "+" : ""}{b.pnl.toLocaleString()}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {!canadaStatus?.canadaGroupId && (
+                    <div className="text-xs text-slate-600 italic text-center py-2">
+                      填入群组 ID 并保存后，即可开始监听加拿大游戏
+                    </div>
+                  )}
                 </div>
               )}
             </div>
