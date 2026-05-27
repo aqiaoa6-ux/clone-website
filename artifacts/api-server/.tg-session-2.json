@@ -59,13 +59,18 @@
   },
   "canadaGroupId": "t.me/fgyl20",
   "canadaCfg": {
-    "autoBet": false,
-    "betAmount": 1000,
+    "autoBet": true,
+    "amountTiers": [
+      1000,
+      2000,
+      4000
+    ],
     "minStreak": 3,
     "dimension": "big_small",
-    "strategy": "normal",
-    "multiplier": 2,
     "stopLoss": 0,
-    "targetProfit": 0
+    "targetProfit": 0,
+    "betAmount": 1000,
+    "strategy": "normal",
+    "multiplier": 2
   }
 }

@@ -887,12 +887,8 @@ export default function Dashboard() {
           const term = ev.term as number;
           const s1 = ev.sum1 as number, s2 = ev.sum2 as number, s3 = ev.sum3 as number;
           setDraw({ term: term + (closeMs < nowT ? 1 : 0), sum1: s1, sum2: s2, sum3: s3, r3: ev.r3 as string, nextCloseTime: nextCloseRef.current });
-          // 追加到近期结果（同一份数据，不需要单独轮询）
-          if (s1 != null && s2 != null && s3 != null) {
-            const num = s1 + s2 + s3;
-            const big = num >= 14; const odd = num % 2 === 1;
-            setRecentDraws(prev => [{ num, big, odd, label: `${big ? "大" : "小"}${odd ? "单" : "双"}` }, ...prev].slice(0, 30));
-          }
+          // 新期开盘时立即重拉 fengpan 数据，确保近期结果与走势页完全同步
+          void fetchDraw();
         }
         if (ev.type === "timer:scheduled") {
           if (ev.fireAt) setNextBetAt(ev.fireAt as number);
