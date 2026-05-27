@@ -172,19 +172,11 @@ interface TgSession {
   kuaisanHandlerBuilder: NewMessage | null;
   kuaisanPollTimer?: ReturnType<typeof setInterval>;
   kuaisanLastMsgId: number;
-  // Canada game state
-  canadaGroupId?: string;
+  // Canada streak-following state
   canadaCfg: CanadaCfg;
-  canadaResults: CanadaResult[];
-  canadaLastMsgId: number;
-  canadaPhase: "idle" | "betting" | "closed";
-  canadaBetPlacedThisCycle: boolean;
-  canadaPollTimer?: ReturnType<typeof setInterval>;
-  canadaBetLog: BetRecord[];
   canadaCurrentBet: number;
   canadaCurrentTier: number; // 0-2, 不中→升层，中→归0
   canadaSessionPnl: number;
-  canadaConsecutiveLosses: number;
 }
 
 interface PersistedData {
@@ -198,7 +190,6 @@ interface PersistedData {
   balanceSource: "manual" | "kkpay";
   watchGroupId?: string;
   cfg?: Partial<BetCfg>;
-  canadaGroupId?: string;
   canadaCfg?: Partial<CanadaCfg>;
 }
 
@@ -249,14 +240,6 @@ interface KuaisanResult {
   dragon: boolean;
   tiger: boolean;
   label: string; // e.g. "大单龙", "小双虎", "豹子"
-}
-
-interface CanadaResult {
-  number: number;  // 0-27
-  big: boolean;    // ≥14
-  odd: boolean;    // number % 2 === 1
-  label: string;   // "大单" | "大双" | "小单" | "小双"
-  ts: number;
 }
 
 interface CanadaCfg {
@@ -503,7 +486,6 @@ function saveSession(session: TgSession): void {
       balanceSource: session.balanceSource,
       watchGroupId: session.watchGroupId,
       cfg: session.cfg,
-      canadaGroupId: session.canadaGroupId,
       canadaCfg: session.canadaCfg,
     };
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
@@ -690,13 +672,10 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       chatLog: [],
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-      canadaGroupId: data.canadaGroupId,
-      canadaCfg: data.canadaCfg ? { ...DEFAULT_CANADA_CFG, ...data.canadaCfg, autoBet: false } : { ...DEFAULT_CANADA_CFG },
-      canadaResults: [], canadaLastMsgId: 0, canadaPhase: "idle",
-      canadaBetPlacedThisCycle: false, canadaBetLog: [],
+      canadaCfg: data.canadaCfg ? { ...DEFAULT_CANADA_CFG, ...data.canadaCfg } : { ...DEFAULT_CANADA_CFG },
       canadaCurrentTier: 0,
       canadaCurrentBet: (data.canadaCfg?.amountTiers ?? DEFAULT_CANADA_CFG.amountTiers)[0],
-      canadaSessionPnl: 0, canadaConsecutiveLosses: 0,
+      canadaSessionPnl: 0,
       balance: data.balance ?? 1000000,
       todayPnl: data.todayPnl ?? 0,
       todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -714,7 +693,6 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     startWatchdog(session);
-    startCanadaListener(session);
     logger.info({ userId }, "[tg] session restored");
   } catch {
     try { fs.unlinkSync(file); } catch { /* ok */ }
@@ -2500,224 +2478,6 @@ function startKuaisanListener(session: TgSession): void {
   }, 2000);
 }
 
-// ─── Canada game ──────────────────────────────────────────────────────────────
-
-function computeCanadaResult(num: number): CanadaResult {
-  const big = num >= 14;
-  const odd = num % 2 === 1;
-  const label = `${big ? "大" : "小"}${odd ? "单" : "双"}`;
-  return { number: num, big, odd, label, ts: Date.now() };
-}
-
-function evaluateCanadaBet(betContent: string, r: CanadaResult): boolean {
-  switch (betContent) {
-    case "大": return r.big;
-    case "小": return !r.big;
-    case "单": return r.odd;
-    case "双": return !r.odd;
-    case "大单": return r.big && r.odd;
-    case "大双": return r.big && !r.odd;
-    case "小单": return !r.big && r.odd;
-    case "小双": return !r.big && !r.odd;
-    default: return false;
-  }
-}
-
-function settleCanadaBets(session: TgSession, result: CanadaResult): void {
-  const pending = session.canadaBetLog.filter(b => b.status === "sent");
-  for (const bet of pending) {
-    const won = evaluateCanadaBet(bet.betContent, result);
-    const pnl = won ? Math.round(bet.amount * 0.97) : -bet.amount;
-    bet.status = won ? "won" : "lost";
-    bet.pnl = pnl;
-    bet.lotteryResult = result.label;
-    session.canadaSessionPnl += pnl;
-    if (won) {
-      session.canadaConsecutiveLosses = 0;
-      session.canadaCurrentTier = 0; // 中→归第1层
-      session.canadaCurrentBet = session.canadaCfg.amountTiers[0];
-    } else {
-      session.canadaConsecutiveLosses++;
-      session.canadaCurrentTier = Math.min(session.canadaCurrentTier + 1, 2); // 不中→升层（最高第3层）
-      session.canadaCurrentBet = session.canadaCfg.amountTiers[session.canadaCurrentTier];
-    }
-    pushEvent(session, "canada:bet_settled", { bet, result });
-  }
-}
-
-/** 顺龙算法：在指定维度（大/小 或 单/双）检测 minStreak 连续相同结果，返回顺向投注标签，否则返回 null */
-function canadaDragonBet(session: TgSession): string | null {
-  const results = session.canadaResults;
-  const minStreak = session.canadaCfg.minStreak;
-  if (results.length < minStreak) return null;
-  const getDir = (r: CanadaResult) =>
-    session.canadaCfg.dimension === "big_small" ? (r.big ? "大" : "小") : (r.odd ? "单" : "双");
-  // results is newest-first; check the first minStreak entries are all same
-  const last = getDir(results[0]!);
-  for (let i = 1; i < minStreak; i++) {
-    if (getDir(results[i]!) !== last) return null;
-  }
-  return last; // follow the streak
-}
-
-async function runCanadaAutoBet(session: TgSession): Promise<void> {
-  const targetGroup = session.canadaGroupId ?? session.watchGroupId;
-  if (!session.canadaCfg.autoBet || !targetGroup) return;
-  if (session.canadaBetPlacedThisCycle) return;
-  if (session.canadaCfg.stopLoss > 0 && session.canadaSessionPnl <= -session.canadaCfg.stopLoss) {
-    logger.info({ pnl: session.canadaSessionPnl }, "[ca] stop-loss reached, skip");
-    return;
-  }
-  if (session.canadaCfg.targetProfit > 0 && session.canadaSessionPnl >= session.canadaCfg.targetProfit) {
-    logger.info({ pnl: session.canadaSessionPnl }, "[ca] target-profit reached, skip");
-    return;
-  }
-
-  const direction = canadaDragonBet(session);
-  if (!direction) {
-    logger.info({ count: session.canadaResults.length, minStreak: session.canadaCfg.minStreak }, "[ca] no streak detected, skipping round");
-    return;
-  }
-
-  const amount = session.canadaCurrentBet;
-  const msgText = `${direction} ${amount}`;
-  session.canadaBetPlacedThisCycle = true;
-  logger.info({ direction, amount, streak: session.canadaCfg.minStreak }, "[ca] placing bet");
-
-  let succeeded = false;
-  let failReason: string | undefined;
-  try {
-    await session.client.sendMessage(targetGroup, { message: msgText });
-    succeeded = true;
-  } catch (err) {
-    failReason = extractTgError(err);
-    logger.warn({ failReason }, "[ca] send bet failed");
-  }
-
-  const betRecord: BetRecord = {
-    id: `ca-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    groupId: targetGroup,
-    groupTitle: session.groups.find(g => g.id === targetGroup || `-100${g.id}` === targetGroup)?.title ?? targetGroup,
-    messageText: msgText,
-    betContent: direction,
-    amount,
-    timestamp: Date.now(),
-    status: succeeded ? "sent" : "failed",
-    algoId: "ks_dragon" as AlgorithmId,
-    ...(failReason ? { failReason } : {}),
-  };
-  session.canadaBetLog.unshift(betRecord);
-  if (session.canadaBetLog.length > 200) session.canadaBetLog.length = 200;
-  pushEvent(session, "canada:bet_new", { bet: betRecord });
-}
-
-async function processCanadaMessage(session: TgSession, text: string, msgId: number): Promise<void> {
-  if (!text) return;
-
-  // 开始下注
-  if (/开始下注|开始投注|投注开始|现在开始/.test(text) && session.canadaPhase !== "betting") {
-    session.canadaPhase = "betting";
-    session.canadaBetPlacedThisCycle = false;
-    pushEvent(session, "canada:phase", { phase: "betting" });
-    logger.info({ msgId }, "[ca] bet open");
-    if (session.canadaCfg.autoBet) await runCanadaAutoBet(session);
-    return;
-  }
-
-  // 封盘
-  if (/封盘|停止下注|停止投注/.test(text) && session.canadaPhase === "betting") {
-    session.canadaPhase = "closed";
-    pushEvent(session, "canada:phase", { phase: "closed" });
-    return;
-  }
-
-  // 开奖结果：在含开奖关键词的消息中找 0-27 的数字
-  const isResult = /开奖|结果|号码|本期|上期/.test(text);
-  if (isResult) {
-    // Match a number 0-27; use a greedy scan to find all candidates, pick first that's in range
-    const nums = [...text.matchAll(/\b(\d{1,2})\b/g)].map(m => parseInt(m[1]!)).filter(n => n >= 0 && n <= 27);
-    if (nums.length > 0) {
-      const num = nums[0]!;
-      const result = computeCanadaResult(num);
-      session.canadaResults.unshift(result);
-      if (session.canadaResults.length > 50) session.canadaResults.pop();
-      logger.info({ msgId, num, label: result.label }, "[ca] result detected");
-      pushEvent(session, "canada:result", { result });
-      settleCanadaBets(session, result);
-      session.canadaPhase = "closed";
-      session.canadaBetPlacedThisCycle = false;
-      return;
-    }
-    // Fallback: label-only "大单" / "小双" etc.
-    const lblMatch = text.match(/(大|小)(单|双)/);
-    if (lblMatch) {
-      const big = lblMatch[1] === "大";
-      const odd = lblMatch[2] === "单";
-      const num = big ? (odd ? 15 : 14) : (odd ? 13 : 12); // synthetic
-      const result: CanadaResult = { number: num, big, odd, label: lblMatch[0]!, ts: Date.now() };
-      session.canadaResults.unshift(result);
-      if (session.canadaResults.length > 50) session.canadaResults.pop();
-      logger.info({ msgId, label: result.label, synthetic: true }, "[ca] label-only result");
-      pushEvent(session, "canada:result", { result });
-      settleCanadaBets(session, result);
-      session.canadaPhase = "closed";
-      session.canadaBetPlacedThisCycle = false;
-    }
-  }
-}
-
-function stopCanadaListener(session: TgSession): void {
-  if (session.canadaPollTimer) {
-    clearInterval(session.canadaPollTimer);
-    session.canadaPollTimer = undefined;
-  }
-}
-
-function startCanadaListener(session: TgSession): void {
-  const targetId = session.canadaGroupId ?? session.watchGroupId;
-  if (!targetId) return;
-  stopCanadaListener(session);
-
-  void session.client.getMessages(targetId, { limit: 1 }).then((msgs: Api.Message[]) => {
-    if (msgs.length > 0) {
-      session.canadaLastMsgId = msgs[0]!.id;
-      logger.info({ targetId, baselineMsgId: session.canadaLastMsgId }, "[ca] poller started");
-    }
-  }).catch(() => { /* ignore */ });
-
-  session.canadaPollTimer = setInterval(() => {
-    if (tgSessions.get(session.userId) !== session) {
-      clearInterval(session.canadaPollTimer); session.canadaPollTimer = undefined; return;
-    }
-    void (async () => {
-      try {
-        const msgs = await session.client.getMessages(targetId, {
-          limit: 20,
-          ...(session.canadaLastMsgId > 0 ? { minId: session.canadaLastMsgId } : {}),
-        }) as Api.Message[];
-        if (!msgs.length) return;
-        const sorted = [...msgs].sort((a, b) => a.id - b.id);
-        // Auto-expire stale bets
-        const now = Date.now();
-        for (const stale of session.canadaBetLog.filter(b => b.status === "sent" && now - b.timestamp > 120_000)) {
-          logger.warn({ betId: stale.id }, "[ca] stale bet auto-expired");
-          stale.status = "lost";
-          stale.pnl = -stale.amount;
-          session.canadaSessionPnl -= stale.amount;
-          session.canadaConsecutiveLosses++;
-          session.canadaCurrentTier = Math.min(session.canadaCurrentTier + 1, 2);
-          session.canadaCurrentBet = session.canadaCfg.amountTiers[session.canadaCurrentTier];
-        }
-        for (const msg of sorted) {
-          if (msg.id <= session.canadaLastMsgId) continue;
-          session.canadaLastMsgId = msg.id;
-          await processCanadaMessage(session, msg.message ?? "", msg.id);
-        }
-      } catch { /* network hiccup */ }
-    })();
-  }, 2000);
-}
-
 // ─── KKPay listener ───────────────────────────────────────────────────────────
 
 async function startKkpayListener(session: TgSession): Promise<void> {
@@ -2914,13 +2674,10 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       adaptiveSwitchKillMode: false,
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-      canadaGroupId: undefined,
       canadaCfg: { ...DEFAULT_CANADA_CFG },
-      canadaResults: [], canadaLastMsgId: 0, canadaPhase: "idle",
-      canadaBetPlacedThisCycle: false, canadaBetLog: [],
       canadaCurrentTier: 0,
       canadaCurrentBet: DEFAULT_CANADA_CFG.amountTiers[0],
-      canadaSessionPnl: 0, canadaConsecutiveLosses: 0,
+      canadaSessionPnl: 0,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
@@ -3177,62 +2934,69 @@ router.delete("/tg/bets", requireCard, (req, res) => {
   res.json({ ok: true });
 });
 
-// ─── Canada game routes ────────────────────────────────────────────────────────
+// ─── Canada streak-following routes ──────────────────────────────────────────
 
 router.get("/canada/status", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session) { res.json({ connected: false }); return; }
   res.json({
     connected: true,
-    canadaGroupId: session.canadaGroupId ?? null,
-    phase: session.canadaPhase,
     cfg: session.canadaCfg,
-    results: session.canadaResults.slice(0, 20),
-    recentBets: session.canadaBetLog.slice(0, 10),
-    sessionPnl: session.canadaSessionPnl,
     currentBet: session.canadaCurrentBet,
     currentTier: session.canadaCurrentTier,
-    consecutiveLosses: session.canadaConsecutiveLosses,
+    sessionPnl: session.canadaSessionPnl,
   });
 });
 
 router.post("/canada/config", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session) { res.status(400).json({ error: "no session" }); return; }
-  const { canadaGroupId, ...cfgUpdates } = req.body as { canadaGroupId?: string } & Partial<CanadaCfg>;
-
-  if (canadaGroupId !== undefined && canadaGroupId !== session.canadaGroupId) {
-    session.canadaGroupId = canadaGroupId || undefined;
-    stopCanadaListener(session);
-    startCanadaListener(session);
-  }
-
+  const cfgUpdates = req.body as Partial<CanadaCfg>;
   Object.assign(session.canadaCfg, cfgUpdates);
   if (cfgUpdates.amountTiers !== undefined) {
-    session.canadaCurrentTier = 0; // 配置变更归第1层
+    session.canadaCurrentTier = 0;
     session.canadaCurrentBet = cfgUpdates.amountTiers[0];
   }
-
   saveSession(session);
-  const effectiveGroupId = session.canadaGroupId ?? session.watchGroupId ?? null;
-  res.json({ ok: true, cfg: session.canadaCfg, canadaGroupId: session.canadaGroupId ?? null, effectiveGroupId });
+  res.json({ ok: true, cfg: session.canadaCfg });
 });
 
-router.get("/canada/bets", requireCard, (req, res) => {
+// 前端检测到连龙后调此接口下注（发到 watchGroup，与主彩票同一群组）
+router.post("/canada/bet", requireCard, async (req, res) => {
   const session = tgSessions.get(req.user!.userId);
-  res.json({ bets: session ? session.canadaBetLog.slice(0, 100) : [] });
+  if (!session) { res.status(400).json({ error: "no session" }); return; }
+  if (!session.watchGroupId) { res.status(400).json({ error: "未设置投注群组" }); return; }
+  const { direction } = req.body as { direction: string };
+  if (!direction) { res.status(400).json({ error: "direction required" }); return; }
+  const amount = session.canadaCurrentBet;
+  const msgText = `${direction} ${amount}`;
+  try {
+    await session.client.sendMessage(session.watchGroupId, { message: msgText });
+    logger.info({ direction, amount, tier: session.canadaCurrentTier }, "[ca] streak bet placed");
+    res.json({ ok: true, amount, tier: session.canadaCurrentTier, direction });
+  } catch (err) {
+    const msg = extractTgError(err);
+    logger.warn({ msg }, "[ca] bet send failed");
+    res.status(500).json({ error: msg });
+  }
 });
 
-router.delete("/canada/bets", requireCard, (req, res) => {
+// 前端根据开奖结果结算（更新层级）
+router.post("/canada/settle", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
-  if (session) {
-    session.canadaBetLog.length = 0;
-    session.canadaSessionPnl = 0;
-    session.canadaConsecutiveLosses = 0;
+  if (!session) { res.status(400).json({ error: "no session" }); return; }
+  const { won } = req.body as { won: boolean };
+  const pnl = won ? Math.round(session.canadaCurrentBet * 0.97) : -session.canadaCurrentBet;
+  session.canadaSessionPnl += pnl;
+  if (won) {
     session.canadaCurrentTier = 0;
     session.canadaCurrentBet = session.canadaCfg.amountTiers[0];
+  } else {
+    session.canadaCurrentTier = Math.min(session.canadaCurrentTier + 1, 2);
+    session.canadaCurrentBet = session.canadaCfg.amountTiers[session.canadaCurrentTier];
   }
-  res.json({ ok: true });
+  logger.info({ won, pnl, newTier: session.canadaCurrentTier, newBet: session.canadaCurrentBet }, "[ca] settled");
+  res.json({ ok: true, currentTier: session.canadaCurrentTier, currentBet: session.canadaCurrentBet, sessionPnl: session.canadaSessionPnl });
 });
 
 /**

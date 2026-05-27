@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type TgStatus, type BetRecord, type TgGroup, type CanadaStatus, type CanadaResultItem } from "../lib/api";
+import { api, type TgStatus, type BetRecord, type TgGroup, type CanadaStatus } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -783,11 +783,12 @@ export default function Dashboard() {
   const [showChatLog, setShowChatLog] = useState(false);
   const [debugResult, setDebugResult] = useState<string | null>(null);
   const [debugLoading, setDebugLoading] = useState(false);
-  // Canada game state
+  // Canada streak state
   const [canadaStatus, setCanadaStatus] = useState<CanadaStatus | null>(null);
-  const [canadaBets, setCanadaBets] = useState<BetRecord[]>([]);
-  const [canadaClearLoading, setCanadaClearLoading] = useState(false);
-  const [canadaExpanded, setCanadaExpanded] = useState(false);
+  const [caCurrentTier, setCaCurrentTier] = useState(0);
+  const [caCurrentBet, setCaCurrentBet] = useState(100);
+  const caBetRef = useRef<{ term: number; direction: string } | null>(null);
+  const [caBetActive, setCaBetActive] = useState<{ direction: string } | null>(null);
   // 近期结果从 fengpan draw:new SSE 实时积累（无需独立轮询）
   const [recentDraws, setRecentDraws] = useState<{num:number; big:boolean; odd:boolean; label:string}[]>([]);
 
@@ -855,13 +856,8 @@ export default function Dashboard() {
     try {
       const s = await api.canada.status();
       setCanadaStatus(s);
-    } catch { /* ignore */ }
-  }, []);
-
-  const fetchCanadaBets = useCallback(async () => {
-    try {
-      const { bets: b } = await api.canada.bets();
-      setCanadaBets(b);
+      if (s.currentTier !== undefined) setCaCurrentTier(s.currentTier);
+      if (s.currentBet !== undefined) setCaCurrentBet(s.currentBet);
     } catch { /* ignore */ }
   }, []);
 
@@ -931,25 +927,11 @@ export default function Dashboard() {
           void fetchBets();
           void fetchStatus();
         }
-        if (ev.type === "canada:phase") {
-          setCanadaStatus(prev => prev ? { ...prev, phase: ev.phase as string } : prev);
-        }
-        if (ev.type === "canada:result") {
-          setCanadaStatus(prev => prev ? { ...prev, phase: "closed" } : prev);
-          void fetchCanadaBets();
-          void fetchCanadaStatus();
-          // TG 收到开奖消息 → 立刻刷 fengpan，3s 后再刷一次（fengpan 有时略有延迟）
-          void fetchDraw();
-          setTimeout(() => void fetchDraw(), 3000);
-        }
-        if (ev.type === "canada:bet_new" || ev.type === "canada:bet_settled") {
-          void fetchCanadaBets();
-        }
       } catch { /* ignore */ }
     };
 
     return () => { es.close(); sseRef.current = null; };
-  }, [fetchBets, fetchStatus, fetchCanadaBets, fetchCanadaStatus]);
+  }, [fetchBets, fetchStatus, fetchCanadaStatus]);
 
   // ─── Init & polling ──────────────────────────────────────────────────────
 
@@ -961,10 +943,9 @@ export default function Dashboard() {
     const drawInterval = setInterval(() => void fetchDraw(), 15_000);
     const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
     void fetchCanadaStatus();
-    void fetchCanadaBets();
     const canadaInterval = setInterval(() => void fetchCanadaStatus(), 15_000);
     return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); clearInterval(canadaInterval); };
-  }, [fetchStatus, fetchBets, fetchDraw, fetchCanadaStatus, fetchCanadaBets]);
+  }, [fetchStatus, fetchBets, fetchDraw, fetchCanadaStatus]);
 
   // ─── Derived state ───────────────────────────────────────────────────────
 
@@ -982,6 +963,52 @@ export default function Dashboard() {
     if (b.won === true) { curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
     else if (b.won === false) curStreak = 0;
   }
+
+  // ─── Canada streak detection ─────────────────────────────────────────────
+
+  // Settlement: when draw.term changes and there was a pending bet
+  const prevCaTermRef = useRef(0);
+  useEffect(() => {
+    const term = draw?.term ?? 0;
+    if (!term || prevCaTermRef.current === term) return;
+    const prev = prevCaTermRef.current;
+    prevCaTermRef.current = term;
+    if (!prev) return; // first load, skip
+    const bet = caBetRef.current;
+    if (!bet || recentDraws.length === 0) { caBetRef.current = null; setCaBetActive(null); return; }
+    // recentDraws[0] is the last closed result (the one we bet on)
+    const result = recentDraws[0]!;
+    const { direction } = bet;
+    const won = (direction === "大" && result.big) || (direction === "小" && !result.big) ||
+                (direction === "单" && result.odd) || (direction === "双" && !result.odd);
+    caBetRef.current = null;
+    setCaBetActive(null);
+    void api.canada.settle({ won }).then(s => {
+      setCaCurrentTier(s.currentTier);
+      setCaCurrentBet(s.currentBet);
+    });
+  }, [draw?.term]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Streak detection: when recentDraws changes, check for streak and auto-bet
+  useEffect(() => {
+    if (!canadaStatus?.cfg?.autoBet) return;
+    const cfg = canadaStatus.cfg;
+    if (caBetRef.current) return; // already bet this period
+    if (!draw?.term) return;
+    if (recentDraws.length < cfg.minStreak) return;
+    const getDir = (r: { big: boolean; odd: boolean }) =>
+      cfg.dimension === "big_small" ? (r.big ? "大" : "小") : (r.odd ? "单" : "双");
+    const last = getDir(recentDraws[0]!);
+    const hasStreak = recentDraws.slice(0, cfg.minStreak).every(r => getDir(r) === last);
+    if (!hasStreak) return;
+    const direction = last;
+    caBetRef.current = { term: draw.term, direction };
+    setCaBetActive({ direction });
+    void api.canada.bet({ direction }).then(r => {
+      setCaCurrentBet(r.amount);
+      setCaCurrentTier(r.tier);
+    }).catch(() => { caBetRef.current = null; setCaBetActive(null); });
+  }, [recentDraws]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Actions ─────────────────────────────────────────────────────────────
 
@@ -1391,133 +1418,38 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* ── Canada Game Panel ── */}
-            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-              {/* Header */}
-              <button
-                onClick={() => setCanadaExpanded(v => !v)}
-                className="w-full flex items-center justify-between px-5 py-3 hover:bg-[#1a1f35] transition"
-              >
+            {/* ── Canada Streak Panel ── */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl px-5 py-4">
+              <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <span className="text-base">🍁</span>
-                  <span className="text-white font-semibold text-sm">加拿大顺龙</span>
-                  {canadaStatus?.phase && canadaStatus.phase !== "idle" && (
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                      canadaStatus.phase === "betting" ? "bg-emerald-500/20 text-emerald-400" :
-                      canadaStatus.phase === "closed" ? "bg-red-500/20 text-red-400" :
-                      "bg-slate-500/20 text-slate-400"
-                    }`}>
-                      {canadaStatus.phase === "betting" ? "下注中" : canadaStatus.phase === "closed" ? "已封盘" : "等待"}
-                    </span>
-                  )}
-                  {canadaStatus?.cfg?.autoBet && (
-                    <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
-                      顺龙中
-                    </span>
+                  <span className="text-white text-sm font-semibold">顺龙追注</span>
+                  {canadaStatus?.cfg?.autoBet ? (
+                    caBetActive ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-500/20 text-emerald-400 rounded px-1.5 py-0.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
+                        已追 {caBetActive.direction} · 第{caCurrentTier + 1}层 {caCurrentBet}元
+                      </span>
+                    ) : (
+                      <span className="text-[10px] bg-slate-500/20 text-slate-400 rounded px-1.5 py-0.5">等待连龙</span>
+                    )
+                  ) : (
+                    <span className="text-[10px] text-slate-600">已关闭</span>
                   )}
                 </div>
-                <span className="text-slate-500 text-xs">{canadaExpanded ? "▲" : "▼"}</span>
-              </button>
-
-              {canadaExpanded && (
-                <div className="border-t border-[#252a3d] p-5 space-y-4">
-                  {/* Config summary (read-only) */}
-                  {canadaStatus?.cfg && (
-                    <div className="flex flex-wrap gap-2 text-[11px]">
-                      <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
-                        {canadaStatus.cfg.dimension === "big_small" ? "大/小" : "单/双"}
-                      </span>
-                      <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
-                        {canadaStatus.cfg.minStreak}连触发
-                      </span>
-                      <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
-                        {(canadaStatus.cfg.amountTiers ?? [100, 200, 400]).join("/")}元
-                      </span>
-                      <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
-                        3层倍投
-                      </span>
-                      <span className="text-[10px] text-slate-600 self-center">· 在投注设置中修改</span>
-                    </div>
-                  )}
-
-                  {/* Stats row */}
-                  {canadaStatus && (
-                    <div className="grid grid-cols-3 gap-2">
-                      <StatCard label="本期盈亏" value={`${canadaStatus.sessionPnl >= 0 ? "+" : ""}${fmtNum(canadaStatus.sessionPnl)}`}
-                        valueClass={pnlColor(canadaStatus.sessionPnl)} />
-                      <StatCard label="当前注额" value={String(canadaStatus.currentBet)} />
-                      <StatCard label="连亏" value={canadaStatus.consecutiveLosses > 0 ? `${canadaStatus.consecutiveLosses}局` : "-"}
-                        valueClass={canadaStatus.consecutiveLosses >= 3 ? "text-red-400" : "text-white"} />
-                    </div>
-                  )}
-
-                  {/* 近期结果 — fengpan 数据（与走势页同源），TG canada:result SSE 触发实时刷新 */}
-                  {recentDraws.length > 0 && (
-                    <div>
-                      <div className="text-xs text-slate-500 mb-2">近期结果（{canadaStatus?.cfg?.minStreak ?? 3}连触发）</div>
-                      <div className="flex flex-wrap gap-1.5">
-                        {recentDraws.slice(0, 20).map((r, i) => (
-                          <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
-                            r.big ? "bg-red-500/15 text-red-400 border-red-500/25" : "bg-blue-500/15 text-blue-400 border-blue-500/25"
-                          }`}>
-                            {r.label}
-                            <span className="text-slate-600 ml-1 text-[9px]">{r.num}</span>
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Bet log */}
-                  {canadaBets.length > 0 && (
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="text-xs text-slate-500">投注记录 ({canadaBets.length})</div>
-                        <button
-                          disabled={canadaClearLoading}
-                          onClick={async () => {
-                            setCanadaClearLoading(true);
-                            try { await api.canada.clearBets(); await fetchCanadaBets(); await fetchCanadaStatus(); }
-                            catch { /* ignore */ }
-                            setCanadaClearLoading(false);
-                          }}
-                          className="text-xs text-red-400 hover:text-red-300 disabled:opacity-30 border border-red-500/20 px-2 py-0.5 rounded transition"
-                        >
-                          清空
-                        </button>
-                      </div>
-                      <div className="space-y-1 max-h-48 overflow-y-auto">
-                        {canadaBets.slice(0, 20).map(b => (
-                          <div key={b.id} className="flex items-center gap-2 bg-[#0f1220] border border-[#252a3d] rounded-lg px-3 py-2">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-white text-sm font-semibold">{b.betContent}</span>
-                                <span className="text-slate-500 text-xs">{b.amount.toLocaleString()}</span>
-                              </div>
-                              <div className="text-slate-600 text-[10px] mt-0.5">
-                                {fmtDate(b.timestamp)} {b.lotteryResult ? `· 结果：${b.lotteryResult}` : ""}
-                              </div>
-                            </div>
-                            <div className="text-right">
-                              <BetTag status={b.status} won={b.won} />
-                              {b.pnl !== undefined && (
-                                <div className={`text-xs font-semibold mt-0.5 ${pnlColor(b.pnl)}`}>
-                                  {b.pnl >= 0 ? "+" : ""}{b.pnl.toLocaleString()}
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {!canadaStatus && (
-                    <div className="text-xs text-slate-600 italic text-center py-2">
-                      连接 TG 后自动监听加拿大游戏，在投注设置中开启顺龙
-                    </div>
-                  )}
+              </div>
+              {canadaStatus?.cfg && (
+                <div className="flex flex-wrap gap-1.5 text-[11px]">
+                  <span className="bg-[#0f1220] border border-[#252a3d] rounded px-2 py-0.5 text-slate-400">
+                    {canadaStatus.cfg.dimension === "big_small" ? "大/小" : "单/双"}
+                  </span>
+                  <span className="bg-[#0f1220] border border-[#252a3d] rounded px-2 py-0.5 text-slate-400">
+                    {canadaStatus.cfg.minStreak}连触发
+                  </span>
+                  <span className="bg-[#0f1220] border border-[#252a3d] rounded px-2 py-0.5 text-slate-400">
+                    {(canadaStatus.cfg.amountTiers ?? [100, 200, 400]).join("/")}元
+                  </span>
+                  <span className="text-slate-600 self-center">· 在设置中修改</span>
                 </div>
               )}
             </div>

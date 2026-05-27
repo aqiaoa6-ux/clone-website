@@ -59,7 +59,7 @@
   },
   "canadaGroupId": "t.me/fgyl20",
   "canadaCfg": {
-    "autoBet": true,
+    "autoBet": false,
     "amountTiers": [
       20000,
       40000,

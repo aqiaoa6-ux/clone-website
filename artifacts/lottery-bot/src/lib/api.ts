@@ -74,9 +74,9 @@ export const api = {
 
   canada: {
     status: () => api.get<CanadaStatus>("/canada/status"),
-    config: (body: CanadaConfigBody) => api.post<{ ok: boolean; cfg: CanadaCfg; canadaGroupId: string | null }>("/canada/config", body),
-    bets: () => api.get<{ bets: BetRecord[] }>("/canada/bets"),
-    clearBets: () => api.del<{ ok: boolean }>("/canada/bets"),
+    config: (body: CanadaConfigBody) => api.post<{ ok: boolean; cfg: CanadaCfg }>("/canada/config", body),
+    bet: (body: { direction: string }) => api.post<{ ok: boolean; amount: number; tier: number; direction: string }>("/canada/bet", body),
+    settle: (body: { won: boolean }) => api.post<{ ok: boolean; currentTier: number; currentBet: number; sessionPnl: number }>("/canada/settle", body),
   },
 };
 
@@ -290,13 +290,6 @@ export interface AdminTgSession {
   currentPattern?: "streak" | "oscillating" | "neutral";
 }
 
-export interface CanadaResultItem {
-  number: number;
-  big: boolean;
-  odd: boolean;
-  label: string;
-  ts: number;
-}
 
 export interface CanadaCfg {
   autoBet: boolean;
@@ -307,20 +300,14 @@ export interface CanadaCfg {
   targetProfit: number;
 }
 
-export interface CanadaConfigBody extends Partial<CanadaCfg> {
-  canadaGroupId?: string;
-}
+export interface CanadaConfigBody extends Partial<CanadaCfg> {}
 
 export interface CanadaStatus {
   connected: boolean;
-  canadaGroupId: string | null;
-  phase: string;
   cfg: CanadaCfg;
-  results: CanadaResultItem[];
-  recentBets: BetRecord[];
-  sessionPnl: number;
   currentBet: number;
-  consecutiveLosses: number;
+  currentTier: number;
+  sessionPnl: number;
 }
 
 export interface LotteryData {
