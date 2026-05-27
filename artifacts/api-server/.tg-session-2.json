@@ -4,7 +4,7 @@
   "balance": 214984.494,
   "todayPnl": -10000,
   "todayResetAt": 1779840000000,
-  "sessionPnl": -10000,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003294529818",
@@ -53,21 +53,6 @@
     "killGroupMode": false,
     "gameMode": "lottery",
     "kuaisanBetOptions": []
-  },
-  "canadaCfg": {
-    "autoBet": true,
-    "amountTiers": [
-      20000,
-      40000,
-      80000
-    ],
-    "minStreak": 4,
-    "dimension": "big_small",
-    "stopLoss": 0,
-    "targetProfit": 0,
-    "betAmount": 1000,
-    "strategy": "normal",
-    "multiplier": 2
   },
   "kuaisanResults": [
     {
