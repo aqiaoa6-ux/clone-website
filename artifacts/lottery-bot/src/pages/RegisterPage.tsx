@@ -31,7 +31,7 @@ export default function RegisterPage() {
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <div className="text-4xl mb-3">🎰</div>
-          <h1 className="text-2xl font-bold text-white">彩票机器人</h1>
+          <h1 className="text-2xl font-bold text-white">暗影-飞投</h1>
           <p className="text-slate-400 text-sm mt-1">智能投注管理平台</p>
         </div>
 

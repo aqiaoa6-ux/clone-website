@@ -878,7 +878,7 @@ export default function Dashboard() {
         <div className="max-w-lg mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <span className="text-xl">🎰</span>
-            <span className="font-bold text-white">彩票机器人</span>
+            <span className="font-bold text-white">暗影-飞投</span>
             {card?.active && cardCountdown && (
               <span className={`text-[10px] border px-1.5 py-0.5 rounded font-mono tabular-nums ${
                 !cardCountdown.includes("天") && parseInt(cardCountdown.split(":")[0] ?? "99") < 1
