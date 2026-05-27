@@ -1449,17 +1449,17 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* 近期结果 — 直接用 fengpan draw:new 数据，无需额外轮询 */}
-                  {recentDraws.length > 0 && (
+                  {/* 近期结果 — 用 TG 群实时消息（canada:result SSE），比 fengpan 轮询更快 */}
+                  {(canadaStatus?.results?.length ?? 0) > 0 && (
                     <div>
                       <div className="text-xs text-slate-500 mb-2">近期结果（{canadaStatus?.cfg?.minStreak ?? 3}连触发）</div>
                       <div className="flex flex-wrap gap-1.5">
-                        {recentDraws.slice(0, 15).map((r, i) => (
+                        {canadaStatus!.results.slice(0, 20).map((r, i) => (
                           <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
                             r.big ? "bg-red-500/15 text-red-400 border-red-500/25" : "bg-blue-500/15 text-blue-400 border-blue-500/25"
                           }`}>
                             {r.label}
-                            <span className="text-slate-600 ml-1 text-[9px]">{r.num}</span>
+                            <span className="text-slate-600 ml-1 text-[9px]">{r.number}</span>
                           </span>
                         ))}
                       </div>

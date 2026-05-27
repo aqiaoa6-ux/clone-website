@@ -61,9 +61,9 @@
   "canadaCfg": {
     "autoBet": true,
     "amountTiers": [
-      1000,
-      2000,
-      4000
+      5000,
+      10000,
+      20000
     ],
     "minStreak": 3,
     "dimension": "big_small",
