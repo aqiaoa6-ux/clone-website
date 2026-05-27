@@ -60,5 +60,15 @@
       "big",
       "small"
     ]
+  },
+  "canadaCfg": {
+    "autoBet": false,
+    "betAmount": 100,
+    "minStreak": 3,
+    "dimension": "big_small",
+    "strategy": "normal",
+    "multiplier": 2,
+    "stopLoss": 0,
+    "targetProfit": 0
   }
 }

@@ -716,6 +716,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     startWatchdog(session);
+    startCanadaListener(session);
     logger.info({ userId }, "[tg] session restored");
   } catch {
     try { fs.unlinkSync(file); } catch { /* ok */ }
@@ -2564,7 +2565,8 @@ function canadaDragonBet(session: TgSession): string | null {
 }
 
 async function runCanadaAutoBet(session: TgSession): Promise<void> {
-  if (!session.canadaCfg.autoBet || !session.canadaGroupId) return;
+  const targetGroup = session.canadaGroupId ?? session.watchGroupId;
+  if (!session.canadaCfg.autoBet || !targetGroup) return;
   if (session.canadaBetPlacedThisCycle) return;
   if (session.canadaCfg.stopLoss > 0 && session.canadaSessionPnl <= -session.canadaCfg.stopLoss) {
     logger.info({ pnl: session.canadaSessionPnl }, "[ca] stop-loss reached, skip");
@@ -2589,7 +2591,7 @@ async function runCanadaAutoBet(session: TgSession): Promise<void> {
   let succeeded = false;
   let failReason: string | undefined;
   try {
-    await session.client.sendMessage(session.canadaGroupId, { message: msgText });
+    await session.client.sendMessage(targetGroup, { message: msgText });
     succeeded = true;
   } catch (err) {
     failReason = extractTgError(err);
@@ -2598,8 +2600,8 @@ async function runCanadaAutoBet(session: TgSession): Promise<void> {
 
   const betRecord: BetRecord = {
     id: `ca-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    groupId: session.canadaGroupId,
-    groupTitle: session.groups.find(g => g.id === session.canadaGroupId || `-100${g.id}` === session.canadaGroupId)?.title ?? session.canadaGroupId,
+    groupId: targetGroup,
+    groupTitle: session.groups.find(g => g.id === targetGroup || `-100${g.id}` === targetGroup)?.title ?? targetGroup,
     messageText: msgText,
     betContent: direction,
     amount,
@@ -2676,9 +2678,9 @@ function stopCanadaListener(session: TgSession): void {
 }
 
 function startCanadaListener(session: TgSession): void {
-  if (!session.canadaGroupId) return;
+  const targetId = session.canadaGroupId ?? session.watchGroupId;
+  if (!targetId) return;
   stopCanadaListener(session);
-  const targetId = session.canadaGroupId;
 
   void session.client.getMessages(targetId, { limit: 1 }).then((msgs: Api.Message[]) => {
     if (msgs.length > 0) {
@@ -3205,7 +3207,7 @@ router.post("/canada/config", requireCard, (req, res) => {
   if (canadaGroupId !== undefined && canadaGroupId !== session.canadaGroupId) {
     session.canadaGroupId = canadaGroupId || undefined;
     stopCanadaListener(session);
-    if (session.canadaGroupId) startCanadaListener(session);
+    startCanadaListener(session);
   }
 
   Object.assign(session.canadaCfg, cfgUpdates);
@@ -3214,7 +3216,8 @@ router.post("/canada/config", requireCard, (req, res) => {
   }
 
   saveSession(session);
-  res.json({ ok: true, cfg: session.canadaCfg, canadaGroupId: session.canadaGroupId ?? null });
+  const effectiveGroupId = session.canadaGroupId ?? session.watchGroupId ?? null;
+  res.json({ ok: true, cfg: session.canadaCfg, canadaGroupId: session.canadaGroupId ?? null, effectiveGroupId });
 });
 
 router.get("/canada/bets", requireCard, (req, res) => {

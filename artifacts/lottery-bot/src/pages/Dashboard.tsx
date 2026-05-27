@@ -251,10 +251,11 @@ function GroupSetupCard({ groups, onDone }: { groups: TgGroup[]; onDone: () => v
 
 // ─── Settings Drawer ──────────────────────────────────────────────────────────
 
-function SettingsDrawer({ status, onClose, onSave }: {
+function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
   status: TgStatus;
   onClose: () => void;
   onSave: (cfg: Record<string, unknown>) => Promise<void>;
+  canadaStatus?: CanadaStatus | null;
 }) {
   const DEFAULT_LEVELS = [100, 200, 400, 800, 1600, 3200];
   const initLevels = status.amountLevels?.length === 6 ? status.amountLevels : DEFAULT_LEVELS;
@@ -286,6 +287,14 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [enableChase, setEnableChase] = useState(status.enableChase ?? false);
   const [showChase, setShowChase] = useState(status.enableChase ?? false);
   const [saving, setSaving] = useState(false);
+
+  // Canada 顺龙 drawer state
+  const [caAutoBet, setCaAutoBet] = useState(canadaStatus?.cfg.autoBet ?? false);
+  const [caDim, setCaDim] = useState<"big_small" | "odd_even">(canadaStatus?.cfg.dimension ?? "big_small");
+  const [caStreak, setCaStreak] = useState(canadaStatus?.cfg.minStreak ?? 3);
+  const [caAmt, setCaAmt] = useState(String(canadaStatus?.cfg.betAmount ?? 100));
+  const [caStrategy, setCaStrategy] = useState<"normal" | "martingale">(canadaStatus?.cfg.strategy ?? "normal");
+  const [showCaSettings, setShowCaSettings] = useState(false);
 
   const addChase = () => setChaseNumbers(prev => [...prev, { num: "", amount: "" }]);
   const removeChase = (i: number) => setChaseNumbers(prev => prev.filter((_, idx) => idx !== i));
@@ -320,6 +329,16 @@ function SettingsDrawer({ status, onClose, onSave }: {
         kuaisanBetOptions: kuaisanOpts,
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
+      // 加拿大模式同步保存顺龙配置
+      if (gameMode === "lottery") {
+        await api.canada.config({
+          autoBet: caAutoBet,
+          dimension: caDim,
+          minStreak: caStreak,
+          betAmount: Number(caAmt),
+          strategy: caStrategy,
+        });
+      }
       onClose();
     } finally { setSaving(false); }
   };
@@ -351,7 +370,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   onClick={() => setGameMode("lottery")}
                   className={`flex-1 py-2 rounded-lg text-xs font-medium border transition ${gameMode === "lottery" ? "bg-blue-600 border-blue-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50"}`}
                 >
-                  🎰 彩票
+                  🍁 加拿大
                 </button>
                 <button
                   type="button"
@@ -437,6 +456,81 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   <p className="text-[10px] text-orange-400">
                     ✓ 已启用 · AI分析热度最高的组并杀掉 · 剩余三组同时下注
                   </p>
+                )}
+              </div>
+
+              {/* ── 顺龙配置（折叠） ── */}
+              <div className={`rounded-xl border-2 transition-colors mt-1 ${caAutoBet ? "border-emerald-500/50 bg-emerald-500/5" : "border-[#252a3d]"}`}>
+                <button
+                  type="button"
+                  onClick={() => setShowCaSettings(v => !v)}
+                  className="w-full flex items-center justify-between px-3 py-2.5"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">🐉</span>
+                    <span className={`text-xs font-medium ${caAutoBet ? "text-emerald-300" : "text-slate-400"}`}>顺龙自动下注</span>
+                    {caAutoBet && (
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-400 rounded px-1.5 py-0.5">
+                        {caStreak}连触发 · {caDim === "big_small" ? "大/小" : "单/双"} · {caAmt}元
+                      </span>
+                    )}
+                  </div>
+                  <span className={`text-slate-500 text-xs transition-transform duration-200 ${showCaSettings ? "rotate-180" : ""}`}>▼</span>
+                </button>
+                {showCaSettings && (
+                  <div className="px-3 pb-3 space-y-3 border-t border-[#252a3d] pt-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-slate-400">启用顺龙自动下注</span>
+                      <button
+                        type="button"
+                        onClick={() => setCaAutoBet(v => !v)}
+                        className={`relative w-11 h-6 rounded-full transition-colors ${caAutoBet ? "bg-emerald-600" : "bg-[#252a3d]"}`}
+                      >
+                        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${caAutoBet ? "left-5" : "left-0.5"}`} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className={labelCls}>检测维度</label>
+                        <div className="flex gap-1">
+                          {(["big_small", "odd_even"] as const).map(d => (
+                            <button key={d} type="button" onClick={() => setCaDim(d)}
+                              className={`flex-1 py-1.5 text-[11px] rounded-lg border transition ${caDim === d ? "bg-blue-600 border-blue-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50"}`}>
+                              {d === "big_small" ? "大/小" : "单/双"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className={labelCls}>触发连龙数</label>
+                        <div className="flex gap-1">
+                          {[3, 4, 5].map(n => (
+                            <button key={n} type="button" onClick={() => setCaStreak(n)}
+                              className={`flex-1 py-1.5 text-[11px] rounded-lg border transition ${caStreak === n ? "bg-purple-600 border-purple-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-purple-500/50"}`}>
+                              {n}连
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <label className={labelCls}>单注金额</label>
+                        <input type="number" value={caAmt} onChange={e => setCaAmt(e.target.value)}
+                          className={inputCls} min="1" />
+                      </div>
+                      <div>
+                        <label className={labelCls}>资金策略</label>
+                        <div className="flex gap-1">
+                          {(["normal", "martingale"] as const).map(s => (
+                            <button key={s} type="button" onClick={() => setCaStrategy(s)}
+                              className={`flex-1 py-1.5 text-[11px] rounded-lg border transition ${caStrategy === s ? "bg-emerald-600 border-emerald-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-emerald-500/50"}`}>
+                              {s === "normal" ? "固定" : "马丁"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-[10px] text-slate-600">连续 {caStreak} 期出现相同{caDim === "big_small" ? "大/小" : "单/双"}时跟注，使用当前监听群组，无需额外配置</p>
+                  </div>
                 )}
               </div>
             </div>
@@ -1517,7 +1611,7 @@ export default function Dashboard() {
 
       {/* Settings Drawer */}
       {showSettings && status && (
-        <SettingsDrawer status={status} onClose={() => setShowSettings(false)} onSave={saveCfg} />
+        <SettingsDrawer status={status} onClose={() => setShowSettings(false)} onSave={saveCfg} canadaStatus={canadaStatus} />
       )}
 
       {/* Group Switcher */}
