@@ -30,10 +30,6 @@ const steps: Step[] = [
             <span>再次输入密码确认，点击<span className="text-white font-medium">注册</span></span>
           </div>
         </div>
-        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-3 py-2.5 flex gap-2">
-          <span className="text-yellow-400 flex-shrink-0">⚠️</span>
-          <span className="text-yellow-300 text-xs">第一个注册的用户将自动成为<span className="font-bold">管理员</span>，拥有生成卡密等权限。</span>
-        </div>
       </div>
     ),
   },
@@ -132,7 +128,7 @@ const steps: Step[] = [
           <div className="text-xs text-slate-500 font-medium mb-1">主要参数说明</div>
           <div className="flex justify-between items-start border-b border-[#252a3d] pb-1.5">
             <span className="text-white text-xs font-medium w-20 flex-shrink-0">游戏模式</span>
-            <span className="text-slate-400 text-xs">彩票（凤盘）或快三，根据投注群选择</span>
+            <span className="text-slate-400 text-xs">加拿大或快三，根据投注群选择</span>
           </div>
           <div className="flex justify-between items-start border-b border-[#252a3d] pb-1.5">
             <span className="text-white text-xs font-medium w-20 flex-shrink-0">每注金额</span>
@@ -348,16 +344,6 @@ export default function TutorialPage() {
           </div>
         ))}
 
-        {/* Contact */}
-        <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4 mt-2">
-          <div className="flex items-center gap-2 mb-1">
-            <span>🙋</span>
-            <span className="text-sm font-semibold text-white">还有疑问？</span>
-          </div>
-          <p className="text-xs text-slate-400 leading-relaxed">
-            如遇到问题，请联系管理员获取卡密和技术支持。管理员账号拥有后台权限，可在「后台」页面生成卡密。
-          </p>
-        </div>
       </div>
 
       <BottomNav />
