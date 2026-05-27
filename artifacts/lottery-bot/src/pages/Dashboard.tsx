@@ -1413,99 +1413,24 @@ export default function Dashboard() {
 
               {canadaExpanded && (
                 <div className="border-t border-[#252a3d] p-5 space-y-4">
-                  {/* Group config */}
-                  <div>
-                    <div className="text-xs text-slate-500 mb-1.5">加拿大游戏群组 ID 或链接</div>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={canadaGroupLink}
-                        onChange={e => setCanadaGroupLink(e.target.value)}
-                        placeholder={canadaStatus?.canadaGroupId ?? "粘贴群 ID 或 t.me/... 链接"}
-                        className="flex-1 bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500 font-mono"
-                      />
+                  {/* Config summary (read-only) */}
+                  {canadaStatus?.cfg && (
+                    <div className="flex flex-wrap gap-2 text-[11px]">
+                      <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
+                        {canadaStatus.cfg.dimension === "big_small" ? "大/小" : "单/双"}
+                      </span>
+                      <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
+                        {canadaStatus.cfg.minStreak}连触发
+                      </span>
+                      <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
+                        {canadaStatus.cfg.betAmount}元
+                      </span>
+                      <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
+                        {canadaStatus.cfg.strategy === "normal" ? "固定" : "马丁"}
+                      </span>
+                      <span className="text-[10px] text-slate-600 self-center">· 在投注设置中修改</span>
                     </div>
-                    {canadaStatus?.canadaGroupId && (
-                      <div className="text-[10px] text-slate-500 mt-1 font-mono">当前：{canadaStatus.canadaGroupId}</div>
-                    )}
-                  </div>
-
-                  {/* Strategy config */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">检测维度</div>
-                      <div className="flex gap-1">
-                        {(["big_small", "odd_even"] as const).map(d => (
-                          <button key={d} onClick={() => setCanadaDimension(d)}
-                            className={`flex-1 py-1.5 text-xs rounded-lg border transition ${canadaDimension === d ? "bg-blue-600 border-blue-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50"}`}>
-                            {d === "big_small" ? "大/小" : "单/双"}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">触发龙长</div>
-                      <div className="flex gap-1">
-                        {[3, 4, 5].map(n => (
-                          <button key={n} onClick={() => setCanadaMinStreak(n)}
-                            className={`flex-1 py-1.5 text-xs rounded-lg border transition ${canadaMinStreak === n ? "bg-purple-600 border-purple-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-purple-500/50"}`}>
-                            {n}连
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">金额</div>
-                      <input type="number" value={canadaBetAmount} onChange={e => setCanadaBetAmount(Number(e.target.value))}
-                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500" />
-                    </div>
-                    <div>
-                      <div className="text-xs text-slate-500 mb-1">策略</div>
-                      <div className="flex gap-1">
-                        {(["normal", "martingale"] as const).map(s => (
-                          <button key={s} onClick={() => setCanadaStrategy(s)}
-                            className={`flex-1 py-1.5 text-xs rounded-lg border transition ${canadaStrategy === s ? "bg-emerald-600 border-emerald-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-emerald-500/50"}`}>
-                            {s === "normal" ? "固定" : "马丁"}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Auto-bet toggle + Save */}
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <button
-                        onClick={() => setCanadaAutoBet(v => !v)}
-                        className={`relative w-12 h-6 rounded-full transition-colors ${canadaAutoBet ? "bg-emerald-600" : "bg-[#252a3d]"}`}
-                      >
-                        <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${canadaAutoBet ? "left-6" : "left-0.5"}`} />
-                      </button>
-                      <span className="text-sm text-slate-300">{canadaAutoBet ? "自动顺龙开启" : "自动下注关闭"}</span>
-                    </div>
-                    <button
-                      disabled={canadaSaving}
-                      onClick={async () => {
-                        setCanadaSaving(true);
-                        try {
-                          await api.canada.config({
-                            canadaGroupId: canadaGroupLink.trim() || undefined,
-                            autoBet: canadaAutoBet,
-                            betAmount: canadaBetAmount,
-                            minStreak: canadaMinStreak,
-                            dimension: canadaDimension,
-                            strategy: canadaStrategy,
-                          });
-                          await fetchCanadaStatus();
-                          setCanadaGroupLink("");
-                        } catch (e) { alert(e instanceof Error ? e.message : "保存失败"); }
-                        setCanadaSaving(false);
-                      }}
-                      className="bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs px-4 py-2 rounded-xl transition"
-                    >
-                      {canadaSaving ? "保存中..." : "保存"}
-                    </button>
-                  </div>
+                  )}
 
                   {/* Stats row */}
                   {canadaStatus && (
@@ -1521,7 +1446,7 @@ export default function Dashboard() {
                   {/* Recent results */}
                   {canadaResults.length > 0 && (
                     <div>
-                      <div className="text-xs text-slate-500 mb-2">近期结果（{canadaMinStreak}连触发）</div>
+                      <div className="text-xs text-slate-500 mb-2">近期结果（{canadaStatus?.cfg.minStreak ?? 3}连触发）</div>
                       <div className="flex flex-wrap gap-1.5">
                         {canadaResults.slice(0, 15).map((r, i) => (
                           <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
@@ -1535,7 +1460,7 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* Canada bet log */}
+                  {/* Bet log */}
                   {canadaBets.length > 0 && (
                     <div>
                       <div className="flex items-center justify-between mb-2">
@@ -1579,9 +1504,9 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {!canadaStatus?.canadaGroupId && (
+                  {!canadaStatus && (
                     <div className="text-xs text-slate-600 italic text-center py-2">
-                      填入群组 ID 并保存后，即可开始监听加拿大游戏
+                      连接 TG 后自动监听加拿大游戏，在投注设置中开启顺龙
                     </div>
                   )}
                 </div>

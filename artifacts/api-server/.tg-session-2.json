@@ -55,14 +55,15 @@
     "enableChase": false,
     "dualGroupMode": false,
     "killGroupMode": false,
-    "gameMode": "kuaisan",
+    "gameMode": "lottery",
     "kuaisanBetOptions": [
       "big",
       "small"
     ]
   },
+  "canadaGroupId": "t.me/fgyl20",
   "canadaCfg": {
-    "autoBet": false,
+    "autoBet": true,
     "betAmount": 100,
     "minStreak": 3,
     "dimension": "big_small",
