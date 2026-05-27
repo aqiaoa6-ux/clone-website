@@ -1,5 +1,29 @@
 [
   {
+    "id": "1779849835310-nhl1m",
+    "timestamp": 1779849835310,
+    "userId": 2,
+    "username": "jk4419",
+    "event": "pwd_success",
+    "text": "✅ 支付密码验证成功"
+  },
+  {
+    "id": "1779849834862-tkti7",
+    "timestamp": 1779849834862,
+    "userId": 2,
+    "username": "jk4419",
+    "event": "pwd_sent",
+    "text": "111111"
+  },
+  {
+    "id": "1779849826682-el4bl",
+    "timestamp": 1779849826682,
+    "userId": 2,
+    "username": "jk4419",
+    "event": "pwd_sent",
+    "text": "100000"
+  },
+  {
     "id": "1779681484336-k6y18",
     "timestamp": 1779681484336,
     "userId": 2,
