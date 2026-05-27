@@ -6,6 +6,7 @@ import CardKeyPage from "./pages/CardKeyPage";
 import Dashboard from "./pages/Dashboard";
 import AdminPage from "./pages/AdminPage";
 import TrendPage from "./pages/TrendPage";
+import TutorialPage from "./pages/TutorialPage";
 
 // sessionStorage key: set after user explicitly confirms "this is my account"
 // sessionStorage is per-tab and cleared when the tab/browser closes,
@@ -85,6 +86,11 @@ export default function AppRoutes() {
       <Route path="/trend">
         <ProtectedRoute requireCard={false}>
           <TrendPage />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/tutorial">
+        <ProtectedRoute requireCard={false}>
+          <TutorialPage />
         </ProtectedRoute>
       </Route>
       <Route path="/">
