@@ -300,11 +300,9 @@ export interface CanadaResultItem {
 
 export interface CanadaCfg {
   autoBet: boolean;
-  betAmount: number;
+  amountTiers: [number, number, number];
   minStreak: number;
   dimension: "big_small" | "odd_even";
-  strategy: "normal" | "martingale";
-  multiplier: number;
   stopLoss: number;
   targetProfit: number;
 }

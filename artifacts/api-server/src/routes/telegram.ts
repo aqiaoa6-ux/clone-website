@@ -182,6 +182,7 @@ interface TgSession {
   canadaPollTimer?: ReturnType<typeof setInterval>;
   canadaBetLog: BetRecord[];
   canadaCurrentBet: number;
+  canadaCurrentTier: number; // 0-2, 不中→升层，中→归0
   canadaSessionPnl: number;
   canadaConsecutiveLosses: number;
 }
@@ -260,22 +261,18 @@ interface CanadaResult {
 
 interface CanadaCfg {
   autoBet: boolean;
-  betAmount: number;
+  amountTiers: [number, number, number]; // 3层金额：不中倍投，中归第1层
   minStreak: number;       // 触发下注的最小连续相同结果数，默认 3
   dimension: "big_small" | "odd_even"; // 检测龙的维度
-  strategy: "normal" | "martingale";
-  multiplier: number;
   stopLoss: number;
   targetProfit: number;
 }
 
 const DEFAULT_CANADA_CFG: CanadaCfg = {
   autoBet: false,
-  betAmount: 100,
+  amountTiers: [100, 200, 400],
   minStreak: 3,
   dimension: "big_small",
-  strategy: "normal",
-  multiplier: 2,
   stopLoss: 0,
   targetProfit: 0,
 };
@@ -697,7 +694,8 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       canadaCfg: data.canadaCfg ? { ...DEFAULT_CANADA_CFG, ...data.canadaCfg, autoBet: false } : { ...DEFAULT_CANADA_CFG },
       canadaResults: [], canadaLastMsgId: 0, canadaPhase: "idle",
       canadaBetPlacedThisCycle: false, canadaBetLog: [],
-      canadaCurrentBet: data.canadaCfg?.betAmount ?? DEFAULT_CANADA_CFG.betAmount,
+      canadaCurrentTier: 0,
+      canadaCurrentBet: (data.canadaCfg?.amountTiers ?? DEFAULT_CANADA_CFG.amountTiers)[0],
       canadaSessionPnl: 0, canadaConsecutiveLosses: 0,
       balance: data.balance ?? 1000000,
       todayPnl: data.todayPnl ?? 0,
@@ -2536,14 +2534,12 @@ function settleCanadaBets(session: TgSession, result: CanadaResult): void {
     session.canadaSessionPnl += pnl;
     if (won) {
       session.canadaConsecutiveLosses = 0;
-      if (session.canadaCfg.strategy === "martingale") {
-        session.canadaCurrentBet = session.canadaCfg.betAmount;
-      }
+      session.canadaCurrentTier = 0; // 中→归第1层
+      session.canadaCurrentBet = session.canadaCfg.amountTiers[0];
     } else {
       session.canadaConsecutiveLosses++;
-      if (session.canadaCfg.strategy === "martingale") {
-        session.canadaCurrentBet = Math.round(session.canadaCurrentBet * session.canadaCfg.multiplier);
-      }
+      session.canadaCurrentTier = Math.min(session.canadaCurrentTier + 1, 2); // 不中→升层（最高第3层）
+      session.canadaCurrentBet = session.canadaCfg.amountTiers[session.canadaCurrentTier];
     }
     pushEvent(session, "canada:bet_settled", { bet, result });
   }
@@ -2709,9 +2705,8 @@ function startCanadaListener(session: TgSession): void {
           stale.pnl = -stale.amount;
           session.canadaSessionPnl -= stale.amount;
           session.canadaConsecutiveLosses++;
-          if (session.canadaCfg.strategy === "martingale") {
-            session.canadaCurrentBet = Math.round(session.canadaCurrentBet * session.canadaCfg.multiplier);
-          }
+          session.canadaCurrentTier = Math.min(session.canadaCurrentTier + 1, 2);
+          session.canadaCurrentBet = session.canadaCfg.amountTiers[session.canadaCurrentTier];
         }
         for (const msg of sorted) {
           if (msg.id <= session.canadaLastMsgId) continue;
@@ -2923,7 +2918,8 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       canadaCfg: { ...DEFAULT_CANADA_CFG },
       canadaResults: [], canadaLastMsgId: 0, canadaPhase: "idle",
       canadaBetPlacedThisCycle: false, canadaBetLog: [],
-      canadaCurrentBet: DEFAULT_CANADA_CFG.betAmount,
+      canadaCurrentTier: 0,
+      canadaCurrentBet: DEFAULT_CANADA_CFG.amountTiers[0],
       canadaSessionPnl: 0, canadaConsecutiveLosses: 0,
     };
     tgSessions.set(userId, session);
@@ -3195,6 +3191,7 @@ router.get("/canada/status", requireCard, (req, res) => {
     recentBets: session.canadaBetLog.slice(0, 10),
     sessionPnl: session.canadaSessionPnl,
     currentBet: session.canadaCurrentBet,
+    currentTier: session.canadaCurrentTier,
     consecutiveLosses: session.canadaConsecutiveLosses,
   });
 });
@@ -3211,8 +3208,9 @@ router.post("/canada/config", requireCard, (req, res) => {
   }
 
   Object.assign(session.canadaCfg, cfgUpdates);
-  if (cfgUpdates.betAmount !== undefined) {
-    session.canadaCurrentBet = cfgUpdates.betAmount;
+  if (cfgUpdates.amountTiers !== undefined) {
+    session.canadaCurrentTier = 0; // 配置变更归第1层
+    session.canadaCurrentBet = cfgUpdates.amountTiers[0];
   }
 
   saveSession(session);
@@ -3231,7 +3229,8 @@ router.delete("/canada/bets", requireCard, (req, res) => {
     session.canadaBetLog.length = 0;
     session.canadaSessionPnl = 0;
     session.canadaConsecutiveLosses = 0;
-    session.canadaCurrentBet = session.canadaCfg.betAmount;
+    session.canadaCurrentTier = 0;
+    session.canadaCurrentBet = session.canadaCfg.amountTiers[0];
   }
   res.json({ ok: true });
 });

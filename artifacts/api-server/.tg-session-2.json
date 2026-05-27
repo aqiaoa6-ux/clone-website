@@ -18,9 +18,9 @@
     "targetProfit": 500000,
     "cooldownSeconds": 0,
     "amountLevels": [
-      1000,
-      2000,
-      4000,
+      10000,
+      20000,
+      40000,
       8000,
       16000,
       32000

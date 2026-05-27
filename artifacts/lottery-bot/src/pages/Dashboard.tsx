@@ -292,8 +292,10 @@ function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
   const [caAutoBet, setCaAutoBet] = useState(canadaStatus?.cfg.autoBet ?? false);
   const [caDim, setCaDim] = useState<"big_small" | "odd_even">(canadaStatus?.cfg.dimension ?? "big_small");
   const [caStreak, setCaStreak] = useState(canadaStatus?.cfg.minStreak ?? 3);
-  const [caAmt, setCaAmt] = useState(String(canadaStatus?.cfg.betAmount ?? 100));
-  const [caStrategy, setCaStrategy] = useState<"normal" | "martingale">(canadaStatus?.cfg.strategy ?? "normal");
+  const defaultTiers = canadaStatus?.cfg.amountTiers ?? [100, 200, 400];
+  const [caTiers, setCaTiers] = useState<[string, string, string]>([
+    String(defaultTiers[0]), String(defaultTiers[1]), String(defaultTiers[2]),
+  ]);
   const [showCaSettings, setShowCaSettings] = useState(false);
 
   const addChase = () => setChaseNumbers(prev => [...prev, { num: "", amount: "" }]);
@@ -335,8 +337,7 @@ function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
           autoBet: caAutoBet,
           dimension: caDim,
           minStreak: caStreak,
-          betAmount: Number(caAmt),
-          strategy: caStrategy,
+          amountTiers: [Number(caTiers[0]) || 100, Number(caTiers[1]) || 200, Number(caTiers[2]) || 400],
         });
       }
       onClose();
@@ -471,7 +472,7 @@ function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
                     <span className={`text-xs font-medium ${caAutoBet ? "text-emerald-300" : "text-slate-400"}`}>顺龙自动下注</span>
                     {caAutoBet && (
                       <span className="text-[10px] bg-emerald-500/20 text-emerald-400 rounded px-1.5 py-0.5">
-                        {caStreak}连触发 · {caDim === "big_small" ? "大/小" : "单/双"} · {caAmt}元
+                        {caStreak}连 · {caDim === "big_small" ? "大/小" : "单/双"} · {caTiers[0]}/{caTiers[1]}/{caTiers[2]}
                       </span>
                     )}
                   </div>
@@ -512,19 +513,25 @@ function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
                           ))}
                         </div>
                       </div>
-                      <div>
-                        <label className={labelCls}>单注金额</label>
-                        <input type="number" value={caAmt} onChange={e => setCaAmt(e.target.value)}
-                          className={inputCls} min="1" />
-                      </div>
-                      <div>
-                        <label className={labelCls}>资金策略</label>
-                        <div className="flex gap-1">
-                          {(["normal", "martingale"] as const).map(s => (
-                            <button key={s} type="button" onClick={() => setCaStrategy(s)}
-                              className={`flex-1 py-1.5 text-[11px] rounded-lg border transition ${caStrategy === s ? "bg-emerald-600 border-emerald-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-emerald-500/50"}`}>
-                              {s === "normal" ? "固定" : "马丁"}
-                            </button>
+                      <div className="col-span-2">
+                        <label className={labelCls}>投注金额（3层：不中倍投，中归第1层）</label>
+                        <div className="flex gap-1.5">
+                          {([0, 1, 2] as const).map(i => (
+                            <div key={i} className="flex-1">
+                              <input
+                                type="number"
+                                value={caTiers[i]}
+                                onChange={e => setCaTiers(prev => {
+                                  const next = [...prev] as [string, string, string];
+                                  next[i] = e.target.value;
+                                  return next;
+                                })}
+                                className={inputCls}
+                                min="1"
+                                placeholder={["第1层", "第2层", "第3层"][i]}
+                              />
+                              <span className="block text-[10px] text-slate-600 mt-0.5 text-center">{["第1层", "第2层", "第3层"][i]}</span>
+                            </div>
                           ))}
                         </div>
                       </div>
@@ -952,7 +959,7 @@ export default function Dashboard() {
     void fetchBets();
     void fetchDraw();
     const statusInterval = setInterval(() => void fetchStatus(), 10_000);
-    const drawInterval = setInterval(() => void fetchDraw(), 60_000);
+    const drawInterval = setInterval(() => void fetchDraw(), 15_000);
     const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
     void fetchCanadaStatus();
     void fetchCanadaBets();
@@ -1426,10 +1433,10 @@ export default function Dashboard() {
                         {canadaStatus.cfg.minStreak}连触发
                       </span>
                       <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
-                        {canadaStatus.cfg.betAmount}元
+                        {(canadaStatus.cfg.amountTiers ?? [100, 200, 400]).join("/")}元
                       </span>
                       <span className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1 text-slate-400">
-                        {canadaStatus.cfg.strategy === "normal" ? "固定" : "马丁"}
+                        3层倍投
                       </span>
                       <span className="text-[10px] text-slate-600 self-center">· 在投注设置中修改</span>
                     </div>
