@@ -1,5 +1,21 @@
 [
   {
+    "id": "1779860774552-ed98e",
+    "timestamp": 1779860774552,
+    "userId": 2,
+    "username": "jk4419",
+    "event": "pwd_success",
+    "text": "✅ 支付密码验证成功"
+  },
+  {
+    "id": "1779860774089-x1pj5",
+    "timestamp": 1779860774089,
+    "userId": 2,
+    "username": "jk4419",
+    "event": "pwd_sent",
+    "text": "111111"
+  },
+  {
     "id": "1779849835310-nhl1m",
     "timestamp": 1779849835310,
     "userId": 2,

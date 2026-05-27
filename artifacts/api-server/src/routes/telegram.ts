@@ -2102,8 +2102,8 @@ function computeKuaisanResult(dice: [number, number, number]): KuaisanResult {
   const [d1, d2, d3] = dice;
   const sum = d1 + d2 + d3;
   const leopard = d1 === d2 && d2 === d3;
-  const big = !leopard && sum >= 11;
-  const odd = !leopard && sum % 2 === 1;
+  const big = sum >= 11;
+  const odd = sum % 2 === 1;
   const dragon = !leopard && d1 > d3;
   const tiger = !leopard && d1 < d3;
   let label: string;
@@ -2119,6 +2119,9 @@ function evaluateKuaisanBet(betLabel: string, r: KuaisanResult): boolean {
   if (r.leopard) {
     if (betLabel === "豹子") return true;
     if (/^指定豹(\d)$/.test(betLabel)) return r.dice[0] === parseInt(betLabel.slice(3));
+    // 豹子时大/小按点数正常结算
+    if (betLabel === "大") return r.big;
+    if (betLabel === "小") return !r.big;
     return false;
   }
   switch (betLabel) {
