@@ -18,23 +18,27 @@ interface DrawState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const ALGO_LABELS: Record<string, string> = {
-  ks_follow:       "快三-跟上期",
-  ks_reverse:      "快三-反上期",
-  ks_bb:           "快三-AABB",
-  ks_smart:        "快三-均值回归",
-  ai_trend:        "通用-算法1",
-  steady_ai:       "通用-算法2",
-  adaptive_switch: "通用-算法3",
+  ks_follow:        "快三-跟上期",
+  ks_reverse:       "快三-反上期",
+  ks_bb:            "快三-AABB",
+  ks_smart:         "快三-均值回归",
+  ks_dragon:        "快三-长龙顺",
+  ks_dragon_break:  "快三-长龙反(打龙)",
+  ai_trend:         "通用-算法1",
+  steady_ai:        "通用-算法2",
+  adaptive_switch:  "通用-算法3",
 };
 
 const ALGO_DESC: Record<string, string> = {
-  ks_follow:       "跟上期 = 押上一局相同方向（顺势，适合龙局）",
-  ks_reverse:      "反上期 = 押上一局反方向（适合震荡交替局）",
-  ks_bb:           "AABB = 两期相同则顺，两期不同则反（自动识别节奏）",
-  ks_smart:        "均值回归 = 近5期某方向≥4次时押反，其余跟3期多数",
-  ai_trend:        "通用1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
-  steady_ai:       "通用2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
-  adaptive_switch: "通用3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
+  ks_follow:        "跟上期 = 押上一局相同方向（顺势，适合龙局）",
+  ks_reverse:       "反上期 = 押上一局反方向（适合震荡交替局）",
+  ks_bb:            "AABB = 两期相同则顺，两期不同则反（自动识别节奏）",
+  ks_smart:         "均值回归 = 近5期某方向≥4次时押反，其余跟3期多数",
+  ks_dragon:        "长龙顺 = 连续3局相同才下注，押顺方向追龙；无龙跳过本局",
+  ks_dragon_break:  "长龙反 = 连续3局相同才下注，押反方向打龙；无龙跳过本局",
+  ai_trend:         "通用1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
+  steady_ai:        "通用2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
+  adaptive_switch:  "通用3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
 };
 
 const BET_OPT_LABELS: Record<string, string> = {

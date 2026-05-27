@@ -19,6 +19,7 @@ const router = Router();
 type BetStrategy = "normal" | "martingale" | "anti-martingale";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
+  | "ks_dragon" | "ks_dragon_break"
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart";
 
@@ -1114,11 +1115,41 @@ function ksSmart(session: TgSession, labels: string[]): string | null {
   return vA >= vB ? optA : optB;
 }
 
+/**
+ * 长龙顺：连续 N 局相同方向才下注，押顺方向；未检测到长龙则跳过（返回 null）
+ * 默认 minStreak=3，适合追龙策略
+ */
+function ksDragonFollow(session: TgSession, labels: string[], minStreak = 3): string | null {
+  const h = buildKsHistory(session, labels);
+  if (h.length < minStreak) return null;
+  const last = h[h.length - 1]!;
+  for (let i = h.length - 2; i >= h.length - minStreak; i--) {
+    if (h[i] !== last) return null; // 没有足够长的连续龙，跳过本局
+  }
+  return last; // 有长龙，顺龙方向下注
+}
+
+/**
+ * 长龙反：连续 N 局相同方向才下注，押反方向（打龙）；未检测到长龙则跳过（返回 null）
+ * 默认 minStreak=3，适合等待转折点策略
+ */
+function ksDragonBreak(session: TgSession, labels: string[], minStreak = 3): string | null {
+  const h = buildKsHistory(session, labels);
+  if (h.length < minStreak) return null;
+  const last = h[h.length - 1]!;
+  for (let i = h.length - 2; i >= h.length - minStreak; i--) {
+    if (h[i] !== last) return null; // 没有足够长的连续龙，跳过本局
+  }
+  return labels.find(l => l !== last) ?? last; // 有长龙，押反方向打龙
+}
+
 function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
-  if (algoId === "ks_follow")  return ksFollow(session, labels);
-  if (algoId === "ks_reverse") return ksReverse(session, labels);
-  if (algoId === "ks_bb")     return ksBB(session, labels);
-  if (algoId === "ks_smart")  return ksSmart(session, labels);
+  if (algoId === "ks_follow")        return ksFollow(session, labels);
+  if (algoId === "ks_reverse")       return ksReverse(session, labels);
+  if (algoId === "ks_bb")            return ksBB(session, labels);
+  if (algoId === "ks_smart")         return ksSmart(session, labels);
+  if (algoId === "ks_dragon")        return ksDragonFollow(session, labels);
+  if (algoId === "ks_dragon_break")  return ksDragonBreak(session, labels);
   if (algoId === "ai_trend")       return decideAI(session);
   if (algoId === "steady_ai")      return decideSteady(session);
   if (algoId === "adaptive_switch") return decideSteady(session); // 大小阶段用升级版AI决策
@@ -2192,15 +2223,23 @@ async function runKuaisanAutoBet(session: TgSession): Promise<void> {
   const optLabels = (session.cfg.kuaisanBetOptions ?? ["big", "small"]).map(o => KS_BET_LABELS[o] ?? o);
   const labels = optLabels.length >= 2 ? optLabels : ["大", "小"];
   // signal_follow/signal_reverse need a live signal text; they always return null for kuaisan.
-  // Fall back to ks_bb for those, and to ai_trend for any other null result.
+  // Fall back to ks_bb for those algos only.
   const SIGNAL_ALGOS: AlgorithmId[] = ["signal_follow", "signal_reverse"];
+  // Dragon algos intentionally return null when no streak — respect that and skip.
+  const SKIP_ON_NULL_ALGOS: AlgorithmId[] = ["ks_dragon", "ks_dragon_break"];
   const rawAlgoId = (session.cfg.algorithms[session.algIndex % Math.max(session.cfg.algorithms.length, 1)] ?? "ai_trend") as AlgorithmId;
   const algoId: AlgorithmId = SIGNAL_ALGOS.includes(rawAlgoId) ? "ks_bb" : rawAlgoId;
   // Override betOptions so all internal algo functions use kuaisan bet labels
   const ksSession: TgSession = { ...session, cfg: { ...session.cfg, betOptions: (session.cfg.kuaisanBetOptions ?? ["big", "small"]) as BetOption[] } };
   let direction = runAlgo(ksSession, algoId, labels);
   if (!direction) {
-    // Final fallback: ks_bb never returns null, but guard just in case
+    if (SKIP_ON_NULL_ALGOS.includes(algoId)) {
+      // 长龙算法：本局无长龙，主动跳过，不下注
+      logger.info({ algoId }, "[ks] no streak detected, skipping this round");
+      session.betPlacedThisCycle = false; // 未下注，下局仍可正常检测
+      return;
+    }
+    // 其他算法返回 null 属于意外，用 ks_bb 兜底
     direction = ksBB(ksSession, labels) ?? labels[Math.floor(Math.random() * labels.length)] ?? "大";
     logger.warn({ algoId, labels }, "[ks] algorithm returned null, fell back to ks_bb");
   }
