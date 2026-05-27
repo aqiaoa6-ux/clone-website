@@ -7,7 +7,7 @@
   "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
-  "watchGroupId": "-1002177529387",
+  "watchGroupId": "-1003294529818",
   "cfg": {
     "autoBet": false,
     "betAmount": 100,
@@ -32,11 +32,7 @@
       "small-odd",
       "big-even"
     ],
-    "algorithms": [
-      "ks_bb",
-      "ks_reverse",
-      "ks_follow"
-    ],
+    "algorithms": [],
     "odds": 1.998,
     "oddsBigOdd": 4.32,
     "oddsBigEven": 3.71,
@@ -63,8 +59,8 @@
   },
   "canadaGroupId": "t.me/fgyl20",
   "canadaCfg": {
-    "autoBet": true,
-    "betAmount": 100,
+    "autoBet": false,
+    "betAmount": 1000,
     "minStreak": 3,
     "dimension": "big_small",
     "strategy": "normal",

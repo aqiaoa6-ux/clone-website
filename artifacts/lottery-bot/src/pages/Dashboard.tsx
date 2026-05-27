@@ -778,17 +778,11 @@ export default function Dashboard() {
   const [debugLoading, setDebugLoading] = useState(false);
   // Canada game state
   const [canadaStatus, setCanadaStatus] = useState<CanadaStatus | null>(null);
-  const [canadaResults, setCanadaResults] = useState<CanadaResultItem[]>([]);
   const [canadaBets, setCanadaBets] = useState<BetRecord[]>([]);
-  const [canadaGroupLink, setCanadaGroupLink] = useState("");
-  const [canadaAutoBet, setCanadaAutoBet] = useState(false);
-  const [canadaBetAmount, setCanadaBetAmount] = useState(100);
-  const [canadaMinStreak, setCanadaMinStreak] = useState(3);
-  const [canadaDimension, setCanadaDimension] = useState<"big_small" | "odd_even">("big_small");
-  const [canadaStrategy, setCanadaStrategy] = useState<"normal" | "martingale">("normal");
-  const [canadaSaving, setCanadaSaving] = useState(false);
   const [canadaClearLoading, setCanadaClearLoading] = useState(false);
   const [canadaExpanded, setCanadaExpanded] = useState(false);
+  // 近期结果从 fengpan draw:new SSE 实时积累（无需独立轮询）
+  const [recentDraws, setRecentDraws] = useState<{num:number; big:boolean; odd:boolean; label:string}[]>([]);
 
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
@@ -808,6 +802,16 @@ export default function Dashboard() {
       const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
       nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
       setDraw({ term: latest.term + (closeMs < now ? 1 : 0), sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3, r3: latest.r3, nextCloseTime: nextCloseRef.current });
+      // 从历史期数提取近期结果（已结束的期）
+      const past = items.filter((it: {sum1?: number; sum2?: number; sum3?: number; closeTime?: number}) =>
+        it.sum1 != null && it.sum2 != null && it.sum3 != null && (it.closeTime ?? 0) < now
+      );
+      const draws = past.slice(0, 20).map((it) => {
+        const num = (it.sum1 as number) + (it.sum2 as number) + (it.sum3 as number);
+        const big = num >= 14; const odd = num % 2 === 1;
+        return { num, big, odd, label: `${big ? "大" : "小"}${odd ? "单" : "双"}` };
+      });
+      if (draws.length) setRecentDraws(draws);
     } catch { /* ignore */ }
   }, []);
 
@@ -844,12 +848,6 @@ export default function Dashboard() {
     try {
       const s = await api.canada.status();
       setCanadaStatus(s);
-      if (s.results?.length) setCanadaResults(s.results);
-      setCanadaAutoBet(s.cfg?.autoBet ?? false);
-      setCanadaBetAmount(s.cfg?.betAmount ?? 100);
-      setCanadaMinStreak(s.cfg?.minStreak ?? 3);
-      setCanadaDimension(s.cfg?.dimension ?? "big_small");
-      setCanadaStrategy(s.cfg?.strategy ?? "normal");
     } catch { /* ignore */ }
   }, []);
 
@@ -880,7 +878,14 @@ export default function Dashboard() {
           nextCloseRef.current = targetClose > nowT ? targetClose : nowT + cycleMs;
           if (ev.nextCloseTime as number) nextCloseRef.current = ev.nextCloseTime as number;
           const term = ev.term as number;
-          setDraw({ term: term + (closeMs < nowT ? 1 : 0), sum1: ev.sum1 as number, sum2: ev.sum2 as number, sum3: ev.sum3 as number, r3: ev.r3 as string, nextCloseTime: nextCloseRef.current });
+          const s1 = ev.sum1 as number, s2 = ev.sum2 as number, s3 = ev.sum3 as number;
+          setDraw({ term: term + (closeMs < nowT ? 1 : 0), sum1: s1, sum2: s2, sum3: s3, r3: ev.r3 as string, nextCloseTime: nextCloseRef.current });
+          // 追加到近期结果（同一份数据，不需要单独轮询）
+          if (s1 != null && s2 != null && s3 != null) {
+            const num = s1 + s2 + s3;
+            const big = num >= 14; const odd = num % 2 === 1;
+            setRecentDraws(prev => [{ num, big, odd, label: `${big ? "大" : "小"}${odd ? "单" : "双"}` }, ...prev].slice(0, 30));
+          }
         }
         if (ev.type === "timer:scheduled") {
           if (ev.fireAt) setNextBetAt(ev.fireAt as number);
@@ -927,8 +932,6 @@ export default function Dashboard() {
           setCanadaStatus(prev => prev ? { ...prev, phase: ev.phase as string } : prev);
         }
         if (ev.type === "canada:result") {
-          const r = (ev.result as CanadaResultItem);
-          setCanadaResults(prev => [r, ...prev].slice(0, 30));
           setCanadaStatus(prev => prev ? { ...prev, phase: "closed" } : prev);
           void fetchCanadaBets();
           void fetchCanadaStatus();
@@ -1392,7 +1395,7 @@ export default function Dashboard() {
                 <div className="flex items-center gap-2">
                   <span className="text-base">🍁</span>
                   <span className="text-white font-semibold text-sm">加拿大顺龙</span>
-                  {canadaStatus?.canadaGroupId && (
+                  {canadaStatus?.phase && canadaStatus.phase !== "idle" && (
                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
                       canadaStatus.phase === "betting" ? "bg-emerald-500/20 text-emerald-400" :
                       canadaStatus.phase === "closed" ? "bg-red-500/20 text-red-400" :
@@ -1401,7 +1404,7 @@ export default function Dashboard() {
                       {canadaStatus.phase === "betting" ? "下注中" : canadaStatus.phase === "closed" ? "已封盘" : "等待"}
                     </span>
                   )}
-                  {canadaAutoBet && canadaStatus?.canadaGroupId && (
+                  {canadaStatus?.cfg?.autoBet && (
                     <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
                       顺龙中
@@ -1443,17 +1446,17 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* Recent results */}
-                  {canadaResults.length > 0 && (
+                  {/* 近期结果 — 直接用 fengpan draw:new 数据，无需额外轮询 */}
+                  {recentDraws.length > 0 && (
                     <div>
-                      <div className="text-xs text-slate-500 mb-2">近期结果（{canadaStatus?.cfg.minStreak ?? 3}连触发）</div>
+                      <div className="text-xs text-slate-500 mb-2">近期结果（{canadaStatus?.cfg?.minStreak ?? 3}连触发）</div>
                       <div className="flex flex-wrap gap-1.5">
-                        {canadaResults.slice(0, 15).map((r, i) => (
+                        {recentDraws.slice(0, 15).map((r, i) => (
                           <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
                             r.big ? "bg-red-500/15 text-red-400 border-red-500/25" : "bg-blue-500/15 text-blue-400 border-blue-500/25"
                           }`}>
                             {r.label}
-                            <span className="text-slate-600 ml-1 text-[9px]">{r.number}</span>
+                            <span className="text-slate-600 ml-1 text-[9px]">{r.num}</span>
                           </span>
                         ))}
                       </div>
