@@ -191,6 +191,7 @@ interface PersistedData {
   watchGroupId?: string;
   cfg?: Partial<BetCfg>;
   canadaCfg?: Partial<CanadaCfg>;
+  kuaisanResults?: KuaisanResult[];
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -487,6 +488,7 @@ function saveSession(session: TgSession): void {
       watchGroupId: session.watchGroupId,
       cfg: session.cfg,
       canadaCfg: session.canadaCfg,
+      kuaisanResults: session.kuaisanResults.slice(0, 30),
     };
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
   } catch { /* ignore */ }
@@ -670,7 +672,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       algoStats: {},
       recentResults: [],
       chatLog: [],
-      diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
+      diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
       canadaCfg: data.canadaCfg ? { ...DEFAULT_CANADA_CFG, ...data.canadaCfg } : { ...DEFAULT_CANADA_CFG },
       canadaCurrentTier: 0,
@@ -2339,6 +2341,7 @@ async function processKuaisanMessage(session: TgSession, text: string, msgId: nu
     if (!session.kuaisanResults) session.kuaisanResults = [];
     session.kuaisanResults.unshift(result);
     if (session.kuaisanResults.length > 50) session.kuaisanResults.pop();
+    saveSession(session); // 持久化历史，重启后 ks_dragon 等算法立即可用
     pushEvent(session, "kuaisan:result", {
       dice: result.dice, sum: result.sum, label: result.label,
       big: result.big, odd: result.odd, dragon: result.dragon, tiger: result.tiger, leopard: result.leopard,
