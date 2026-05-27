@@ -938,6 +938,9 @@ export default function Dashboard() {
           setCanadaStatus(prev => prev ? { ...prev, phase: "closed" } : prev);
           void fetchCanadaBets();
           void fetchCanadaStatus();
+          // TG 收到开奖消息 → 立刻刷 fengpan，3s 后再刷一次（fengpan 有时略有延迟）
+          void fetchDraw();
+          setTimeout(() => void fetchDraw(), 3000);
         }
         if (ev.type === "canada:bet_new" || ev.type === "canada:bet_settled") {
           void fetchCanadaBets();
@@ -1449,17 +1452,17 @@ export default function Dashboard() {
                     </div>
                   )}
 
-                  {/* 近期结果 — 用 TG 群实时消息（canada:result SSE），比 fengpan 轮询更快 */}
-                  {(canadaStatus?.results?.length ?? 0) > 0 && (
+                  {/* 近期结果 — fengpan 数据（与走势页同源），TG canada:result SSE 触发实时刷新 */}
+                  {recentDraws.length > 0 && (
                     <div>
                       <div className="text-xs text-slate-500 mb-2">近期结果（{canadaStatus?.cfg?.minStreak ?? 3}连触发）</div>
                       <div className="flex flex-wrap gap-1.5">
-                        {canadaStatus!.results.slice(0, 20).map((r, i) => (
+                        {recentDraws.slice(0, 20).map((r, i) => (
                           <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
                             r.big ? "bg-red-500/15 text-red-400 border-red-500/25" : "bg-blue-500/15 text-blue-400 border-blue-500/25"
                           }`}>
                             {r.label}
-                            <span className="text-slate-600 ml-1 text-[9px]">{r.number}</span>
+                            <span className="text-slate-600 ml-1 text-[9px]">{r.num}</span>
                           </span>
                         ))}
                       </div>
