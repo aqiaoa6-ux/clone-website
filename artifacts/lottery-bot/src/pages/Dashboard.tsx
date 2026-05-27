@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type TgStatus, type BetRecord, type TgGroup, type CanadaStatus } from "../lib/api";
+import { api, type TgStatus, type BetRecord, type TgGroup } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -22,8 +22,6 @@ const ALGO_LABELS: Record<string, string> = {
   ks_reverse:       "快三-反上期",
   ks_bb:            "快三-AABB",
   ks_smart:         "快三-均值回归",
-  ks_dragon:        "快三-长龙顺",
-  ks_dragon_break:  "快三-长龙反(打龙)",
   ai_trend:         "通用-算法1",
   steady_ai:        "通用-算法2",
   adaptive_switch:  "通用-算法3",
@@ -34,8 +32,6 @@ const ALGO_DESC: Record<string, string> = {
   ks_reverse:       "反上期 = 押上一局反方向（适合震荡交替局）",
   ks_bb:            "AABB = 两期相同则顺，两期不同则反（自动识别节奏）",
   ks_smart:         "均值回归 = 近5期某方向≥4次时押反，其余跟3期多数",
-  ks_dragon:        "长龙顺 = 连续3局相同才下注，押顺方向追龙；无龙跳过本局",
-  ks_dragon_break:  "长龙反 = 连续3局相同才下注，押反方向打龙；无龙跳过本局",
   ai_trend:         "通用1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
   steady_ai:        "通用2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
   adaptive_switch:  "通用3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
@@ -251,11 +247,10 @@ function GroupSetupCard({ groups, onDone }: { groups: TgGroup[]; onDone: () => v
 
 // ─── Settings Drawer ──────────────────────────────────────────────────────────
 
-function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
+function SettingsDrawer({ status, onClose, onSave }: {
   status: TgStatus;
   onClose: () => void;
   onSave: (cfg: Record<string, unknown>) => Promise<void>;
-  canadaStatus?: CanadaStatus | null;
 }) {
   const DEFAULT_LEVELS = [100, 200, 400, 800, 1600, 3200];
   const initLevels = status.amountLevels?.length === 6 ? status.amountLevels : DEFAULT_LEVELS;
@@ -288,15 +283,6 @@ function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
   const [showChase, setShowChase] = useState(status.enableChase ?? false);
   const [saving, setSaving] = useState(false);
 
-  // Canada 顺龙 drawer state
-  const [caAutoBet, setCaAutoBet] = useState(canadaStatus?.cfg.autoBet ?? false);
-  const [caDim, setCaDim] = useState<"big_small" | "odd_even">(canadaStatus?.cfg.dimension ?? "big_small");
-  const [caStreak, setCaStreak] = useState(canadaStatus?.cfg.minStreak ?? 3);
-  const defaultTiers = canadaStatus?.cfg.amountTiers ?? [100, 200, 400];
-  const [caTiers, setCaTiers] = useState<[string, string, string]>([
-    String(defaultTiers[0]), String(defaultTiers[1]), String(defaultTiers[2]),
-  ]);
-  const [showCaSettings, setShowCaSettings] = useState(false);
 
   const addChase = () => setChaseNumbers(prev => [...prev, { num: "", amount: "" }]);
   const removeChase = (i: number) => setChaseNumbers(prev => prev.filter((_, idx) => idx !== i));
@@ -331,15 +317,6 @@ function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
         kuaisanBetOptions: kuaisanOpts,
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
-      // 加拿大模式同步保存顺龙配置
-      if (gameMode === "lottery") {
-        await api.canada.config({
-          autoBet: caAutoBet,
-          dimension: caDim,
-          minStreak: caStreak,
-          amountTiers: [Number(caTiers[0]) || 100, Number(caTiers[1]) || 200, Number(caTiers[2]) || 400],
-        });
-      }
       onClose();
     } finally { setSaving(false); }
   };
@@ -460,86 +437,6 @@ function SettingsDrawer({ status, onClose, onSave, canadaStatus }: {
                 )}
               </div>
 
-              {/* ── 顺龙配置（折叠） ── */}
-              <div className={`rounded-xl border-2 transition-colors mt-1 ${caAutoBet ? "border-emerald-500/50 bg-emerald-500/5" : "border-[#252a3d]"}`}>
-                <button
-                  type="button"
-                  onClick={() => setShowCaSettings(v => !v)}
-                  className="w-full flex items-center justify-between px-3 py-2.5"
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm">🐉</span>
-                    <span className={`text-xs font-medium ${caAutoBet ? "text-emerald-300" : "text-slate-400"}`}>顺龙自动下注</span>
-                    {caAutoBet && (
-                      <span className="text-[10px] bg-emerald-500/20 text-emerald-400 rounded px-1.5 py-0.5">
-                        {caStreak}连 · {caDim === "big_small" ? "大/小" : "单/双"} · {caTiers[0]}/{caTiers[1]}/{caTiers[2]}
-                      </span>
-                    )}
-                  </div>
-                  <span className={`text-slate-500 text-xs transition-transform duration-200 ${showCaSettings ? "rotate-180" : ""}`}>▼</span>
-                </button>
-                {showCaSettings && (
-                  <div className="px-3 pb-3 space-y-3 border-t border-[#252a3d] pt-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-400">启用顺龙自动下注</span>
-                      <button
-                        type="button"
-                        onClick={() => setCaAutoBet(v => !v)}
-                        className={`relative w-11 h-6 rounded-full transition-colors ${caAutoBet ? "bg-emerald-600" : "bg-[#252a3d]"}`}
-                      >
-                        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${caAutoBet ? "left-5" : "left-0.5"}`} />
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className={labelCls}>检测维度</label>
-                        <div className="flex gap-1">
-                          {(["big_small", "odd_even"] as const).map(d => (
-                            <button key={d} type="button" onClick={() => setCaDim(d)}
-                              className={`flex-1 py-1.5 text-[11px] rounded-lg border transition ${caDim === d ? "bg-blue-600 border-blue-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50"}`}>
-                              {d === "big_small" ? "大/小" : "单/双"}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div>
-                        <label className={labelCls}>触发连龙数</label>
-                        <div className="flex gap-1">
-                          {[3, 4, 5].map(n => (
-                            <button key={n} type="button" onClick={() => setCaStreak(n)}
-                              className={`flex-1 py-1.5 text-[11px] rounded-lg border transition ${caStreak === n ? "bg-purple-600 border-purple-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-purple-500/50"}`}>
-                              {n}连
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="col-span-2">
-                        <label className={labelCls}>投注金额（3层：不中倍投，中归第1层）</label>
-                        <div className="flex gap-1.5">
-                          {([0, 1, 2] as const).map(i => (
-                            <div key={i} className="flex-1">
-                              <input
-                                type="number"
-                                value={caTiers[i]}
-                                onChange={e => setCaTiers(prev => {
-                                  const next = [...prev] as [string, string, string];
-                                  next[i] = e.target.value;
-                                  return next;
-                                })}
-                                className={inputCls}
-                                min="1"
-                                placeholder={["第1层", "第2层", "第3层"][i]}
-                              />
-                              <span className="block text-[10px] text-slate-600 mt-0.5 text-center">{["第1层", "第2层", "第3层"][i]}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-[10px] text-slate-600">连续 {caStreak} 期出现相同{caDim === "big_small" ? "大/小" : "单/双"}时跟注，使用当前监听群组，无需额外配置</p>
-                  </div>
-                )}
-              </div>
             </div>
             )}
             <div>
@@ -783,15 +680,6 @@ export default function Dashboard() {
   const [showChatLog, setShowChatLog] = useState(false);
   const [debugResult, setDebugResult] = useState<string | null>(null);
   const [debugLoading, setDebugLoading] = useState(false);
-  // Canada streak state
-  const [canadaStatus, setCanadaStatus] = useState<CanadaStatus | null>(null);
-  const [caCurrentTier, setCaCurrentTier] = useState(0);
-  const [caCurrentBet, setCaCurrentBet] = useState(100);
-  const caBetRef = useRef<{ term: number; direction: string } | null>(null);
-  const [caBetActive, setCaBetActive] = useState<{ direction: string } | null>(null);
-  // 近期结果从 fengpan draw:new SSE 实时积累（无需独立轮询）
-  const [recentDraws, setRecentDraws] = useState<{num:number; big:boolean; odd:boolean; label:string}[]>([]);
-
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
 
@@ -810,16 +698,6 @@ export default function Dashboard() {
       const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
       nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
       setDraw({ term: latest.term + (closeMs < now ? 1 : 0), sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3, r3: latest.r3, nextCloseTime: nextCloseRef.current });
-      // 从历史期数提取近期结果（已结束的期）
-      const past = items.filter((it: {sum1?: number; sum2?: number; sum3?: number; closeTime?: number}) =>
-        it.sum1 != null && it.sum2 != null && it.sum3 != null && (it.closeTime ?? 0) < now
-      );
-      const draws = past.slice(0, 20).map((it) => {
-        const num = (it.sum1 as number) + (it.sum2 as number) + (it.sum3 as number);
-        const big = num >= 14; const odd = num % 2 === 1;
-        return { num, big, odd, label: `${big ? "大" : "小"}${odd ? "单" : "双"}` };
-      });
-      if (draws.length) setRecentDraws(draws);
     } catch { /* ignore */ }
   }, []);
 
@@ -851,16 +729,6 @@ export default function Dashboard() {
       setBets(b);
     } catch { /* ignore */ }
   }, []);
-
-  const fetchCanadaStatus = useCallback(async () => {
-    try {
-      const s = await api.canada.status();
-      setCanadaStatus(s);
-      if (s.currentTier !== undefined) setCaCurrentTier(s.currentTier);
-      if (s.currentBet !== undefined) setCaCurrentBet(s.currentBet);
-    } catch { /* ignore */ }
-  }, []);
-
 
   // ─── SSE stream ──────────────────────────────────────────────────────────
 
@@ -931,7 +799,7 @@ export default function Dashboard() {
     };
 
     return () => { es.close(); sseRef.current = null; };
-  }, [fetchBets, fetchStatus, fetchCanadaStatus]);
+  }, [fetchBets, fetchStatus]);
 
   // ─── Init & polling ──────────────────────────────────────────────────────
 
@@ -942,10 +810,8 @@ export default function Dashboard() {
     const statusInterval = setInterval(() => void fetchStatus(), 10_000);
     const drawInterval = setInterval(() => void fetchDraw(), 15_000);
     const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
-    void fetchCanadaStatus();
-    const canadaInterval = setInterval(() => void fetchCanadaStatus(), 15_000);
-    return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); clearInterval(canadaInterval); };
-  }, [fetchStatus, fetchBets, fetchDraw, fetchCanadaStatus]);
+    return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
+  }, [fetchStatus, fetchBets, fetchDraw]);
 
   // ─── Derived state ───────────────────────────────────────────────────────
 
@@ -963,52 +829,6 @@ export default function Dashboard() {
     if (b.won === true) { curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
     else if (b.won === false) curStreak = 0;
   }
-
-  // ─── Canada streak detection ─────────────────────────────────────────────
-
-  // Settlement: when draw.term changes and there was a pending bet
-  const prevCaTermRef = useRef(0);
-  useEffect(() => {
-    const term = draw?.term ?? 0;
-    if (!term || prevCaTermRef.current === term) return;
-    const prev = prevCaTermRef.current;
-    prevCaTermRef.current = term;
-    if (!prev) return; // first load, skip
-    const bet = caBetRef.current;
-    if (!bet || recentDraws.length === 0) { caBetRef.current = null; setCaBetActive(null); return; }
-    // recentDraws[0] is the last closed result (the one we bet on)
-    const result = recentDraws[0]!;
-    const { direction } = bet;
-    const won = (direction === "大" && result.big) || (direction === "小" && !result.big) ||
-                (direction === "单" && result.odd) || (direction === "双" && !result.odd);
-    caBetRef.current = null;
-    setCaBetActive(null);
-    void api.canada.settle({ won }).then(s => {
-      setCaCurrentTier(s.currentTier);
-      setCaCurrentBet(s.currentBet);
-    });
-  }, [draw?.term]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Streak detection: when recentDraws changes, check for streak and auto-bet
-  useEffect(() => {
-    if (!canadaStatus?.cfg?.autoBet) return;
-    const cfg = canadaStatus.cfg;
-    if (caBetRef.current) return; // already bet this period
-    if (!draw?.term) return;
-    if (recentDraws.length < cfg.minStreak) return;
-    const getDir = (r: { big: boolean; odd: boolean }) =>
-      cfg.dimension === "big_small" ? (r.big ? "大" : "小") : (r.odd ? "单" : "双");
-    const last = getDir(recentDraws[0]!);
-    const hasStreak = recentDraws.slice(0, cfg.minStreak).every(r => getDir(r) === last);
-    if (!hasStreak) return;
-    const direction = last;
-    caBetRef.current = { term: draw.term, direction };
-    setCaBetActive({ direction });
-    void api.canada.bet({ direction }).then(r => {
-      setCaCurrentBet(r.amount);
-      setCaCurrentTier(r.tier);
-    }).catch(() => { caBetRef.current = null; setCaBetActive(null); });
-  }, [recentDraws]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ─── Actions ─────────────────────────────────────────────────────────────
 
@@ -1418,42 +1238,6 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* ── Canada Streak Panel ── */}
-            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl px-5 py-4">
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-base">🍁</span>
-                  <span className="text-white text-sm font-semibold">顺龙追注</span>
-                  {canadaStatus?.cfg?.autoBet ? (
-                    caBetActive ? (
-                      <span className="inline-flex items-center gap-1 text-[10px] bg-emerald-500/20 text-emerald-400 rounded px-1.5 py-0.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse inline-block" />
-                        已追 {caBetActive.direction} · 第{caCurrentTier + 1}层 {caCurrentBet}元
-                      </span>
-                    ) : (
-                      <span className="text-[10px] bg-slate-500/20 text-slate-400 rounded px-1.5 py-0.5">等待连龙</span>
-                    )
-                  ) : (
-                    <span className="text-[10px] text-slate-600">已关闭</span>
-                  )}
-                </div>
-              </div>
-              {canadaStatus?.cfg && (
-                <div className="flex flex-wrap gap-1.5 text-[11px]">
-                  <span className="bg-[#0f1220] border border-[#252a3d] rounded px-2 py-0.5 text-slate-400">
-                    {canadaStatus.cfg.dimension === "big_small" ? "大/小" : "单/双"}
-                  </span>
-                  <span className="bg-[#0f1220] border border-[#252a3d] rounded px-2 py-0.5 text-slate-400">
-                    {canadaStatus.cfg.minStreak}连触发
-                  </span>
-                  <span className="bg-[#0f1220] border border-[#252a3d] rounded px-2 py-0.5 text-slate-400">
-                    {(canadaStatus.cfg.amountTiers ?? [100, 200, 400]).join("/")}元
-                  </span>
-                  <span className="text-slate-600 self-center">· 在设置中修改</span>
-                </div>
-              )}
-            </div>
-
             {/* TG Info */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
               <div className="flex justify-between items-center">
@@ -1477,7 +1261,7 @@ export default function Dashboard() {
 
       {/* Settings Drawer */}
       {showSettings && status && (
-        <SettingsDrawer status={status} onClose={() => setShowSettings(false)} onSave={saveCfg} canadaStatus={canadaStatus} />
+        <SettingsDrawer status={status} onClose={() => setShowSettings(false)} onSave={saveCfg} />
       )}
 
       {/* Group Switcher */}

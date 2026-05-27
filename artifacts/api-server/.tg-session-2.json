@@ -1,15 +1,15 @@
 {
   "sessionString": "1BQANOTEuMTA4LjU2LjE0NQG7MARoAkkCxj/PNpWYgc1MWxc0N0hcZb6WQuvVxmDZni2v2eV2JssP/OZTt7igdBOc2Jl8VYGPNAAddxGE486PC+T3fwM1oWPIVntD2aA8FXizacd5dzsu2FklskYMGl35BDg4UwyFA8sqLFq+gs6pM9PTw90UUxUH0VxeAHkrwSJeV2WQK8/wwR4WOjVmQRD4ZfAfrJlNSHS0ZTpKKCt/3DxEjV7tiCqZhJCHoaUA+CPMtv8rMPAyc6v/guHTWEikE0IXikXZq+6BGUyupCMY6wtSvGywuWwDTq3FxnccKCXbkHNjAx5ksHc18q0aTfN6BHOWWFrGeiNX218YysNagg==",
   "phone": "855 96 786 6238",
-  "balance": 224984.494,
-  "todayPnl": 0,
+  "balance": 214984.494,
+  "todayPnl": -10000,
   "todayResetAt": 1779840000000,
-  "sessionPnl": 0,
+  "sessionPnl": -10000,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
-  "watchGroupId": "-1002177529387",
+  "watchGroupId": "-1003294529818",
   "cfg": {
-    "autoBet": true,
+    "autoBet": false,
     "betAmount": 100,
     "strategy": "normal",
     "betMultiplier": 2,
@@ -32,9 +32,7 @@
       "small-odd",
       "big-even"
     ],
-    "algorithms": [
-      "ks_dragon"
-    ],
+    "algorithms": [],
     "odds": 1.998,
     "oddsBigOdd": 4.32,
     "oddsBigEven": 3.71,
@@ -53,25 +51,122 @@
     "enableChase": false,
     "dualGroupMode": false,
     "killGroupMode": false,
-    "gameMode": "kuaisan",
-    "kuaisanBetOptions": [
-      "big",
-      "small"
-    ]
+    "gameMode": "lottery",
+    "kuaisanBetOptions": []
   },
   "canadaCfg": {
-    "autoBet": false,
+    "autoBet": true,
     "amountTiers": [
       20000,
       40000,
       80000
     ],
-    "minStreak": 3,
+    "minStreak": 4,
     "dimension": "big_small",
     "stopLoss": 0,
     "targetProfit": 0,
     "betAmount": 1000,
     "strategy": "normal",
     "multiplier": 2
-  }
+  },
+  "kuaisanResults": [
+    {
+      "dice": [
+        6,
+        3,
+        1
+      ],
+      "sum": 10,
+      "big": false,
+      "odd": false,
+      "leopard": false,
+      "dragon": true,
+      "tiger": false,
+      "label": "小双龙"
+    },
+    {
+      "dice": [
+        5,
+        1,
+        1
+      ],
+      "sum": 7,
+      "big": false,
+      "odd": true,
+      "leopard": false,
+      "dragon": true,
+      "tiger": false,
+      "label": "小单龙"
+    },
+    {
+      "dice": [
+        6,
+        2,
+        6
+      ],
+      "sum": 14,
+      "big": true,
+      "odd": false,
+      "leopard": false,
+      "dragon": false,
+      "tiger": false,
+      "label": "大双和"
+    },
+    {
+      "dice": [
+        4,
+        4,
+        6
+      ],
+      "sum": 14,
+      "big": true,
+      "odd": false,
+      "leopard": false,
+      "dragon": false,
+      "tiger": true,
+      "label": "大双虎"
+    },
+    {
+      "dice": [
+        4,
+        2,
+        3
+      ],
+      "sum": 9,
+      "big": false,
+      "odd": true,
+      "leopard": false,
+      "dragon": true,
+      "tiger": false,
+      "label": "小单龙"
+    },
+    {
+      "dice": [
+        6,
+        3,
+        4
+      ],
+      "sum": 13,
+      "big": true,
+      "odd": true,
+      "leopard": false,
+      "dragon": true,
+      "tiger": false,
+      "label": "大单龙"
+    },
+    {
+      "dice": [
+        1,
+        2,
+        2
+      ],
+      "sum": 5,
+      "big": false,
+      "odd": true,
+      "leopard": false,
+      "dragon": false,
+      "tiger": true,
+      "label": "小单虎"
+    }
+  ]
 }
