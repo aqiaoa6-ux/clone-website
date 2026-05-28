@@ -247,10 +247,6 @@ const steps: Step[] = [
             </div>
           </div>
         </div>
-        <div className="bg-slate-500/10 border border-slate-500/30 rounded-xl px-3 py-2.5 flex gap-2">
-          <span className="flex-shrink-0">💡</span>
-          <span className="text-slate-400 text-xs">余额可手动更新，或绑定 KKPay 账号后自动同步。</span>
-        </div>
       </div>
     ),
   },
