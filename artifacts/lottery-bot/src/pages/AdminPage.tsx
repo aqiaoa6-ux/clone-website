@@ -149,6 +149,9 @@ export default function AdminPage() {
     } finally { setSettingWebhook(false); }
   };
 
+  const [fulfillingOrder, setFulfillingOrder] = useState<string | null>(null);
+  const [fulfillResult, setFulfillResult] = useState<Record<string, string>>({});
+
   const loadShop = async () => {
     setLoadingShop(true);
     try {
@@ -159,6 +162,21 @@ export default function AdminPage() {
       setShopCfg(cfg);
       setShopOrders(orders.orders);
     } catch { /* ignore */ } finally { setLoadingShop(false); }
+  };
+
+  const manualFulfill = async (orderId: string) => {
+    setFulfillingOrder(orderId);
+    try {
+      const r = await api.post<{ ok: boolean; cardKey?: string; error?: string }>(`/admin/shop/orders/${orderId}/fulfill`, {});
+      if (r.ok && r.cardKey) {
+        setFulfillResult(p => ({ ...p, [orderId]: `✅ 已发货：${r.cardKey}` }));
+        void loadShop();
+      } else {
+        setFulfillResult(p => ({ ...p, [orderId]: `❌ ${r.error ?? "发货失败"}` }));
+      }
+    } catch (e) {
+      setFulfillResult(p => ({ ...p, [orderId]: `❌ ${e instanceof Error ? e.message : "发货失败"}` }));
+    } finally { setFulfillingOrder(null); }
   };
 
   const saveShop = async () => {
@@ -1357,6 +1375,7 @@ export default function AdminPage() {
                         };
                         const typeLabel: Record<string, string> = { daily: "天卡", weekly: "周卡", monthly: "月卡" };
                         const st = statusMap[o.status] ?? { label: o.status, cls: "text-slate-400" };
+                        const fr = fulfillResult[o.orderId];
                         return (
                           <div key={o.id} className="px-4 py-3 flex items-start gap-3">
                             <div className="flex-1 min-w-0">
@@ -1374,7 +1393,19 @@ export default function AdminPage() {
                                 <a href={o.payUrl} target="_blank" rel="noreferrer"
                                   className="text-blue-400 text-[10px] hover:underline">支付链接 ↗</a>
                               )}
+                              {fr && (
+                                <div className={`text-[10px] mt-1 font-mono break-all ${fr.startsWith("✅") ? "text-emerald-400" : "text-red-400"}`}>{fr}</div>
+                              )}
                             </div>
+                            {o.status === "pending" && (
+                              <button
+                                onClick={() => void manualFulfill(o.orderId)}
+                                disabled={fulfillingOrder === o.orderId}
+                                className="shrink-0 text-[10px] px-2 py-1 rounded-lg bg-orange-500/15 border border-orange-500/30 text-orange-400 hover:bg-orange-500/25 transition disabled:opacity-50"
+                              >
+                                {fulfillingOrder === o.orderId ? "发货..." : "手动发货"}
+                              </button>
+                            )}
                           </div>
                         );
                       })}

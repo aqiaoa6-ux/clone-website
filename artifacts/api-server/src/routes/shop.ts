@@ -80,7 +80,7 @@ async function tgSend(token: string, chatId: string | number, text: string, extr
   return tgApi(token, "sendMessage", { chat_id: chatId, text, parse_mode: "HTML", ...extra });
 }
 
-async function fulfillOrder(orderId: string): Promise<{ ok: boolean; cardKey?: string; userId?: number; tgChatId?: string | null }> {
+async function fulfillOrder(orderId: string): Promise<{ ok: boolean; cardKey?: string; userId?: number; tgChatId?: string | null; noStock?: boolean }> {
   const [order] = await db.select().from(shopOrders)
     .where(and(eq(shopOrders.orderId, orderId), eq(shopOrders.status, "pending")))
     .limit(1);
@@ -91,12 +91,19 @@ async function fulfillOrder(orderId: string): Promise<{ ok: boolean; cardKey?: s
     .limit(1);
   if (!card) {
     await db.update(shopOrders).set({ status: "no_stock" }).where(eq(shopOrders.orderId, orderId));
-    return { ok: false };
+    return { ok: false, noStock: true };
   }
 
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + cardTypeDurationMs(order.cardType as CardType));
-  await db.update(cardKeys).set({ userId: order.userId, activatedAt: now, expiresAt }).where(eq(cardKeys.id, card.id));
+  const isTgOrder = !!order.tgChatId;
+
+  if (!isTgOrder) {
+    // Web order: activate card directly to the buyer
+    const expiresAt = new Date(now.getTime() + cardTypeDurationMs(order.cardType as CardType));
+    await db.update(cardKeys).set({ userId: order.userId, activatedAt: now, expiresAt }).where(eq(cardKeys.id, card.id));
+  }
+  // TG bot orders: leave card userId=null so buyer can activate on platform manually
+
   await db.update(shopOrders).set({ status: "delivered", cardKeyId: card.id, paidAt: now }).where(eq(shopOrders.orderId, orderId));
 
   return { ok: true, cardKey: card.key, userId: order.userId, tgChatId: order.tgChatId };
@@ -173,6 +180,37 @@ router.post("/admin/shop/setup-tg-bot", requireAdmin, async (req, res) => {
   } catch (err) {
     req.log.error(err, "setup tg bot failed");
     res.status(500).json({ error: "设置失败" });
+  }
+});
+
+// ── Admin: manually fulfill an order ───────────────────────────────────────
+
+router.post("/admin/shop/orders/:orderId/fulfill", requireAdmin, async (req, res) => {
+  const orderId = String(req.params["orderId"] ?? "");
+  try {
+    const result = await fulfillOrder(orderId);
+    if (!result.ok) {
+      if (result.noStock) { res.status(409).json({ error: "库存不足，请先生成卡密" }); return; }
+      res.status(404).json({ error: "订单不存在或已完成" }); return;
+    }
+    // Attempt TG delivery if bot order
+    if (result.tgChatId && result.cardKey) {
+      try {
+        const cfg = await getConfig();
+        if (cfg?.botToken) {
+          const [order] = await db.select().from(shopOrders).where(eq(shopOrders.orderId, orderId)).limit(1);
+          const typeLabel: Record<string, string> = { daily: "天卡", weekly: "周卡", monthly: "月卡" };
+          const label = order ? (typeLabel[order.cardType] ?? order.cardType) : "";
+          await tgSend(cfg.botToken, result.tgChatId,
+            `✅ 支付成功！\n\n🎁 你的${label}卡密：\n\n<code>${result.cardKey}</code>\n\n请前往平台激活使用。`
+          );
+        }
+      } catch { /* ignore */ }
+    }
+    res.json({ ok: true, cardKey: result.cardKey });
+  } catch (err) {
+    req.log.error(err, "manual fulfill failed");
+    res.status(500).json({ error: "发货失败" });
   }
 });
 
@@ -295,14 +333,26 @@ router.get("/shop/order/:orderId", requireAuth, async (req, res) => {
 // ── KKPay notify callback (public) ─────────────────────────────────────────
 
 router.post("/shop/notify", async (req, res) => {
+  const rawBody = JSON.stringify(req.body);
+  console.info(`[shop-notify] received body: ${rawBody.substring(0, 500)}`);
   try {
     const data = req.body as Record<string, string>;
-    const orderId = data["userOrder"] ?? data["unique_id"];
-    const status = data["status"];
-    if (!orderId || status !== "success") { res.json({ status: "ignored" }); return; }
+    const orderId = data["userOrder"] ?? data["unique_id"] ?? data["out_trade_no"];
+    const status = data["status"] ?? data["trade_status"];
+    console.info(`[shop-notify] orderId=${orderId} status=${status}`);
+
+    if (!orderId || (status !== "success" && status !== "TRADE_SUCCESS" && status !== "SUCCESS")) {
+      console.info(`[shop-notify] ignored: no orderId or non-success status`);
+      res.json({ status: "ignored" });
+      return;
+    }
 
     const result = await fulfillOrder(orderId);
-    if (!result.ok || !result.cardKey) { res.json({ status: result.ok ? "ok" : "failed" }); return; }
+    console.info(`[shop-notify] fulfillOrder result: ok=${result.ok} noStock=${result.noStock} tgChatId=${result.tgChatId}`);
+    if (!result.ok || !result.cardKey) {
+      res.json({ status: result.noStock ? "no_stock" : "failed" });
+      return;
+    }
 
     // Send via TG bot if order came from bot
     if (result.tgChatId) {
@@ -315,13 +365,16 @@ router.post("/shop/notify", async (req, res) => {
           await tgSend(cfg.botToken, result.tgChatId,
             `✅ 支付成功！\n\n🎁 你的${label}卡密：\n\n<code>${result.cardKey}</code>\n\n请前往平台激活使用。`
           );
+          console.info(`[shop-notify] TG delivery sent to chatId=${result.tgChatId}`);
         }
-      } catch { /* ignore TG send failure, card is already activated */ }
+      } catch (tgErr) {
+        console.error("[shop-notify] TG send failed:", tgErr);
+      }
     }
 
     res.json({ status: "success" });
   } catch (err) {
-    console.error("shop notify error", err);
+    console.error("[shop-notify] error:", err);
     res.status(500).json({ status: "error" });
   }
 });
