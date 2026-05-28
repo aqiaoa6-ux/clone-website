@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, text as expressText } from "express";
 import { db } from "@workspace/db";
 import { cardKeys, users, shopConfig, shopOrders } from "@workspace/db";
 import { eq, isNull, and, desc } from "drizzle-orm";
@@ -332,52 +332,76 @@ router.get("/shop/order/:orderId", requireAuth, async (req, res) => {
 
 // ── KKPay notify callback (public) ─────────────────────────────────────────
 
-router.post("/shop/notify", async (req, res) => {
-  const rawBody = JSON.stringify(req.body);
-  console.info(`[shop-notify] received body: ${rawBody.substring(0, 500)}`);
-  try {
-    const data = req.body as Record<string, string>;
-    const orderId = data["userOrder"] ?? data["unique_id"] ?? data["out_trade_no"];
-    const status = data["status"] ?? data["trade_status"];
-    console.info(`[shop-notify] orderId=${orderId} status=${status}`);
-
-    if (!orderId || (status !== "success" && status !== "TRADE_SUCCESS" && status !== "SUCCESS")) {
-      console.info(`[shop-notify] ignored: no orderId or non-success status`);
-      res.json({ status: "ignored" });
-      return;
-    }
-
-    const result = await fulfillOrder(orderId);
-    console.info(`[shop-notify] fulfillOrder result: ok=${result.ok} noStock=${result.noStock} tgChatId=${result.tgChatId}`);
-    if (!result.ok || !result.cardKey) {
-      res.json({ status: result.noStock ? "no_stock" : "failed" });
-      return;
-    }
-
-    // Send via TG bot if order came from bot
-    if (result.tgChatId) {
+router.post(
+  "/shop/notify",
+  // Fallback raw-text parser: runs only when the global JSON/urlencoded parsers
+  // didn't recognise the Content-Type (req.body still undefined at that point)
+  (req, _res, next) => {
+    if (req.body !== undefined) return next();
+    expressText({ type: "*/*" })(req, _res, next);
+  },
+  async (req, res) => {
+    // Normalise body → plain object regardless of how it arrived
+    let data: Record<string, string> = {};
+    if (req.body && typeof req.body === "object") {
+      data = req.body as Record<string, string>;
+    } else if (typeof req.body === "string") {
+      const raw = req.body as string;
       try {
-        const cfg = await getConfig();
-        if (cfg?.botToken) {
-          const typeLabel: Record<string, string> = { daily: "天卡", weekly: "周卡", monthly: "月卡" };
-          const [order] = await db.select().from(shopOrders).where(eq(shopOrders.orderId, orderId)).limit(1);
-          const label = order ? (typeLabel[order.cardType] ?? order.cardType) : "";
-          await tgSend(cfg.botToken, result.tgChatId,
-            `✅ 支付成功！\n\n🎁 你的${label}卡密：\n\n<code>${result.cardKey}</code>\n\n请前往平台激活使用。`
-          );
-          console.info(`[shop-notify] TG delivery sent to chatId=${result.tgChatId}`);
-        }
-      } catch (tgErr) {
-        console.error("[shop-notify] TG send failed:", tgErr);
+        data = JSON.parse(raw) as Record<string, string>;
+      } catch {
+        try {
+          new URLSearchParams(raw).forEach((v, k) => { data[k] = v; });
+        } catch { /* ignore */ }
       }
     }
 
-    res.json({ status: "success" });
-  } catch (err) {
-    console.error("[shop-notify] error:", err);
-    res.status(500).json({ status: "error" });
+    const rawStr = JSON.stringify(data);
+    console.info(`[shop-notify] ct=${req.headers["content-type"] ?? "none"} body=${rawStr.substring(0, 500)}`);
+
+    try {
+      const orderId = data["userOrder"] ?? data["unique_id"] ?? data["out_trade_no"];
+      const status = data["status"] ?? data["trade_status"];
+      console.info(`[shop-notify] orderId=${orderId} status=${status}`);
+
+      if (!orderId || (status !== "success" && status !== "TRADE_SUCCESS" && status !== "SUCCESS")) {
+        console.info(`[shop-notify] ignored: no orderId or non-success status`);
+        res.json({ status: "ignored" });
+        return;
+      }
+
+      const result = await fulfillOrder(orderId);
+      console.info(`[shop-notify] fulfill: ok=${result.ok} noStock=${result.noStock} tgChatId=${result.tgChatId}`);
+      if (!result.ok || !result.cardKey) {
+        res.json({ status: result.noStock ? "no_stock" : "failed" });
+        return;
+      }
+
+      // Send card key via TG bot if order came from bot
+      if (result.tgChatId) {
+        try {
+          const cfg = await getConfig();
+          if (cfg?.botToken) {
+            const [order] = await db.select().from(shopOrders).where(eq(shopOrders.orderId, orderId)).limit(1);
+            const typeLabel: Record<string, string> = { daily: "天卡", weekly: "周卡", monthly: "月卡" };
+            const label = order ? (typeLabel[order.cardType] ?? order.cardType) : "";
+            await tgSend(cfg.botToken, result.tgChatId,
+              `✅ 支付成功！\n\n🎁 你的${label}卡密：\n\n<code>${result.cardKey}</code>\n\n请前往平台激活使用。`
+            );
+            console.info(`[shop-notify] TG delivered to chatId=${result.tgChatId}`);
+          }
+        } catch (tgErr) {
+          console.error("[shop-notify] TG send failed:", tgErr);
+        }
+      }
+
+      res.json({ status: "success" });
+    } catch (err) {
+      console.error("[shop-notify] error:", err);
+      res.status(500).json({ status: "error" });
+    }
   }
-});
+);
 
 // ── TG Bot webhook (public) ─────────────────────────────────────────────────
 
