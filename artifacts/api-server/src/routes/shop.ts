@@ -181,8 +181,12 @@ router.post("/shop/create-order", requireAuth, async (req, res) => {
   try {
     const cfg = await getConfig();
     if (!cfg?.enabled) { res.status(403).json({ error: "商店未开启" }); return; }
-    if (!cfg.kkpayId || !cfg.kkpaySecret || !cfg.domain) {
-      res.status(503).json({ error: "商店配置不完整，请联系管理员" }); return;
+    const missing: string[] = [];
+    if (!cfg.kkpayId) missing.push("KKPAY-ID");
+    if (!cfg.kkpaySecret) missing.push("KKPAY-SECRET");
+    if (!cfg.domain) missing.push("回调域名");
+    if (missing.length > 0) {
+      res.status(503).json({ error: `商店配置不完整，缺少：${missing.join("、")}，请联系管理员` }); return;
     }
 
     const priceMap: Record<string, string> = { daily: cfg.priceDailyUsdt, weekly: cfg.priceWeeklyUsdt, monthly: cfg.priceMonthlyUsdt };
