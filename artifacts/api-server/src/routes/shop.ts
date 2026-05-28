@@ -195,7 +195,7 @@ router.post("/shop/create-order", requireAuth, async (req, res) => {
     const orderId = randomUUID();
 
     const payload = JSON.stringify({
-      unique_id: orderId,
+      userOrder: orderId,
       name: `${cfg.productName}-${typeLabel[cardType]}`,
       amount: price,
       coin: "USDT",
@@ -249,7 +249,7 @@ router.get("/shop/order/:orderId", requireAuth, async (req, res) => {
 router.post("/shop/notify", async (req, res) => {
   try {
     const data = req.body as Record<string, string>;
-    const orderId = data["unique_id"];
+    const orderId = data["userOrder"] ?? data["unique_id"];
     const status = data["status"];
     if (!orderId || status !== "success") { res.json({ status: "ignored" }); return; }
 
@@ -351,7 +351,7 @@ router.post("/shop/tg-webhook", async (req, res) => {
       const price = priceMap[cardType]!;
 
       const payload = JSON.stringify({
-        unique_id: orderId,
+        userOrder: orderId,
         name: `${cfg.productName}-${typeLabel[cardType]}`,
         amount: price,
         coin: "USDT",
