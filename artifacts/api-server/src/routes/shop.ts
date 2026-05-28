@@ -16,6 +16,52 @@ function kkpaySign(base64Data: string, secret: string): string {
   ).toString("base64");
 }
 
+function extractKkpayPayUrl(rawText: string): { ok: true; payUrl: string } | { ok: false; error: string } {
+  const trimmed = rawText.trim();
+  // Plain URL returned directly
+  if (trimmed.startsWith("http")) return { ok: true, payUrl: trimmed };
+
+  // JSON response: { code: 10000, data: "base64..." }
+  try {
+    const json = JSON.parse(trimmed) as { code?: number; data?: unknown; message?: string };
+    if (json.code !== 10000) {
+      return { ok: false, error: `KKPay错误 (${json.code}): ${json.message ?? trimmed.substring(0, 200)}` };
+    }
+    const dataStr = String(json.data ?? "");
+    if (!dataStr) return { ok: false, error: "KKPay响应缺少data字段" };
+
+    // data might be a URL itself
+    if (dataStr.startsWith("http")) return { ok: true, payUrl: dataStr };
+
+    // data is base64-encoded JSON
+    try {
+      const decoded = Buffer.from(dataStr, "base64").toString("utf-8");
+      // Try to parse as JSON and look for URL fields
+      try {
+        const obj = JSON.parse(decoded) as Record<string, unknown>;
+        const url =
+          (obj["pay_url"] as string | undefined) ||
+          (obj["payUrl"] as string | undefined) ||
+          (obj["url"] as string | undefined) ||
+          (obj["payLink"] as string | undefined);
+        if (url && url.startsWith("http")) return { ok: true, payUrl: url };
+        // Construct from txid (common KKPay pattern)
+        const txid = (obj["txid"] as string | undefined) || (obj["tx_id"] as string | undefined);
+        if (txid) return { ok: true, payUrl: `https://pay.kkpaywallet.com/pay?txid=${txid}` };
+        return { ok: false, error: `KKPay data字段已解码但无法提取支付链接。原始内容: ${decoded.substring(0, 300)}` };
+      } catch {
+        // decoded is plain text or URL
+        if (decoded.startsWith("http")) return { ok: true, payUrl: decoded.trim() };
+        return { ok: false, error: `KKPay data解码后内容: ${decoded.substring(0, 300)}` };
+      }
+    } catch {
+      return { ok: false, error: `KKPay data字段无法解码: ${dataStr.substring(0, 200)}` };
+    }
+  } catch {
+    return { ok: false, error: `支付接口返回异常: ${trimmed.substring(0, 200)}` };
+  }
+}
+
 async function getConfig() {
   const rows = await db.select().from(shopConfig).limit(1);
   return rows[0] ?? null;
@@ -204,22 +250,24 @@ router.post("/shop/create-order", requireAuth, async (req, res) => {
     const base64Data = Buffer.from(payload).toString("base64");
     const sign = kkpaySign(base64Data, cfg.kkpaySecret);
 
-    let payUrl = "";
+    let rawText = "";
     try {
       const r = await fetch("https://api.kkpaywallet.com/merchant/payLink", {
         method: "POST",
         headers: { "Content-Type": "text/plain", "KKPAY-ID": cfg.kkpayId, "KKPAY-SIGN": sign },
         body: base64Data,
       });
-      payUrl = await r.text();
+      rawText = await r.text();
     } catch (e) {
       req.log.error(e, "kkpay paylink failed");
       res.status(502).json({ error: "支付接口请求失败，请稍后再试" }); return;
     }
 
-    if (!payUrl.startsWith("http")) {
-      res.status(502).json({ error: `支付接口返回异常: ${payUrl}` }); return;
+    const extracted = extractKkpayPayUrl(rawText);
+    if (!extracted.ok) {
+      res.status(502).json({ error: extracted.error }); return;
     }
+    const payUrl = extracted.payUrl;
 
     await db.insert(shopOrders).values({ orderId, userId: req.user!.userId, cardType, amountUsdt: price, status: "pending", payUrl });
     res.json({ ok: true, orderId, payUrl });
@@ -310,18 +358,27 @@ router.post("/shop/tg-webhook", async (req, res) => {
       ],
     };
 
-    // Handle /start or text
+    // Handle messages / commands
     if (update.message) {
       const chatId = update.message.chat.id;
       const text = (update.message.text ?? "").trim();
+      const cmd = text.split("@")[0]!.toLowerCase();
 
-      if (text.startsWith("/start")) {
+      const welcomeText = `🌑 <b>暗影飞投 - 卡密商店</b>\n\n选择要购买的卡密类型：\n\n☀️ 天卡 — ${cfg.priceDailyUsdt} USDT · 1天\n⭐ 周卡 — ${cfg.priceWeeklyUsdt} USDT · 7天\n👑 月卡 — ${cfg.priceMonthlyUsdt} USDT · 30天\n\n支持 USDT 支付，付款后自动发卡。`;
+
+      if (cmd === "/start" || cmd === "/help") {
+        await tgSend(token, chatId, welcomeText, { reply_markup: menuKeyboard });
+      } else if (cmd === "/products") {
         await tgSend(token, chatId,
-          `🌑 <b>暗影飞投 - 卡密商店</b>\n\n选择要购买的卡密类型：\n\n☀️ 天卡 — ${cfg.priceDailyUsdt} USDT · 1天\n⭐ 周卡 — ${cfg.priceWeeklyUsdt} USDT · 7天\n👑 月卡 — ${cfg.priceMonthlyUsdt} USDT · 30天\n\n支持 USDT 支付，付款后自动发卡。`,
+          `📦 <b>在售卡密</b>\n\n☀️ 天卡 — ${cfg.priceDailyUsdt} USDT（有效期 1 天）\n⭐ 周卡 — ${cfg.priceWeeklyUsdt} USDT（有效期 7 天）\n👑 月卡 — ${cfg.priceMonthlyUsdt} USDT（有效期 30 天）\n\n点击下方按钮购买：`,
           { reply_markup: menuKeyboard }
         );
+      } else if (cmd === "/orders") {
+        await tgSend(token, chatId,
+          `📋 <b>查询订单</b>\n\n支付成功后卡密会自动发送到此对话。\n\n如有疑问请联系管理员。`
+        );
       } else {
-        await tgSend(token, chatId, "请点击按钮选择购买的卡密类型 👇", { reply_markup: menuKeyboard });
+        await tgSend(token, chatId, welcomeText, { reply_markup: menuKeyboard });
       }
       return;
     }
@@ -360,23 +417,25 @@ router.post("/shop/tg-webhook", async (req, res) => {
       const base64Data = Buffer.from(payload).toString("base64");
       const sign = kkpaySign(base64Data, cfg.kkpaySecret);
 
-      let payUrl = "";
+      let rawText = "";
       try {
         const r = await fetch("https://api.kkpaywallet.com/merchant/payLink", {
           method: "POST",
           headers: { "Content-Type": "text/plain", "KKPAY-ID": cfg.kkpayId, "KKPAY-SIGN": sign },
           body: base64Data,
         });
-        payUrl = await r.text();
+        rawText = await r.text();
       } catch {
         await tgSend(token, chatId, "❌ 支付接口暂时不可用，请稍后重试。");
         return;
       }
 
-      if (!payUrl.startsWith("http")) {
-        await tgSend(token, chatId, `❌ 支付接口返回异常，请联系管理员。\n\n${payUrl}`);
+      const extracted = extractKkpayPayUrl(rawText);
+      if (!extracted.ok) {
+        await tgSend(token, chatId, `❌ ${extracted.error}`);
         return;
       }
+      const payUrl = extracted.payUrl;
 
       // Use tgUserId as a placeholder userId for bot orders (store as -tgChatId to not conflict)
       // We'll look up or create a mapping. Simplest: userId=1 (admin), deliver only via tgChatId
