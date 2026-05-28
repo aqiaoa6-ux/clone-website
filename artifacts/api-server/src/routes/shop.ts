@@ -391,7 +391,9 @@ router.post(
       const status = data["status"] ?? data["trade_status"];
       console.info(`[shop-notify] orderId=${orderId} status=${status}`);
 
-      if (!orderId || (status !== "success" && status !== "TRADE_SUCCESS" && status !== "SUCCESS")) {
+      const isSuccess = status === "success" || status === "TRADE_SUCCESS" || status === "SUCCESS"
+        || status === "paid" || status === 1 || status === "1";
+      if (!orderId || !isSuccess) {
         console.info(`[shop-notify] ignored: no orderId or non-success status`);
         res.json({ status: "ignored" });
         return;
