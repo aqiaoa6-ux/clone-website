@@ -123,14 +123,31 @@ export default function AdminPage() {
   const [promotingId, setPromotingId] = useState<number | null>(null);
 
   // ── shop tab ──
-  interface ShopCfg { kkpayId: string; kkpaySecret: string; domain: string; productName: string; priceDailyUsdt: string; priceWeeklyUsdt: string; priceMonthlyUsdt: string; enabled: boolean }
+  interface ShopCfg { kkpayId: string; kkpaySecret: string; domain: string; productName: string; priceDailyUsdt: string; priceWeeklyUsdt: string; priceMonthlyUsdt: string; enabled: boolean; botToken: string }
   interface ShopOrder { id: number; orderId: string; username: string; cardType: string; amountUsdt: string; status: string; createdAt: string; paidAt: string | null; payUrl: string | null }
-  const [shopCfg, setShopCfg] = useState<ShopCfg>({ kkpayId: "", kkpaySecret: "", domain: "", productName: "暗影飞投-卡密", priceDailyUsdt: "1", priceWeeklyUsdt: "5", priceMonthlyUsdt: "15", enabled: false });
+  const [shopCfg, setShopCfg] = useState<ShopCfg>({ kkpayId: "", kkpaySecret: "", domain: "", productName: "暗影飞投-卡密", priceDailyUsdt: "1", priceWeeklyUsdt: "5", priceMonthlyUsdt: "15", enabled: false, botToken: "" });
   const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
   const [loadingShop, setLoadingShop] = useState(false);
   const [savingShop, setSavingShop] = useState(false);
   const [shopSaved, setShopSaved] = useState(false);
   const [showShopSecret, setShowShopSecret] = useState(false);
+  const [showBotToken, setShowBotToken] = useState(false);
+  const [settingWebhook, setSettingWebhook] = useState(false);
+  const [webhookResult, setWebhookResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const setupTgBot = async () => {
+    setSettingWebhook(true); setWebhookResult(null);
+    try {
+      const r = await api.post<{ ok: boolean; webhookUrl?: string; botUsername?: string; error?: string }>("/admin/shop/setup-tg-bot", {});
+      if (r.ok) {
+        setWebhookResult({ ok: true, msg: `✅ 成功！Bot：@${r.botUsername ?? "?"} · ${r.webhookUrl ?? ""}` });
+      } else {
+        setWebhookResult({ ok: false, msg: r.error ?? "设置失败" });
+      }
+    } catch (e) {
+      setWebhookResult({ ok: false, msg: e instanceof Error ? e.message : "设置失败" });
+    } finally { setSettingWebhook(false); }
+  };
 
   const loadShop = async () => {
     setLoadingShop(true);
@@ -1283,6 +1300,35 @@ export default function AdminPage() {
                         </div>
                       ))}
                     </div>
+
+                    {/* TG Bot section */}
+                    <div className="border-t border-[#252a3d] pt-3 mt-1">
+                      <p className="text-xs text-slate-400 font-medium mb-2">✈️ Telegram 机器人（可选）</p>
+                      <p className="text-[11px] text-slate-500 mb-2 leading-relaxed">
+                        用户直接在 TG 里找机器人购买，付款后自动发卡密到 TG。
+                        先在 @BotFather 创建 Bot，填入 Token 后点「注册 Webhook」。
+                      </p>
+                      <div className="relative mb-2">
+                        <input value={shopCfg.botToken} onChange={e => setShopCfg(p => ({ ...p, botToken: e.target.value }))}
+                          type={showBotToken ? "text" : "password"}
+                          placeholder="123456:ABCdef... (BotFather 给的 Token)"
+                          className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 pr-12 text-white text-sm focus:outline-none focus:border-blue-500 font-mono" />
+                        <button onClick={() => setShowBotToken(v => !v)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs">
+                          {showBotToken ? "隐藏" : "显示"}
+                        </button>
+                      </div>
+                      <button onClick={() => void setupTgBot()} disabled={settingWebhook || !shopCfg.botToken || !shopCfg.domain}
+                        className="w-full text-sm font-medium rounded-xl py-2 border border-blue-500/40 text-blue-400 hover:bg-blue-500/10 disabled:opacity-40 transition mb-1">
+                        {settingWebhook ? "注册中..." : "📡 注册 Webhook"}
+                      </button>
+                      {webhookResult && (
+                        <div className={`text-[11px] px-3 py-2 rounded-lg leading-relaxed ${webhookResult.ok ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-300" : "bg-red-500/10 border border-red-500/20 text-red-300"}`}>
+                          {webhookResult.msg}
+                        </div>
+                      )}
+                    </div>
+
                     <button onClick={() => void saveShop()} disabled={savingShop}
                       className={`w-full font-semibold rounded-xl py-2.5 transition text-sm ${shopSaved ? "bg-emerald-600 text-white" : "bg-blue-600 hover:bg-blue-500 text-white"} disabled:opacity-50`}>
                       {savingShop ? "保存中..." : shopSaved ? "✓ 已保存" : "保存配置"}
