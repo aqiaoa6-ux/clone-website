@@ -6,15 +6,14 @@ import authRouter from "./auth";
 import cardRouter from "./card";
 import adminRouter from "./admin";
 import shopRouter from "./shop";
-import { requireAuth } from "../middleware/requireAuth";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
 router.use(authRouter);
-router.use(requireAuth, cardRouter);
+router.use(cardRouter);
 router.use(adminRouter);
-router.use(requireAuth, lotteryRouter);
+router.use(lotteryRouter);
 router.use(telegramRouter);
 router.use(shopRouter);
 
