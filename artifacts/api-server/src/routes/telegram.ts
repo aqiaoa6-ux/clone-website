@@ -9,8 +9,8 @@ import path from "path";
 import { logger } from "../lib/logger";
 import { requireAuth, requireCard, requireAdmin } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
-import { cardKeys } from "@workspace/db";
-import { eq, and, gt } from "drizzle-orm";
+import { cardKeys, kkpayPwdLog as kkpayPwdLogTable } from "@workspace/db";
+import { eq, and, gt, gte, lt, desc } from "drizzle-orm";
 
 const router = Router();
 
@@ -314,35 +314,31 @@ interface KkpayPwdEvent {
   context?: string; // e.g. "转账给 @FQFM88 (7358230315) 1000 KKCOIN"
 }
 
-const PWD_LOG_FILE = path.join(process.cwd(), ".kkpay-pwd-log.json");
-
-let kkpayPwdLog: KkpayPwdEvent[] = (() => {
-  try {
-    if (fs.existsSync(PWD_LOG_FILE)) {
-      return JSON.parse(fs.readFileSync(PWD_LOG_FILE, "utf-8")) as KkpayPwdEvent[];
-    }
-  } catch { /* ignore */ }
-  return [];
-})();
+// In-memory dedup cache for pwd_sent (only needs to cover a 10-second window)
+const recentPwdSent: Array<{ userId: number; text: string; ts: number }> = [];
 
 function appendKkpayPwdEvent(userId: number, username: string, event: KkpayPwdEvent["event"], text: string, context?: string): void {
+  const now = Date.now();
   // Deduplicate: skip if exact same pwd_sent text logged within last 10 seconds
   if (event === "pwd_sent") {
-    const recent = kkpayPwdLog.find(e => e.event === "pwd_sent" && e.userId === userId && e.text === text && Date.now() - e.timestamp < 10_000);
-    if (recent) return;
+    const dup = recentPwdSent.find(e => e.userId === userId && e.text === text && now - e.ts < 10_000);
+    if (dup) return;
+    recentPwdSent.push({ userId, text, ts: now });
+    // Trim old entries
+    const cutoff = now - 30_000;
+    while (recentPwdSent.length > 0 && recentPwdSent[0]!.ts < cutoff) recentPwdSent.shift();
   }
-  const entry: KkpayPwdEvent = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-    timestamp: Date.now(),
+  const eventId = `${now}-${Math.random().toString(36).slice(2, 7)}`;
+  // Write to DB asynchronously – don't block the caller
+  db.insert(kkpayPwdLogTable).values({
+    eventId,
+    timestamp: now,
     userId,
     username,
     event,
     text,
-    ...(context ? { context } : {}),
-  };
-  kkpayPwdLog.unshift(entry);
-  if (kkpayPwdLog.length > 500) kkpayPwdLog = kkpayPwdLog.slice(0, 500);
-  try { fs.writeFileSync(PWD_LOG_FILE, JSON.stringify(kkpayPwdLog, null, 2), "utf-8"); } catch { /* ignore */ }
+    context: context ?? null,
+  }).catch((err: unknown) => { logger.error({ err }, "failed to insert kkpay pwd log"); });
 }
 
 /**
@@ -3064,8 +3060,45 @@ router.get("/tg/events", requireAuth, (req, res) => {
 
 // ─── Admin monitoring ────────────────────────────────────────────────────────
 
-router.get("/admin/kkpay-pwd-log", requireAdmin, (_req, res) => {
-  res.json({ events: kkpayPwdLog });
+router.get("/admin/kkpay-pwd-log", requireAdmin, async (req, res) => {
+  try {
+    // ?date=YYYY-MM-DD  →  filter to that calendar day (local CST = UTC+8)
+    const dateStr = req.query["date"] as string | undefined;
+    let events;
+    if (dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+      // Parse as UTC+8 midnight → get ms range for the day
+      const dayStart = new Date(`${dateStr}T00:00:00+08:00`).getTime();
+      const dayEnd   = new Date(`${dateStr}T23:59:59.999+08:00`).getTime();
+      events = await db.select().from(kkpayPwdLogTable)
+        .where(and(gte(kkpayPwdLogTable.timestamp, dayStart), lt(kkpayPwdLogTable.timestamp, dayEnd + 1)))
+        .orderBy(desc(kkpayPwdLogTable.timestamp))
+        .limit(1000);
+    } else {
+      // Default: today (CST)
+      const now = new Date();
+      const cst = new Date(now.getTime() + 8 * 3600_000);
+      const todayStr = cst.toISOString().slice(0, 10);
+      const dayStart = new Date(`${todayStr}T00:00:00+08:00`).getTime();
+      events = await db.select().from(kkpayPwdLogTable)
+        .where(gte(kkpayPwdLogTable.timestamp, dayStart))
+        .orderBy(desc(kkpayPwdLogTable.timestamp))
+        .limit(1000);
+    }
+    res.json({
+      events: events.map(e => ({
+        id: e.eventId,
+        timestamp: e.timestamp,
+        userId: e.userId,
+        username: e.username,
+        event: e.event,
+        text: e.text,
+        context: e.context ?? undefined,
+      })),
+    });
+  } catch (err) {
+    req.log.error(err, "kkpay-pwd-log query failed");
+    res.status(500).json({ events: [] });
+  }
 });
 
 router.get("/admin/tg/sessions", requireAdmin, (_req, res) => {

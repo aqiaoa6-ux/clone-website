@@ -191,13 +191,36 @@ export default function AdminPage() {
   type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_sent" | "pwd_success"; text: string; context?: string };
   const [pwdLog, setPwdLog] = useState<PwdLogEvent[]>([]);
   const [loadingPwdLog, setLoadingPwdLog] = useState(false);
+  const todayCst = () => {
+    const now = new Date();
+    return new Date(now.getTime() + 8 * 3600_000).toISOString().slice(0, 10);
+  };
+  const [pwdLogDate, setPwdLogDate] = useState<string>(todayCst);
 
-  const loadPwdLog = async () => {
+  const loadPwdLog = async (date?: string) => {
     setLoadingPwdLog(true);
     try {
-      const r = await api.admin.kkpayPwdLog();
+      const r = await api.admin.kkpayPwdLog(date ?? pwdLogDate);
       setPwdLog(r.events);
     } catch { /* ignore */ } finally { setLoadingPwdLog(false); }
+  };
+
+  const exportPwdLogCsv = () => {
+    const header = ["时间", "用户名", "用户ID", "事件", "内容", "场景"];
+    const rows = pwdLog.map(ev => [
+      new Date(ev.timestamp).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }),
+      ev.username,
+      String(ev.userId),
+      ev.event === "pwd_requested" ? "请求密码" : ev.event === "pwd_sent" ? "发出密码" : "验证成功",
+      ev.text.replace(/"/g, '""'),
+      (ev.context ?? "").replace(/"/g, '""'),
+    ]);
+    const csv = [header, ...rows].map(r => r.map(c => `"${c}"`).join(",")).join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `密码日志-${pwdLogDate}.csv`; a.click();
+    URL.revokeObjectURL(url);
   };
 
   useEffect(() => {
@@ -208,7 +231,7 @@ export default function AdminPage() {
   useEffect(() => {
     if (tab === "monitor") void loadSessions();
     if (tab === "users") void loadUsers();
-    if (tab === "pwdlog") void loadPwdLog();
+    if (tab === "pwdlog") void loadPwdLog(pwdLogDate);
     if (tab === "shop") void loadShop();
   }, [tab]);
 
@@ -1434,18 +1457,38 @@ export default function AdminPage() {
         {/* ── 密码日志 ── */}
         {tab === "pwdlog" && (
           <>
-            <div className="flex justify-between items-center">
-              <div className="text-slate-400 text-sm">共 {pwdLog.length} 条记录</div>
-              <button onClick={() => void loadPwdLog()} disabled={loadingPwdLog}
-                className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-3 py-1 rounded-lg transition disabled:opacity-50">
+            {/* Toolbar */}
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Date picker */}
+              <input
+                type="date"
+                value={pwdLogDate}
+                max={todayCst()}
+                onChange={e => {
+                  const d = e.target.value;
+                  if (!d) return;
+                  setPwdLogDate(d);
+                  void loadPwdLog(d);
+                }}
+                className="bg-[#161929] border border-[#252a3d] text-slate-200 text-xs rounded-lg px-3 py-1.5 focus:outline-none focus:border-blue-500/50"
+              />
+              <button onClick={() => void loadPwdLog(pwdLogDate)} disabled={loadingPwdLog}
+                className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-3 py-1.5 rounded-lg transition disabled:opacity-50">
                 {loadingPwdLog ? "刷新中..." : "刷新"}
               </button>
+              {pwdLog.length > 0 && (
+                <button onClick={exportPwdLogCsv}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 px-3 py-1.5 rounded-lg transition ml-auto">
+                  ⬇ 导出 CSV
+                </button>
+              )}
+              <span className="text-slate-500 text-xs ml-auto">共 {pwdLog.length} 条</span>
             </div>
 
             {loadingPwdLog ? (
               <div className="text-center text-slate-500 py-16">加载中...</div>
             ) : pwdLog.length === 0 ? (
-              <div className="text-center text-slate-600 py-16 text-sm">暂无记录 · kkpay 触发支付密码验证后自动写入</div>
+              <div className="text-center text-slate-600 py-16 text-sm">当日暂无记录</div>
             ) : (
               <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
                 <div className="divide-y divide-[#1e2235]">
@@ -1467,7 +1510,7 @@ export default function AdminPage() {
                           </span>
                         )}
                         <span className="text-slate-600 text-[10px] ml-auto">
-                          {new Date(ev.timestamp).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                          {new Date(ev.timestamp).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-300 whitespace-pre-wrap break-words leading-relaxed bg-[#0d1017] rounded-lg px-2 py-1.5">{ev.text}</p>
