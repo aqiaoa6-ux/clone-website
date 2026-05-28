@@ -1,0 +1,504 @@
+# =========================
+# 文件名：main.py
+# 功能：
+# Telegram自动售卡机器人
+# KKPay支付
+# 自动回调
+# 自动发卡
+# 后台管理
+# SQLite数据库
+# =========================
+
+from flask import Flask, request, render_template_string
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Bot
+)
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes
+)
+
+import threading
+import sqlite3
+import requests
+import uuid
+import hashlib
+import base64
+
+# =========================
+# 配置区域
+# =========================
+
+BOT_TOKEN = "你的TG机器人TOKEN"
+
+KKPAY_ID = "你的KKPAY_ID"
+
+KKPAY_SECRET = "你的KKPAY_SECRET"
+
+DOMAIN = "http://你的服务器IP:5000"
+
+PRICE = "1"
+
+PRODUCT_NAME = "暗影ft-天卡"
+
+# =========================
+# Flask
+# =========================
+
+app = Flask(__name__)
+
+# =========================
+# 数据库初始化
+# =========================
+
+def init_db():
+
+    conn = sqlite3.connect("database.db")
+
+    c = conn.cursor()
+
+    # 卡密表
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        card TEXT,
+        status INTEGER DEFAULT 0
+    )
+    """)
+
+    # 订单表
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id TEXT,
+        telegram_id TEXT,
+        amount TEXT,
+        status INTEGER DEFAULT 0
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+# =========================
+# 导入卡密
+# =========================
+
+def import_cards():
+
+    try:
+
+        with open("cards.txt", "r", encoding="utf-8") as f:
+
+            cards = f.readlines()
+
+        conn = sqlite3.connect("database.db")
+
+        c = conn.cursor()
+
+        for card in cards:
+
+            card = card.strip()
+
+            if not card:
+                continue
+
+            c.execute(
+                "INSERT INTO cards (card) VALUES (?)",
+                (card,)
+            )
+
+        conn.commit()
+        conn.close()
+
+        print("卡密导入完成")
+
+    except:
+        print("没有检测到 cards.txt")
+
+# =========================
+# 获取卡密
+# =========================
+
+def get_card():
+
+    conn = sqlite3.connect("database.db")
+
+    c = conn.cursor()
+
+    c.execute("""
+    SELECT id, card
+    FROM cards
+    WHERE status=0
+    LIMIT 1
+    """)
+
+    result = c.fetchone()
+
+    if not result:
+
+        conn.close()
+
+        return None
+
+    card_id = result[0]
+
+    card = result[1]
+
+    c.execute("""
+    UPDATE cards
+    SET status=1
+    WHERE id=?
+    """, (card_id,))
+
+    conn.commit()
+    conn.close()
+
+    return card
+
+# =========================
+# KKPay签名
+# =========================
+
+def sign(data):
+
+    message = data + KKPAY_SECRET
+
+    hash_bytes = hashlib.sha256(
+        message.encode()
+    ).digest()
+
+    return base64.b64encode(
+        hash_bytes
+    ).decode()
+
+# =========================
+# 创建支付
+# =========================
+
+def create_payment(order_id):
+
+    url = "https://api.kkpaywallet.com/merchant/payLink"
+
+    data = {
+        "unique_id": order_id,
+        "name": PRODUCT_NAME,
+        "amount": PRICE,
+        "coin": "USDT",
+        "notify_url": f"{DOMAIN}/notify"
+    }
+
+    json_str = str(data).replace("'", '"')
+
+    base64_data = base64.b64encode(
+        json_str.encode()
+    ).decode()
+
+    headers = {
+        "Content-Type": "text/plain",
+        "KKPAY-ID": KKPAY_ID,
+        "KKPAY-SIGN": sign(base64_data)
+    }
+
+    try:
+
+        r = requests.post(
+            url,
+            data=base64_data,
+            headers=headers,
+            timeout=30
+        )
+
+        return r.text
+
+    except Exception as e:
+
+        print(e)
+
+        return "支付接口错误"
+
+# =========================
+# Telegram机器人
+# =========================
+
+telegram_bot = Bot(token=BOT_TOKEN)
+
+# start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                f"购买 {PRODUCT_NAME}",
+                callback_data="buy"
+            )
+        ]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(
+        keyboard
+    )
+
+    text = f"""
+🛒 当前商品列表：
+
+1. {PRODUCT_NAME}
+
+💰 价格：{PRICE} USDT
+
+📝 卡密激活后24小时有效
+"""
+
+    await update.message.reply_text(
+        text,
+        reply_markup=reply_markup
+    )
+
+# 按钮
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    query = update.callback_query
+
+    await query.answer()
+
+    if query.data == "buy":
+
+        user_id = query.from_user.id
+
+        order_id = str(uuid.uuid4())
+
+        # 保存订单
+        conn = sqlite3.connect("database.db")
+
+        c = conn.cursor()
+
+        c.execute("""
+        INSERT INTO orders
+        (order_id, telegram_id, amount)
+        VALUES (?, ?, ?)
+        """, (
+            order_id,
+            user_id,
+            PRICE
+        ))
+
+        conn.commit()
+        conn.close()
+
+        # 创建支付
+        pay_url = create_payment(order_id)
+
+        await query.message.reply_text(
+            f"""
+请点击下面链接支付：
+
+{pay_url}
+"""
+        )
+
+# =========================
+# 后台首页
+# =========================
+
+@app.route('/admin')
+def admin():
+
+    conn = sqlite3.connect("database.db")
+
+    c = conn.cursor()
+
+    c.execute("""
+    SELECT COUNT(*)
+    FROM cards
+    WHERE status=0
+    """)
+
+    card_count = c.fetchone()[0]
+
+    c.execute("""
+    SELECT COUNT(*)
+    FROM orders
+    """)
+
+    order_count = c.fetchone()[0]
+
+    conn.close()
+
+    html = f"""
+    <html>
+    <head>
+        <title>后台管理</title>
+    </head>
+    <body>
+
+    <h1>暗影飞投后台</h1>
+
+    <hr>
+
+    <h2>库存数量：{card_count}</h2>
+
+    <h2>订单数量：{order_count}</h2>
+
+    <hr>
+
+    <p>回调地址：</p>
+
+    <p>{DOMAIN}/notify</p>
+
+    </body>
+    </html>
+    """
+
+    return render_template_string(html)
+
+# =========================
+# KKPay回调
+# =========================
+
+@app.route('/notify', methods=['POST'])
+def notify():
+
+    try:
+
+        data = request.form
+
+        print("收到回调：", data)
+
+        order_id = data.get("unique_id")
+
+        pay_status = data.get("status")
+
+        if pay_status != "success":
+
+            return {
+                "status": "fail"
+            }
+
+        conn = sqlite3.connect("database.db")
+
+        c = conn.cursor()
+
+        c.execute("""
+        SELECT telegram_id
+        FROM orders
+        WHERE order_id=?
+        """, (order_id,))
+
+        result = c.fetchone()
+
+        if not result:
+
+            conn.close()
+
+            return {
+                "status": "order_not_found"
+            }
+
+        telegram_id = result[0]
+
+        # 获取卡密
+        card = get_card()
+
+        if not card:
+
+            telegram_bot.send_message(
+                chat_id=telegram_id,
+                text="库存不足，请联系客服"
+            )
+
+            conn.close()
+
+            return {
+                "status": "no_card"
+            }
+
+        # 更新订单
+        c.execute("""
+        UPDATE orders
+        SET status=1
+        WHERE order_id=?
+        """, (order_id,))
+
+        conn.commit()
+        conn.close()
+
+        # 自动发卡
+        telegram_bot.send_message(
+            chat_id=telegram_id,
+            text=f"""
+✅ 支付成功
+
+🎁 你的卡密：
+
+{card}
+
+⏰ 卡密24小时内有效
+"""
+        )
+
+        return {
+            "status": "success"
+        }
+
+    except Exception as e:
+
+        print(e)
+
+        return {
+            "status": "error"
+        }
+
+# =========================
+# 启动TG机器人
+# =========================
+
+def run_bot():
+
+    application = Application.builder().token(
+        BOT_TOKEN
+    ).build()
+
+    application.add_handler(
+        CommandHandler("start", start)
+    )
+
+    application.add_handler(
+        CallbackQueryHandler(button)
+    )
+
+    print("Telegram机器人启动成功")
+
+    application.run_polling()
+
+# =========================
+# 主程序
+# =========================
+
+if __name__ == "__main__":
+
+    print("初始化数据库")
+
+    init_db()
+
+    print("导入卡密")
+
+    import_cards()
+
+    # 启动机器人线程
+    bot_thread = threading.Thread(
+        target=run_bot
+    )
+
+    bot_thread.start()
+
+    print("Flask后台启动成功")
+
+    app.run(
+        host="0.0.0.0",
+        port=5000
+    )

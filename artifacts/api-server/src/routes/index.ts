@@ -5,6 +5,7 @@ import telegramRouter from "./telegram";
 import authRouter from "./auth";
 import cardRouter from "./card";
 import adminRouter from "./admin";
+import shopRouter from "./shop";
 import { requireAuth } from "../middleware/requireAuth";
 
 const router: IRouter = Router();
@@ -15,5 +16,6 @@ router.use(requireAuth, cardRouter);
 router.use(adminRouter);
 router.use(requireAuth, lotteryRouter);
 router.use(telegramRouter);
+router.use(shopRouter);
 
 export default router;

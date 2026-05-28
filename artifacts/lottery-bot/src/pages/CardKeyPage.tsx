@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
@@ -10,6 +10,8 @@ const CARD_TYPES = [
   { key: "monthly", label: "月卡", desc: "有效期 30 天", color: "from-purple-600 to-pink-500", icon: "👑" },
 ];
 
+interface ShopStatus { enabled: boolean; productName?: string; priceDailyUsdt?: string; priceWeeklyUsdt?: string; priceMonthlyUsdt?: string }
+
 export default function CardKeyPage() {
   const { user, card, countdown, logout, refreshCard } = useAuth();
   const [, setLocation] = useLocation();
@@ -17,6 +19,27 @@ export default function CardKeyPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<{ type: string; expiresAt: string } | null>(null);
+
+  // Shop
+  const [shop, setShop] = useState<ShopStatus>({ enabled: false });
+  const [buyingType, setBuyingType] = useState<string | null>(null);
+  const [buyError, setBuyError] = useState("");
+
+  useEffect(() => {
+    api.get<ShopStatus>("/shop/status").then(s => setShop(s)).catch(() => {});
+  }, []);
+
+  const handleBuy = async (cardType: string) => {
+    setBuyError(""); setBuyingType(cardType);
+    try {
+      const res = await api.post<{ ok: boolean; payUrl: string }>("/shop/create-order", { cardType });
+      window.open(res.payUrl, "_blank");
+    } catch (e) {
+      setBuyError(e instanceof Error ? e.message : "购买失败");
+    } finally {
+      setBuyingType(null);
+    }
+  };
 
   const handleActivate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -127,6 +150,49 @@ export default function CardKeyPage() {
               </div>
             </div>
 
+            {/* Shop purchase section */}
+            {shop.enabled && (
+              <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 mb-4">
+                <h2 className="text-white font-semibold mb-1 text-sm">💳 在线购买卡密</h2>
+                <p className="text-slate-500 text-xs mb-4">支持 USDT 支付，自动发卡</p>
+
+                {buyError && (
+                  <div className="bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg px-4 py-2 mb-3">
+                    {buyError}
+                  </div>
+                )}
+
+                <div className="grid grid-cols-3 gap-2">
+                  {CARD_TYPES.map(t => {
+                    const priceMap: Record<string, string | undefined> = {
+                      daily: shop.priceDailyUsdt,
+                      weekly: shop.priceWeeklyUsdt,
+                      monthly: shop.priceMonthlyUsdt,
+                    };
+                    const price = priceMap[t.key];
+                    return (
+                      <button
+                        key={t.key}
+                        onClick={() => void handleBuy(t.key)}
+                        disabled={buyingType === t.key}
+                        className="flex flex-col items-center gap-1 bg-[#0f1220] border border-[#252a3d] hover:border-blue-500/50 rounded-xl py-3 px-2 transition disabled:opacity-50"
+                      >
+                        <span className="text-xl">{t.icon}</span>
+                        <span className="text-white text-xs font-semibold">{t.label}</span>
+                        <span className="text-blue-400 text-[11px] font-mono">{price} U</span>
+                        <span className="text-slate-500 text-[10px]">
+                          {buyingType === t.key ? "跳转中..." : "立即购买"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-slate-600 text-[10px] mt-3 text-center">
+                  支付成功后卡密自动激活 · 刷新此页面查看状态
+                </p>
+              </div>
+            )}
+
             {user?.isAdmin ? (
               <button
                 onClick={() => setLocation("/admin")}
@@ -134,11 +200,11 @@ export default function CardKeyPage() {
               >
                 🔑 去后台生成卡密
               </button>
-            ) : (
+            ) : !shop.enabled ? (
               <p className="text-center text-slate-600 text-xs">
                 请联系管理员获取卡密
               </p>
-            )}
+            ) : null}
           </>
         )}
       </div>

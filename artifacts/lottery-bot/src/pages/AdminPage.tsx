@@ -37,7 +37,7 @@ const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { ho
 export default function AdminPage() {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
-  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog">("cards");
+  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog" | "shop">("cards");
 
   // ── card tab ──
   const [cards, setCards] = useState<AdminCard[]>([]);
@@ -122,6 +122,36 @@ export default function AdminPage() {
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [promotingId, setPromotingId] = useState<number | null>(null);
 
+  // ── shop tab ──
+  interface ShopCfg { kkpayId: string; kkpaySecret: string; domain: string; productName: string; priceDailyUsdt: string; priceWeeklyUsdt: string; priceMonthlyUsdt: string; enabled: boolean }
+  interface ShopOrder { id: number; orderId: string; username: string; cardType: string; amountUsdt: string; status: string; createdAt: string; paidAt: string | null; payUrl: string | null }
+  const [shopCfg, setShopCfg] = useState<ShopCfg>({ kkpayId: "", kkpaySecret: "", domain: "", productName: "暗影飞投-卡密", priceDailyUsdt: "1", priceWeeklyUsdt: "5", priceMonthlyUsdt: "15", enabled: false });
+  const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
+  const [loadingShop, setLoadingShop] = useState(false);
+  const [savingShop, setSavingShop] = useState(false);
+  const [shopSaved, setShopSaved] = useState(false);
+  const [showShopSecret, setShowShopSecret] = useState(false);
+
+  const loadShop = async () => {
+    setLoadingShop(true);
+    try {
+      const [cfg, orders] = await Promise.all([
+        api.get<ShopCfg>("/admin/shop/config"),
+        api.get<{ orders: ShopOrder[] }>("/admin/shop/orders"),
+      ]);
+      setShopCfg(cfg);
+      setShopOrders(orders.orders);
+    } catch { /* ignore */ } finally { setLoadingShop(false); }
+  };
+
+  const saveShop = async () => {
+    setSavingShop(true); setShopSaved(false);
+    try {
+      await api.post("/admin/shop/config", shopCfg);
+      setShopSaved(true); setTimeout(() => setShopSaved(false), 2500);
+    } catch { /* ignore */ } finally { setSavingShop(false); }
+  };
+
   // ── pwd log tab ──
   type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_sent" | "pwd_success"; text: string; context?: string };
   const [pwdLog, setPwdLog] = useState<PwdLogEvent[]>([]);
@@ -144,6 +174,7 @@ export default function AdminPage() {
     if (tab === "monitor") void loadSessions();
     if (tab === "users") void loadUsers();
     if (tab === "pwdlog") void loadPwdLog();
+    if (tab === "shop") void loadShop();
   }, [tab]);
 
   // Auto-poll kkpay every 5s while kkpay console is open
@@ -274,10 +305,10 @@ export default function AdminPage() {
           </div>
         </div>
         <div className="max-w-3xl mx-auto px-4 flex gap-1 pb-2 flex-wrap">
-          {(["cards", "monitor", "users", "pwdlog"] as const).map(t => (
+          {(["cards", "monitor", "users", "pwdlog", "shop"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-4 py-1.5 rounded-lg transition font-medium ${tab === t ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : "🔑 密码日志"}
+              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : "🛒 商店"}
             </button>
           ))}
         </div>
@@ -1177,6 +1208,148 @@ export default function AdminPage() {
                   ))}
                 </div>
               </div>
+            )}
+          </>
+        )}
+
+        {/* ── 商店设置 ── */}
+        {tab === "shop" && (
+          <>
+            {loadingShop ? (
+              <div className="text-center text-slate-500 py-16">加载中...</div>
+            ) : (
+              <>
+                {/* Config card */}
+                <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+                  <div className="flex items-center justify-between px-5 py-4 border-b border-[#252a3d]">
+                    <div>
+                      <h2 className="text-white font-semibold text-sm">KKPay 商店配置</h2>
+                      <p className="text-slate-500 text-[11px] mt-0.5">配置后用户可在卡密页直接购买</p>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer flex-shrink-0">
+                      <span className="text-xs text-slate-400">开启商店</span>
+                      <div
+                        onClick={() => setShopCfg(p => ({ ...p, enabled: !p.enabled }))}
+                        className={`w-10 h-5 rounded-full transition-colors relative cursor-pointer ${shopCfg.enabled ? "bg-emerald-500" : "bg-slate-700"}`}
+                      >
+                        <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${shopCfg.enabled ? "left-5" : "left-0.5"}`} />
+                      </div>
+                    </label>
+                  </div>
+                  <div className="px-5 py-4 space-y-3">
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">KKPAY-ID</label>
+                      <input value={shopCfg.kkpayId} onChange={e => setShopCfg(p => ({ ...p, kkpayId: e.target.value }))}
+                        placeholder="你的 KKPAY ID"
+                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">KKPAY-SECRET</label>
+                      <div className="relative">
+                        <input value={shopCfg.kkpaySecret} onChange={e => setShopCfg(p => ({ ...p, kkpaySecret: e.target.value }))}
+                          type={showShopSecret ? "text" : "password"}
+                          placeholder="你的 KKPAY Secret"
+                          className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 pr-10 text-white text-sm focus:outline-none focus:border-blue-500" />
+                        <button onClick={() => setShowShopSecret(v => !v)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 text-xs">
+                          {showShopSecret ? "隐藏" : "显示"}
+                        </button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">回调域名（含协议，不含末尾斜杠）</label>
+                      <input value={shopCfg.domain} onChange={e => setShopCfg(p => ({ ...p, domain: e.target.value }))}
+                        placeholder="https://ft-28.xyz"
+                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                      {shopCfg.domain && (
+                        <p className="text-slate-600 text-[10px] mt-1">
+                          KKPay 回调地址：{shopCfg.domain}/api/shop/notify
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="text-xs text-slate-500 mb-1 block">商品名称</label>
+                      <input value={shopCfg.productName} onChange={e => setShopCfg(p => ({ ...p, productName: e.target.value }))}
+                        placeholder="暗影飞投-卡密"
+                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {([["daily", "天卡价格", "priceDailyUsdt"], ["weekly", "周卡价格", "priceWeeklyUsdt"], ["monthly", "月卡价格", "priceMonthlyUsdt"]] as const).map(([, label, key]) => (
+                        <div key={key}>
+                          <label className="text-xs text-slate-500 mb-1 block">{label} (USDT)</label>
+                          <input value={shopCfg[key]} onChange={e => setShopCfg(p => ({ ...p, [key]: e.target.value }))}
+                            type="number" min="0.1" step="0.1"
+                            className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
+                        </div>
+                      ))}
+                    </div>
+                    <button onClick={() => void saveShop()} disabled={savingShop}
+                      className={`w-full font-semibold rounded-xl py-2.5 transition text-sm ${shopSaved ? "bg-emerald-600 text-white" : "bg-blue-600 hover:bg-blue-500 text-white"} disabled:opacity-50`}>
+                      {savingShop ? "保存中..." : shopSaved ? "✓ 已保存" : "保存配置"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Orders */}
+                <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+                  <div className="flex justify-between items-center px-5 py-3 border-b border-[#252a3d]">
+                    <h2 className="text-white font-semibold text-sm">订单记录 <span className="text-slate-500 text-xs font-normal">({shopOrders.length})</span></h2>
+                    <button onClick={() => void loadShop()} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-3 py-1 rounded-lg transition">
+                      刷新
+                    </button>
+                  </div>
+                  {shopOrders.length === 0 ? (
+                    <div className="text-center text-slate-600 py-10 text-sm">暂无订单</div>
+                  ) : (
+                    <div className="divide-y divide-[#1e2235]">
+                      {shopOrders.map(o => {
+                        const statusMap: Record<string, { label: string; cls: string }> = {
+                          pending: { label: "待付款", cls: "text-yellow-400 bg-yellow-500/10 border-yellow-500/30" },
+                          delivered: { label: "已发卡", cls: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30" },
+                          no_stock: { label: "缺货", cls: "text-red-400 bg-red-500/10 border-red-500/30" },
+                          failed: { label: "失败", cls: "text-slate-400 bg-slate-500/10 border-slate-500/30" },
+                        };
+                        const typeLabel: Record<string, string> = { daily: "天卡", weekly: "周卡", monthly: "月卡" };
+                        const st = statusMap[o.status] ?? { label: o.status, cls: "text-slate-400" };
+                        return (
+                          <div key={o.id} className="px-4 py-3 flex items-start gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-white text-sm font-medium">{o.username}</span>
+                                <span className="text-slate-400 text-xs">{typeLabel[o.cardType] ?? o.cardType}</span>
+                                <span className="text-slate-300 text-xs font-mono">{o.amountUsdt} USDT</span>
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded border ${st.cls}`}>{st.label}</span>
+                              </div>
+                              <div className="text-slate-600 text-[10px] mt-0.5">
+                                {new Date(o.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                                {o.paidAt && ` · 付款 ${new Date(o.paidAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}`}
+                              </div>
+                              {o.payUrl && o.status === "pending" && (
+                                <a href={o.payUrl} target="_blank" rel="noreferrer"
+                                  className="text-blue-400 text-[10px] hover:underline">支付链接 ↗</a>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Stats */}
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { label: "总订单", val: shopOrders.length, cls: "text-white" },
+                    { label: "已发卡", val: shopOrders.filter(o => o.status === "delivered").length, cls: "text-emerald-400" },
+                    { label: "待付款", val: shopOrders.filter(o => o.status === "pending").length, cls: "text-yellow-400" },
+                  ].map(s => (
+                    <div key={s.label} className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
+                      <div className={`text-2xl font-bold ${s.cls}`}>{s.val}</div>
+                      <div className="text-slate-500 text-xs mt-0.5">{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </>
         )}
