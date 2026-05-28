@@ -1,4 +1,4 @@
-import { Router, text as expressText } from "express";
+import { Router, raw as expressRaw } from "express";
 import { db } from "@workspace/db";
 import { cardKeys, users, shopConfig, shopOrders } from "@workspace/db";
 import { eq, isNull, and, desc } from "drizzle-orm";
@@ -334,30 +334,57 @@ router.get("/shop/order/:orderId", requireAuth, async (req, res) => {
 
 router.post(
   "/shop/notify",
-  // Fallback raw-text parser: runs only when the global JSON/urlencoded parsers
-  // didn't recognise the Content-Type (req.body still undefined at that point)
-  (req, _res, next) => {
-    if (req.body !== undefined) return next();
-    expressText({ type: "*/*" })(req, _res, next);
-  },
+  // Force-read the raw body regardless of Content-Type.
+  // expressRaw with type:()=>true bypasses the type-is check entirely,
+  // so we get the Buffer even when KKPay sends with no Content-Type header.
+  expressRaw({ type: () => true }),
   async (req, res) => {
-    // Normalise body → plain object regardless of how it arrived
-    let data: Record<string, string> = {};
-    if (req.body && typeof req.body === "object") {
-      data = req.body as Record<string, string>;
+    const ct = req.headers["content-type"] ?? "none";
+    const kkpayId = req.headers["kkpay-id"] as string | undefined;
+    const kkpaySign_ = req.headers["kkpay-sign"] as string | undefined;
+
+    // Resolve raw string from whatever the body parser gave us
+    let rawBodyStr = "";
+    if (Buffer.isBuffer(req.body)) {
+      rawBodyStr = req.body.toString("utf-8").trim();
     } else if (typeof req.body === "string") {
-      const raw = req.body as string;
+      rawBodyStr = (req.body as string).trim();
+    }
+
+    console.info(`[shop-notify] ct=${ct} kkpay-id=${kkpayId ?? "none"} sign=${kkpaySign_ ? "yes" : "no"} raw=${rawBodyStr.substring(0, 300)}`);
+
+    // Parse data from body (try base64→JSON, plain JSON, URL-encoded in order)
+    let data: Record<string, string> = {};
+    if (rawBodyStr) {
+      // 1) KKPay sends body as base64-encoded JSON payload
       try {
-        data = JSON.parse(raw) as Record<string, string>;
-      } catch {
+        const decoded = Buffer.from(rawBodyStr, "base64").toString("utf-8");
+        const parsed = JSON.parse(decoded) as Record<string, string>;
+        // Only accept if it looks like JSON (has at least one key)
+        if (parsed && typeof parsed === "object" && Object.keys(parsed).length > 0) {
+          data = parsed;
+        }
+      } catch { /* not base64 JSON */ }
+
+      // 2) Plain JSON
+      if (Object.keys(data).length === 0) {
+        try { data = JSON.parse(rawBodyStr) as Record<string, string>; } catch { /* not JSON */ }
+      }
+
+      // 3) URL-encoded form
+      if (Object.keys(data).length === 0) {
         try {
-          new URLSearchParams(raw).forEach((v, k) => { data[k] = v; });
+          new URLSearchParams(rawBodyStr).forEach((v, k) => { data[k] = v; });
         } catch { /* ignore */ }
       }
     }
 
-    const rawStr = JSON.stringify(data);
-    console.info(`[shop-notify] ct=${req.headers["content-type"] ?? "none"} body=${rawStr.substring(0, 500)}`);
+    // 4) Query-string fallback (some providers put data in the URL)
+    if (Object.keys(data).length === 0) {
+      Object.entries(req.query).forEach(([k, v]) => { if (typeof v === "string") data[k] = v; });
+    }
+
+    console.info(`[shop-notify] parsed data=${JSON.stringify(data).substring(0, 400)}`);
 
     try {
       const orderId = data["userOrder"] ?? data["unique_id"] ?? data["out_trade_no"];
@@ -377,7 +404,7 @@ router.post(
         return;
       }
 
-      // Send card key via TG bot if order came from bot
+      // Send card key via TG bot if order came from the bot channel
       if (result.tgChatId) {
         try {
           const cfg = await getConfig();
