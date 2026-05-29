@@ -122,6 +122,18 @@ export default function AdminPage() {
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [promotingId, setPromotingId] = useState<number | null>(null);
 
+  // ── 后台二级密码门控 ──
+  const [secretVerified, setSecretVerified] = useState(false);
+  const [secretPwd, setSecretPwd] = useState("");
+  const [secretError, setSecretError] = useState("");
+  const [secretLoading, setSecretLoading] = useState(false);
+  const [secretChecking, setSecretChecking] = useState(true);
+  const [showChangePwd, setShowChangePwd] = useState(false);
+  const [changePwdOld, setChangePwdOld] = useState("");
+  const [changePwdNew, setChangePwdNew] = useState("");
+  const [changePwdErr, setChangePwdErr] = useState("");
+  const [changePwdOk, setChangePwdOk] = useState(false);
+
   // ── shop tab ──
   interface ShopCfg { kkpayId: string; kkpaySecret: string; domain: string; productName: string; priceDailyUsdt: string; priceWeeklyUsdt: string; priceMonthlyUsdt: string; enabled: boolean; botToken: string }
   interface ShopOrder { id: number; orderId: string; username: string; cardType: string; amountUsdt: string; status: string; createdAt: string; paidAt: string | null; payUrl: string | null }
@@ -225,8 +237,49 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!user?.isAdmin) { setLocation("/"); return; }
+    // 检查后台密码是否已验证
+    api.admin.authStatus().then(r => {
+      setSecretVerified(r.verified);
+    }).catch(() => {
+      setSecretVerified(false);
+    }).finally(() => {
+      setSecretChecking(false);
+    });
     void loadCards();
   }, [user, setLocation]);
+
+  const handleSecretVerify = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSecretLoading(true); setSecretError("");
+    try {
+      const r = await api.admin.authVerify(secretPwd);
+      if (r.ok) {
+        setSecretVerified(true);
+        setSecretPwd("");
+        if (r.firstTime) setSecretError("首次设置成功，已记住该密码");
+      }
+    } catch (err) {
+      setSecretError(err instanceof Error ? err.message : "验证失败");
+    } finally { setSecretLoading(false); }
+  };
+
+  const handleChangePwd = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setChangePwdErr(""); setChangePwdOk(false);
+    try {
+      await api.admin.authChange(changePwdOld, changePwdNew);
+      setChangePwdOk(true); setChangePwdOld(""); setChangePwdNew("");
+      setTimeout(() => setShowChangePwd(false), 1500);
+    } catch (err) {
+      setChangePwdErr(err instanceof Error ? err.message : "修改失败");
+    }
+  };
+
+  const handleSecretLogout = async () => {
+    await api.admin.authLogout();
+    setSecretVerified(false);
+    setSecretPwd("");
+  };
 
   useEffect(() => {
     if (tab === "monitor") void loadSessions();
@@ -349,8 +402,78 @@ export default function AdminPage() {
   const tgName = (s: AdminTgSession) =>
     [s.me.firstName, s.me.lastName].filter(Boolean).join(" ") || s.me.username || s.me.phone || `用户${s.userId}`;
 
+  // 正在检查验证状态
+  if (secretChecking) {
+    return (
+      <div className="min-h-screen bg-[#0b0e1a] flex items-center justify-center">
+        <span className="text-slate-500 text-sm">验证中…</span>
+      </div>
+    );
+  }
+
+  // 未通过后台密码验证：显示验证弹窗
+  if (!secretVerified) {
+    return (
+      <div className="min-h-screen bg-[#0b0e1a] flex items-center justify-center px-4">
+        <div className="w-full max-w-sm bg-[#12162a] border border-[#1e2235] rounded-2xl p-6 space-y-5">
+          <div className="text-center space-y-1">
+            <div className="text-3xl">🔐</div>
+            <h2 className="text-white font-bold text-lg">后台二级验证</h2>
+            <p className="text-slate-400 text-sm">请输入后台独立密码以继续</p>
+            <p className="text-slate-500 text-xs">（与登录密码不同，首次输入将作为密码保存）</p>
+          </div>
+          <form onSubmit={e => void handleSecretVerify(e)} className="space-y-3">
+            <input
+              type="password"
+              value={secretPwd}
+              onChange={e => setSecretPwd(e.target.value)}
+              placeholder="后台密码"
+              autoFocus
+              className="w-full bg-[#0b0e1a] border border-[#2a2f45] rounded-xl px-4 py-3 text-white text-sm focus:outline-none focus:border-blue-500 transition"
+            />
+            {secretError && (
+              <p className={`text-xs text-center ${secretError.includes("成功") ? "text-emerald-400" : "text-red-400"}`}>{secretError}</p>
+            )}
+            <button
+              type="submit"
+              disabled={secretLoading || !secretPwd}
+              className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-medium py-3 rounded-xl transition text-sm"
+            >
+              {secretLoading ? "验证中…" : "进入后台"}
+            </button>
+          </form>
+          <button onClick={() => setLocation("/")} className="w-full text-slate-500 hover:text-slate-300 text-xs text-center transition">
+            ← 返回首页
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#0b0e1a] text-white">
+      {/* 修改后台密码弹窗 */}
+      {showChangePwd && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4">
+          <div className="w-full max-w-sm bg-[#12162a] border border-[#1e2235] rounded-2xl p-6 space-y-4">
+            <h3 className="text-white font-bold text-base">修改后台密码</h3>
+            <form onSubmit={e => void handleChangePwd(e)} className="space-y-3">
+              <input type="password" value={changePwdOld} onChange={e => setChangePwdOld(e.target.value)}
+                placeholder="当前后台密码" className="w-full bg-[#0b0e1a] border border-[#2a2f45] rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 transition" />
+              <input type="password" value={changePwdNew} onChange={e => setChangePwdNew(e.target.value)}
+                placeholder="新密码（至少6位）" className="w-full bg-[#0b0e1a] border border-[#2a2f45] rounded-xl px-4 py-2.5 text-white text-sm focus:outline-none focus:border-blue-500 transition" />
+              {changePwdErr && <p className="text-red-400 text-xs">{changePwdErr}</p>}
+              {changePwdOk && <p className="text-emerald-400 text-xs">修改成功</p>}
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setShowChangePwd(false)}
+                  className="flex-1 bg-[#1e2235] hover:bg-[#252a40] text-slate-300 py-2.5 rounded-xl text-sm transition">取消</button>
+                <button type="submit" disabled={!changePwdOld || !changePwdNew}
+                  className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white py-2.5 rounded-xl text-sm transition">确认修改</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
       <div className="sticky top-0 z-40 bg-[#0b0e1a]/95 border-b border-[#1e2235] backdrop-blur">
         <div className="max-w-3xl mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center gap-3">
@@ -359,6 +482,8 @@ export default function AdminPage() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-slate-500 text-xs">{user?.username}</span>
+            <button onClick={() => setShowChangePwd(true)} className="text-slate-500 hover:text-slate-300 text-xs transition">改密</button>
+            <button onClick={() => void handleSecretLogout()} className="text-slate-500 hover:text-slate-300 text-xs transition">锁定</button>
             <button onClick={() => void logout()} className="text-slate-500 hover:text-slate-300 text-xs transition">退出</button>
           </div>
         </div>

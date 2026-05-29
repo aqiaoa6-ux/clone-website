@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
-import { verifyToken, COOKIE_NAME, type JwtPayload } from "../lib/auth";
+import { verifyToken, COOKIE_NAME, type JwtPayload, ADMIN_SECRET_COOKIE, verifyAdminSecretToken } from "../lib/auth";
 import { db } from "@workspace/db";
 import { cardKeys } from "@workspace/db";
 import { eq, and, gt } from "drizzle-orm";
@@ -24,6 +24,21 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   requireAuth(req, res, () => {
     if (!req.user?.isAdmin) { res.status(403).json({ error: "需要管理员权限" }); return; }
+    next();
+  });
+}
+
+/** 后台二级密码验证：在 requireAdmin 基础上额外校验 admin_secret cookie */
+export function requireAdminSecret(req: Request, res: Response, next: NextFunction): void {
+  requireAdmin(req, res, () => {
+    const token = (req.cookies as Record<string, string>)?.[ADMIN_SECRET_COOKIE];
+    if (!token) {
+      res.status(401).json({ error: "需要后台密码验证", code: "ADMIN_SECRET_REQUIRED" }); return;
+    }
+    const payload = verifyAdminSecretToken(token);
+    if (!payload || payload.userId !== req.user!.userId) {
+      res.status(401).json({ error: "后台密码已过期，请重新验证", code: "ADMIN_SECRET_EXPIRED" }); return;
+    }
     next();
   });
 }

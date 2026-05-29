@@ -30,6 +30,10 @@ export const api = {
   },
 
   admin: {
+    authStatus: () => api.get<{ hasSecret: boolean; verified: boolean }>("/admin/auth/status"),
+    authVerify: (password: string) => api.post<{ ok: boolean; firstTime?: boolean }>("/admin/auth/verify", { password }),
+    authChange: (oldPassword: string, newPassword: string) => api.post<{ ok: boolean }>("/admin/auth/change", { oldPassword, newPassword }),
+    authLogout: () => api.post<{ ok: boolean }>("/admin/auth/logout"),
     generateCards: (type: string, count: number, note?: string) =>
       api.post<{ ok: boolean; keys: string[] }>("/admin/cards/generate", { type, count, note }),
     listCards: () => api.get<{ cards: AdminCard[] }>("/admin/cards"),

@@ -3,7 +3,7 @@ import { db } from "@workspace/db";
 import { cardKeys, users, shopConfig, shopOrders } from "@workspace/db";
 import { eq, isNull, and, desc } from "drizzle-orm";
 import { createHash, randomUUID } from "crypto";
-import { requireAuth, requireAdmin } from "../middleware/requireAuth";
+import { requireAuth, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { cardTypeDurationMs, type CardType } from "../lib/auth";
 
 const router = Router();
@@ -111,7 +111,7 @@ async function fulfillOrder(orderId: string): Promise<{ ok: boolean; cardKey?: s
 
 // ── Admin: get shop config ──────────────────────────────────────────────────
 
-router.get("/admin/shop/config", requireAdmin, async (req, res) => {
+router.get("/admin/shop/config", requireAdminSecret, async (req, res) => {
   try {
     const cfg = await getConfig();
     res.json({
@@ -133,7 +133,7 @@ router.get("/admin/shop/config", requireAdmin, async (req, res) => {
 
 // ── Admin: save shop config ─────────────────────────────────────────────────
 
-router.post("/admin/shop/config", requireAdmin, async (req, res) => {
+router.post("/admin/shop/config", requireAdminSecret, async (req, res) => {
   const { kkpayId, kkpaySecret, domain, productName, priceDailyUsdt, priceWeeklyUsdt, priceMonthlyUsdt, enabled, botToken } = req.body as Record<string, string | boolean>;
   try {
     const existing = await getConfig();
@@ -163,7 +163,7 @@ router.post("/admin/shop/config", requireAdmin, async (req, res) => {
 
 // ── Admin: setup TG bot webhook ─────────────────────────────────────────────
 
-router.post("/admin/shop/setup-tg-bot", requireAdmin, async (req, res) => {
+router.post("/admin/shop/setup-tg-bot", requireAdminSecret, async (req, res) => {
   try {
     const cfg = await getConfig();
     if (!cfg?.botToken) { res.status(400).json({ error: "请先填写并保存 Bot Token" }); return; }
@@ -185,7 +185,7 @@ router.post("/admin/shop/setup-tg-bot", requireAdmin, async (req, res) => {
 
 // ── Admin: manually fulfill an order ───────────────────────────────────────
 
-router.post("/admin/shop/orders/:orderId/fulfill", requireAdmin, async (req, res) => {
+router.post("/admin/shop/orders/:orderId/fulfill", requireAdminSecret, async (req, res) => {
   const orderId = String(req.params["orderId"] ?? "");
   try {
     const result = await fulfillOrder(orderId);
@@ -216,7 +216,7 @@ router.post("/admin/shop/orders/:orderId/fulfill", requireAdmin, async (req, res
 
 // ── Admin: list orders ──────────────────────────────────────────────────────
 
-router.get("/admin/shop/orders", requireAdmin, async (req, res) => {
+router.get("/admin/shop/orders", requireAdminSecret, async (req, res) => {
   try {
     const orders = await db.select().from(shopOrders).orderBy(desc(shopOrders.createdAt)).limit(200);
     const userMap: Record<number, string> = {};

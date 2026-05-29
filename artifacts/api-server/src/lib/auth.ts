@@ -100,3 +100,46 @@ export const CLEAR_COOKIE_OPTS = {
   sameSite: "lax" as const,
   path: "/",
 };
+
+// ── 后台二级密码 cookie（2小时有效） ──────────────────────────────────────
+export const ADMIN_SECRET_COOKIE = "admin_secret";
+const ADMIN_SECRET_EXPIRY = 2 * 3600; // 2 hours
+
+export const ADMIN_SECRET_COOKIE_OPTS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  maxAge: ADMIN_SECRET_EXPIRY * 1000,
+  path: "/",
+};
+
+export const CLEAR_ADMIN_SECRET_COOKIE_OPTS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  sameSite: "lax" as const,
+  path: "/",
+};
+
+export function createAdminSecretToken(userId: number): string {
+  const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "AST" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify({
+    userId,
+    exp: Math.floor(Date.now() / 1000) + ADMIN_SECRET_EXPIRY,
+  })).toString("base64url");
+  const sig = crypto.createHmac("sha256", JWT_SECRET + ":admin-secret").update(`${header}.${body}`).digest("base64url");
+  return `${header}.${body}.${sig}`;
+}
+
+export function verifyAdminSecretToken(token: string): { userId: number } | null {
+  try {
+    const [header, body, sig] = token.split(".");
+    if (!header || !body || !sig) return null;
+    const expected = crypto.createHmac("sha256", JWT_SECRET + ":admin-secret").update(`${header}.${body}`).digest("base64url");
+    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig))) return null;
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString()) as { userId: number; exp: number };
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return { userId: payload.userId };
+  } catch {
+    return null;
+  }
+}

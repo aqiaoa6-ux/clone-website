@@ -4,12 +4,12 @@
   "balance": 1031499.97,
   "todayPnl": -313000,
   "todayResetAt": 1780012800000,
-  "sessionPnl": -126800,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003858203119",
   "cfg": {
-    "autoBet": true,
+    "autoBet": false,
     "betAmount": 100,
     "strategy": "normal",
     "betMultiplier": 2,
@@ -33,6 +33,7 @@
     "algorithms": [
       "steady_ai"
     ],
+    "algoFlipOnLoss": 2,
     "odds": 1.98,
     "oddsBigOdd": 1.98,
     "oddsBigEven": 1.98,
@@ -46,8 +47,7 @@
     "kuaisanBetOptions": [
       "big",
       "small"
-    ],
-    "algoFlipOnLoss": 2
+    ]
   },
   "kuaisanResults": []
 }
