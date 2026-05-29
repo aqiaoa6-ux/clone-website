@@ -46,6 +46,7 @@ interface BetCfg {
   killGroupMode: boolean;
   gameMode: "lottery" | "kuaisan";
   kuaisanBetOptions: string[];
+  algoFlipOnLoss: number; // 0=disabled; N=连续方向错N局后自动反转方向
 }
 
 interface GroupInfo {
@@ -120,6 +121,7 @@ interface TgSession {
   kkpayOutRawBuilder?: Raw | null;
   // runtime
   consecutiveLosses: number;
+  consecutiveAlgoLosses: number; // 连续方向预测错误次数（不含追号）
   sessionPnl: number;
   currentBet: number;
   lastBetAt: number;
@@ -205,6 +207,7 @@ const DEFAULT_CFG: BetCfg = {
   stepBackOnWin: true,
   betOptions: ["big", "small"],
   algorithms: ["ai_trend"],
+  algoFlipOnLoss: 4,
   odds: 1.98,
   oddsBigOdd: 1.98,
   oddsBigEven: 1.98,
@@ -625,6 +628,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       kkpayHandler: null, kkpayHandlerBuilder: null,
       globalHandler: null, globalHandlerBuilder: null,
       consecutiveLosses: 0,
+      consecutiveAlgoLosses: 0,
       sessionPnl: 0,
       currentLevel: 0,
       currentBet: (data.cfg?.amountLevels?.length ?? 0) > 1
@@ -828,6 +832,8 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
 
   // 追号不影响主投注的连亏计数和资金策略
   if (!isChase) {
+    // 连续方向错误计数：仅主注、有明确方向结果才计
+    session.consecutiveAlgoLosses = won ? 0 : session.consecutiveAlgoLosses + 1;
     session.consecutiveLosses = won ? 0 : session.consecutiveLosses + 1;
     session.currentBet = computeNextBet(session, won);
 
@@ -1150,11 +1156,35 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   return freqPick(history, labels, algoId === "cold_pick");
 }
 
+/** 当连续方向错误达到阈值时，反转算法输出方向 */
+function applyAlgoFlip(session: TgSession, direction: string | null, labels: string[]): string | null {
+  if (!direction) return direction;
+  const threshold = session.cfg.algoFlipOnLoss ?? 0;
+  if (threshold <= 0 || session.consecutiveAlgoLosses < threshold) return direction;
+  // 找反向选项
+  const opp: Record<string, string> = {
+    大:"小", 小:"大", 单:"双", 双:"单",
+    大单:"小双", 大双:"小单", 小单:"大双", 小双:"大单",
+    大单小双:"小单大双", 小单大双:"大单小双",
+  };
+  const flipped = opp[direction] ?? null;
+  const finalDir = (flipped && labels.includes(flipped)) ? flipped
+    : (flipped ? flipped : direction);
+  if (finalDir !== direction) {
+    pushEvent(session, "bet:alert", {
+      level: "warn",
+      message: `🔄 已连续方向错误 ${session.consecutiveAlgoLosses} 局，自动反转方向：${direction} → ${finalDir}`,
+    });
+  }
+  return finalDir;
+}
+
 function decideBet(session: TgSession, signalText: string): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   if (!labels.length || !session.cfg.algorithms.length) return null;
   const algoId = selectAlgoByPattern(session);
-  const direction = runAlgo(session, algoId, labels, signalText);
+  const raw = runAlgo(session, algoId, labels, signalText);
+  const direction = applyAlgoFlip(session, raw, labels);
   if (direction !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
   return direction;
 }
@@ -1163,7 +1193,8 @@ function decideBetAuto(session: TgSession): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   if (!labels.length || !session.cfg.algorithms.length) return null;
   const algoId = selectAlgoByPattern(session);
-  const direction = runAlgo(session, algoId, labels);
+  const raw = runAlgo(session, algoId, labels);
+  const direction = applyAlgoFlip(session, raw, labels);
   if (direction !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
   return direction;
 }
@@ -2591,7 +2622,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       betLog: [], sseClients: existing?.sseClients ?? new Set(),
       messageHandler: null, messageHandlerBuilder: null,
       kkpayHandler: null, kkpayHandlerBuilder: null,
-      consecutiveLosses: 0, sessionPnl: 0,
+      consecutiveLosses: 0, consecutiveAlgoLosses: 0, sessionPnl: 0,
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
       betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "", lastAIBet: null,
@@ -2683,6 +2714,7 @@ router.get("/tg/status", requireCard, (req, res) => {
     watchGroupTitle: (() => { const wgid = session.watchGroupId; return session.groups.find(g => g.id === wgid || `-100${g.id}` === wgid)?.title; })(),
     ...session.cfg,
     consecutiveLosses: session.consecutiveLosses,
+    consecutiveAlgoLosses: session.consecutiveAlgoLosses,
     sessionPnl: session.sessionPnl,
     currentBet: session.currentBet,
     balance: session.balance,
@@ -2796,6 +2828,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     killGroupMode: body.killGroupMode ?? prev.killGroupMode,
     gameMode: (body.gameMode as BetCfg["gameMode"]) ?? prev.gameMode,
     kuaisanBetOptions: body.kuaisanBetOptions ?? prev.kuaisanBetOptions,
+    algoFlipOnLoss: body.algoFlipOnLoss ?? prev.algoFlipOnLoss,
   };
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
@@ -2803,6 +2836,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     session.currentLevel = lvl;
     session.currentBet = session.cfg.amountLevels[lvl] ?? session.cfg.betAmount;
     session.consecutiveLosses = 0;
+    session.consecutiveAlgoLosses = 0;
   }
   if (body.algorithms !== undefined) session.algIndex = 0;
 
@@ -2825,6 +2859,7 @@ router.post("/tg/config", requireCard, (req, res) => {
       ? (session.cfg.amountLevels[0] ?? session.cfg.betAmount)
       : session.cfg.betAmount;
     session.consecutiveLosses = 0;
+    session.consecutiveAlgoLosses = 0;
     session.betPlacedThisCycle = false;
     // For lottery mode only: start poller
     if (session.cfg.gameMode !== "kuaisan") {

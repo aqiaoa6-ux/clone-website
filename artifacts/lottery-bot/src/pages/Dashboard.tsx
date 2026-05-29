@@ -262,6 +262,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [targetProfit, setTargetProfit] = useState(String(status.targetProfit ?? 3000));
   const [maxLoss, setMaxLoss] = useState(String(status.maxConsecutiveLosses ?? 5));
   const [cooldown, setCooldown] = useState(String(status.cooldownSeconds ?? 0));
+  const [algoFlip, setAlgoFlip] = useState(String((status as unknown as { algoFlipOnLoss?: number }).algoFlipOnLoss ?? 4));
   const [algos, setAlgos] = useState<string[]>(status.algorithms ?? ["signal_follow"]);
   const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
   const [dualGroupMode, setDualGroupMode] = useState<boolean>(!!(status as unknown as { dualGroupMode?: boolean }).dualGroupMode);
@@ -315,6 +316,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
         enableChase,
         gameMode,
         kuaisanBetOptions: kuaisanOpts,
+        algoFlipOnLoss: Number(algoFlip),
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
       onClose();
@@ -543,6 +545,10 @@ function SettingsDrawer({ status, onClose, onSave }: {
               <div>
                 <label className={labelCls}>冷却秒数</label>
                 <input type="number" value={cooldown} onChange={e => setCooldown(e.target.value)} className={inputCls} min="0" />
+              </div>
+              <div>
+                <label className={labelCls}>方向反转（连错N局）</label>
+                <input type="number" value={algoFlip} onChange={e => setAlgoFlip(e.target.value)} className={inputCls} min="0" placeholder="0=关闭" />
               </div>
             </div>
           </div>
