@@ -3613,4 +3613,20 @@ router.post("/tg/disconnect", requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+/** 登出时停止指定用户的自动投注（保留 TG 连接和会话） */
+export function stopUserAutoBet(userId: number): void {
+  const session = tgSessions.get(userId);
+  if (!session) return;
+  if (session.cfg.autoBet) {
+    session.cfg.autoBet = false;
+    stopPoller(session);
+    // 停快三自动投注轮询
+    if (session.kuaisanPollTimer) { clearInterval(session.kuaisanPollTimer); session.kuaisanPollTimer = undefined; }
+    if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
+    // 保存会话（autoBet=false 持久化）
+    saveSession(session);
+    logger.info({ userId }, "[auth] logout — autoBet stopped");
+  }
+}
+
 export default router;

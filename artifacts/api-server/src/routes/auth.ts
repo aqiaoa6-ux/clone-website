@@ -2,8 +2,9 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { users } from "@workspace/db";
 import { eq, count } from "drizzle-orm";
-import { hashPassword, verifyPassword, createToken, COOKIE_NAME, COOKIE_OPTS, CLEAR_COOKIE_OPTS } from "../lib/auth";
+import { hashPassword, verifyPassword, createToken, verifyToken, COOKIE_NAME, COOKIE_OPTS, CLEAR_COOKIE_OPTS } from "../lib/auth";
 import { requireAuth } from "../middleware/requireAuth";
+import { stopUserAutoBet } from "./telegram";
 
 const router = Router();
 
@@ -59,7 +60,13 @@ router.post("/auth/login", async (req, res) => {
   }
 });
 
-router.post("/auth/logout", (_req, res) => {
+router.post("/auth/logout", (req, res) => {
+  // 登出前停止该用户的自动投注
+  const token = (req.cookies as Record<string, string>)?.[COOKIE_NAME];
+  if (token) {
+    const payload = verifyToken(token);
+    if (payload) stopUserAutoBet(payload.userId);
+  }
   res.clearCookie(COOKIE_NAME, CLEAR_COOKIE_OPTS);
   res.json({ ok: true });
 });
