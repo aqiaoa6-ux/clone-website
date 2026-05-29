@@ -270,6 +270,7 @@ export interface TgChatMessage {
 
 export interface AdminTgSession {
   userId: number;
+  isOnline: boolean;
   me: { firstName?: string; lastName?: string; username?: string; phone?: string };
   watchGroupTitle?: string;
   autoBet: boolean;

@@ -655,10 +655,13 @@ export default function AdminPage() {
                           </div>
                           {s.watchGroupTitle && <div className="text-slate-500 text-xs mt-0.5">监听：{s.watchGroupTitle}</div>}
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          {s.autoBet
+                        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+                          {s.isOnline
+                            ? <span className="text-[10px] text-sky-400 bg-sky-500/10 border border-sky-500/30 px-2 py-0.5 rounded-full flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-sky-400"></span>在线</span>
+                            : <span className="text-[10px] text-slate-500 bg-slate-500/10 border border-slate-500/20 px-2 py-0.5 rounded-full flex items-center gap-1"><span className="inline-block w-1.5 h-1.5 rounded-full bg-slate-500"></span>离线</span>}
+                          {s.autoBet && s.isOnline
                             ? <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full">自动投注</span>
-                            : <span className="text-[10px] text-slate-500 bg-slate-500/10 border border-slate-500/20 px-2 py-0.5 rounded-full">已停止</span>}
+                            : s.autoBet ? <span className="text-[10px] text-yellow-400 bg-yellow-500/10 border border-yellow-500/30 px-2 py-0.5 rounded-full">已停止</span> : null}
                           {s.riskBlocked && <span className="text-[10px] text-red-400 bg-red-500/10 border border-red-500/30 px-2 py-0.5 rounded-full">风控暂停</span>}
                         </div>
                       </div>

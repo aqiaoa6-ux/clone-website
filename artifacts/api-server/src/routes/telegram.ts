@@ -191,6 +191,7 @@ interface PersistedData {
   watchGroupId?: string;
   cfg?: Partial<BetCfg>;
   kuaisanResults?: KuaisanResult[];
+  me?: { firstName?: string; lastName?: string; username?: string; phone?: string };
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -466,6 +467,12 @@ function saveSession(session: TgSession): void {
       watchGroupId: session.watchGroupId,
       cfg: session.cfg,
       kuaisanResults: session.kuaisanResults.slice(0, 30),
+      me: session.me ? {
+        firstName: session.me.firstName,
+        lastName: session.me.lastName,
+        username: session.me.username,
+        phone: session.me.phone,
+      } : undefined,
     };
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
   } catch { /* ignore */ }
@@ -607,75 +614,99 @@ function startWatchdog(session: TgSession): void {
 // ─── Restore sessions on boot ─────────────────────────────────────────────────
 
 async function restoreUserSession(userId: number, file: string): Promise<void> {
+  let data: PersistedData;
   try {
     const raw = fs.readFileSync(file, "utf-8");
-    const data = JSON.parse(raw) as PersistedData;
+    data = JSON.parse(raw) as PersistedData;
     if (!data.sessionString) return;
+  } catch {
+    return; // 文件损坏，跳过
+  }
 
-    const { apiId, apiHash } = getCredentials();
-    if (!apiId || !apiHash) return;
+  const { apiId, apiHash } = getCredentials();
+  if (!apiId || !apiHash) return;
 
-    const stringSession = new StringSession(data.sessionString);
-    const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
+  const stringSession = new StringSession(data.sessionString);
+  const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
+
+  // 尝试连接 TG，失败时仍创建离线 session（不删文件）
+  let me: Api.User | null = null;
+  let connected = false;
+  try {
     await client.connect();
-    const me = (await client.getMe()) as Api.User;
-    if (!me?.id) return;
+    me = (await client.getMe()) as Api.User;
+    if (me?.id) connected = true;
+  } catch {
+    logger.warn({ userId }, "[tg] restore connect failed — creating offline session");
+  }
 
-    const session: TgSession = {
-      userId,
-      client, stringSession,
-      phone: data.phone ?? "",
-      groups: await fetchGroups(client),
-      cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG },
-      betLog: [], sseClients: new Set(),
-      messageHandler: null, messageHandlerBuilder: null,
-      kkpayHandler: null, kkpayHandlerBuilder: null,
-      globalHandler: null, globalHandlerBuilder: null,
-      consecutiveLosses: 0,
-      consecutiveAlgoLosses: 0,
-      recentAlgoOutcomes: [],
-      sessionPnl: 0,
-      currentLevel: 0,
-      currentBet: (data.cfg?.amountLevels?.length ?? 0) > 1
-        ? (data.cfg!.amountLevels![0] ?? data.cfg?.betAmount ?? DEFAULT_CFG.betAmount)
-        : (data.cfg?.betAmount ?? DEFAULT_CFG.betAmount),
-      lastBetAt: 0,
-      algIndex: 0,
-      betPlacedThisCycle: false,
-      chasePlacedThisCycle: false,
-      lastSeenLotteryPeriod: 0,
-      currentCloseTimeMs: 0,
-      lastSignalText: "",
-      lastAIBet: null,
-      lastRawAlgoDir: null,
-      algoFlipCooldown: 0,
-      adaptiveSwitchKillMode: false,
-      algoStats: {},
-      recentResults: [],
-      chatLog: [],
-      diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
-      kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-      balance: data.balance ?? 1000000,
-      todayPnl: data.todayPnl ?? 0,
-      todayResetAt: data.todayResetAt ?? todayMidnight(),
-      kkpayUsername: data.kkpayUsername ?? "kkpay",
-      kkpayEntityId: undefined,
-      balanceSource: data.balanceSource ?? "manual",
-      balanceUpdatedAt: 0,
-      me,
-      watchGroupId: data.watchGroupId,
-    };
+  // 无法获取 me 时从持久化文件恢复基本信息
+  const meInfo = connected && me ? me : (data.me ? {
+    firstName: data.me.firstName,
+    lastName: data.me.lastName,
+    username: data.me.username,
+    phone: data.me.phone ?? data.phone,
+    id: BigInt(userId),
+  } as unknown as Api.User : null);
 
-    tgSessions.set(userId, session);
+  if (!meInfo) return; // 没有任何 me 信息，无法恢复
 
+  const session: TgSession = {
+    userId,
+    client, stringSession,
+    phone: data.phone ?? "",
+    groups: connected ? await fetchGroups(client) : [],
+    cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG },
+    betLog: [], sseClients: new Set(),
+    messageHandler: null, messageHandlerBuilder: null,
+    kkpayHandler: null, kkpayHandlerBuilder: null,
+    globalHandler: null, globalHandlerBuilder: null,
+    consecutiveLosses: 0,
+    consecutiveAlgoLosses: 0,
+    recentAlgoOutcomes: [],
+    sessionPnl: 0,
+    currentLevel: 0,
+    currentBet: (data.cfg?.amountLevels?.length ?? 0) > 1
+      ? (data.cfg!.amountLevels![0] ?? data.cfg?.betAmount ?? DEFAULT_CFG.betAmount)
+      : (data.cfg?.betAmount ?? DEFAULT_CFG.betAmount),
+    lastBetAt: 0,
+    algIndex: 0,
+    betPlacedThisCycle: false,
+    chasePlacedThisCycle: false,
+    lastSeenLotteryPeriod: 0,
+    currentCloseTimeMs: 0,
+    lastSignalText: "",
+    lastAIBet: null,
+    lastRawAlgoDir: null,
+    algoFlipCooldown: 0,
+    adaptiveSwitchKillMode: false,
+    algoStats: {},
+    recentResults: [],
+    chatLog: [],
+    diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
+    kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
+    balance: data.balance ?? 1000000,
+    todayPnl: data.todayPnl ?? 0,
+    todayResetAt: data.todayResetAt ?? todayMidnight(),
+    kkpayUsername: data.kkpayUsername ?? "kkpay",
+    kkpayEntityId: undefined,
+    balanceSource: data.balanceSource ?? "manual",
+    balanceUpdatedAt: 0,
+    me: meInfo,
+    watchGroupId: data.watchGroupId,
+  };
+
+  tgSessions.set(userId, session);
+
+  if (connected) {
     if (session.watchGroupId) startGroupListener(session);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
-    startWatchdog(session);
-    logger.info({ userId }, "[tg] session restored");
-  } catch {
-    try { fs.unlinkSync(file); } catch { /* ok */ }
+    logger.info({ userId }, "[tg] session restored (online)");
+  } else {
+    logger.info({ userId }, "[tg] session restored (offline — watchdog will reconnect)");
   }
+  startWatchdog(session);
 }
 
 async function restoreAllSessions(): Promise<void> {
@@ -3210,8 +3241,10 @@ router.get("/admin/tg/sessions", requireAdminSecret, (_req, res) => {
     const settled = session.betLog.filter(b => b.won !== undefined);
     const wins = settled.filter(b => b.won === true).length;
     const wgid = session.watchGroupId;
+    const isOnline = !!(session.client?.connected);
     sessions.push({
       userId,
+      isOnline,
       me: {
         firstName: session.me.firstName,
         lastName: session.me.lastName,
@@ -3235,6 +3268,8 @@ router.get("/admin/tg/sessions", requireAdminSecret, (_req, res) => {
       currentPattern: session.currentPattern,
     });
   }
+  // 在线用户排前面
+  sessions.sort((a, b) => (b.isOnline ? 1 : 0) - (a.isOnline ? 1 : 0));
   res.json({ sessions });
 });
 
