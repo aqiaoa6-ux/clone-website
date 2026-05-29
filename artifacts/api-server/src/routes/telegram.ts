@@ -73,6 +73,7 @@ interface BetRecord {
   failReason?: string; // human-readable error if status="failed"
   isAdaptiveKillBet?: boolean; // adaptive_switch: this bet was placed in kill-group phase
   algoId?: string; // which algorithm placed this bet
+  rawAlgoDir?: string; // algorithm direction BEFORE flip (for flip feedback-loop prevention)
 }
 
 // Extract a short, human-readable error code from a GramJS/Telegram error.
@@ -161,6 +162,8 @@ interface TgSession {
   lastSeenLotteryPeriod: number;
   lastSignalText: string;
   lastAIBet: string | null;
+  lastRawAlgoDir: string | null; // raw algo direction before flip
+  algoFlipCooldown: number;      // remaining bets in flip cooldown (re-eval blocked)
   // adaptive_switch algorithm state
   adaptiveSwitchKillMode: boolean; // false = 大小模式, true = 杀组模式
   // per-algorithm win/loss stats (accumulated for the session lifetime)
@@ -644,6 +647,8 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       currentCloseTimeMs: 0,
       lastSignalText: "",
       lastAIBet: null,
+      lastRawAlgoDir: null,
+      algoFlipCooldown: 0,
       adaptiveSwitchKillMode: false,
       algoStats: {},
       recentResults: [],
@@ -834,10 +839,34 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
 
   // 追号不影响主投注的连亏计数和资金策略
   if (!isChase) {
-    // 连续方向错误计数 + 滑动窗口（最近6局）
-    session.consecutiveAlgoLosses = won ? 0 : session.consecutiveAlgoLosses + 1;
-    session.recentAlgoOutcomes.push(won);
+    // 原始算法方向准确率追踪（不受 flip 影响，防止反馈死循环）
+    const rawDir = record?.rawAlgoDir;
+    let rawCorrect: boolean;
+    if (result && rawDir) {
+      // 判断原始方向是否预测正确：用 mapR3ToEnabled 做兼容映射
+      const mapped = mapR3ToEnabled(result, [rawDir]);
+      if (mapped !== null) {
+        rawCorrect = mapped === rawDir;
+      } else if (rawDir.includes("+")) {
+        // 复合方向如 "大单+小双"：result 对应其中一个即算正确
+        rawCorrect = rawDir.split("+").some(part => mapR3ToEnabled(result, [part]) === part);
+      } else {
+        rawCorrect = won; // fallback
+      }
+    } else {
+      rawCorrect = won; // 无结果/无原始方向时用最终胜负
+    }
+    session.consecutiveAlgoLosses = rawCorrect ? 0 : session.consecutiveAlgoLosses + 1;
+    session.recentAlgoOutcomes.push(rawCorrect);
     if (session.recentAlgoOutcomes.length > 6) session.recentAlgoOutcomes.shift();
+    // Flip 冷却倒计时：冷却期内不重新触发，冷却结束时清空计数
+    if (session.algoFlipCooldown > 0) {
+      session.algoFlipCooldown--;
+      if (session.algoFlipCooldown === 0) {
+        session.consecutiveAlgoLosses = 0;
+        session.recentAlgoOutcomes = [];
+      }
+    }
     session.consecutiveLosses = won ? 0 : session.consecutiveLosses + 1;
     session.currentBet = computeNextBet(session, won);
 
@@ -1160,21 +1189,11 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   return freqPick(history, labels, algoId === "cold_pick");
 }
 
-/** 当连续方向错误 OR 近期胜率过低时，反转算法输出方向 */
+/** 当连续方向错误 OR 近期胜率过低时，反转算法输出方向（含冷却机制防振荡） */
 function applyAlgoFlip(session: TgSession, direction: string | null, labels: string[]): string | null {
   if (!direction) return direction;
   const threshold = session.cfg.algoFlipOnLoss ?? 0;
   if (threshold <= 0) return direction;
-
-  // 触发条件1：连续方向错误 >= threshold
-  const consecTrigger = session.consecutiveAlgoLosses >= threshold;
-
-  // 触发条件2：近6局胜率 <= 33%（无论是否连续）
-  const outcomes = session.recentAlgoOutcomes;
-  const windowTrigger = outcomes.length >= 6 &&
-    (outcomes.filter(Boolean).length / outcomes.length) <= 0.33;
-
-  if (!consecTrigger && !windowTrigger) return direction;
 
   // 找反向选项
   const opp: Record<string, string> = {
@@ -1185,15 +1204,31 @@ function applyAlgoFlip(session: TgSession, direction: string | null, labels: str
   const flipped = opp[direction] ?? null;
   const finalDir = (flipped && labels.includes(flipped)) ? flipped
     : (flipped ? flipped : direction);
-  if (finalDir !== direction) {
-    const reason = consecTrigger
-      ? `连续错误 ${session.consecutiveAlgoLosses} 局`
-      : `近6局胜率仅 ${Math.round((outcomes.filter(Boolean).length / outcomes.length) * 100)}%`;
-    pushEvent(session, "bet:alert", {
-      level: "warn",
-      message: `🔄 ${reason}，自动反转方向：${direction} → ${finalDir}`,
-    });
-  }
+  if (finalDir === direction) return direction; // 没有可翻转的方向，跳过
+
+  // 冷却期内：继续反转，不重新评估（防止振荡）
+  if (session.algoFlipCooldown > 0) return finalDir;
+
+  // 评估触发条件（基于原始算法准确率，不受 flip 影响）
+  const consecTrigger = session.consecutiveAlgoLosses >= threshold;
+  const outcomes = session.recentAlgoOutcomes;
+  const windowTrigger = outcomes.length >= 6 &&
+    (outcomes.filter(Boolean).length / outcomes.length) <= 0.33;
+
+  if (!consecTrigger && !windowTrigger) return direction;
+
+  // 触发：设置4局冷却，清空计数，等待重新评估
+  session.algoFlipCooldown = 4;
+  session.consecutiveAlgoLosses = 0;
+  session.recentAlgoOutcomes = [];
+
+  const reason = consecTrigger
+    ? `连续原始错误 ${session.consecutiveAlgoLosses + threshold} 局`
+    : `近6局原始胜率仅 ${Math.round((outcomes.filter(Boolean).length / Math.max(outcomes.length, 1)) * 100)}%`;
+  pushEvent(session, "bet:alert", {
+    level: "warn",
+    message: `🔄 ${reason}，自动反转方向：${direction} → ${finalDir}（冷却4局）`,
+  });
   return finalDir;
 }
 
@@ -1202,6 +1237,7 @@ function decideBet(session: TgSession, signalText: string): string | null {
   if (!labels.length || !session.cfg.algorithms.length) return null;
   const algoId = selectAlgoByPattern(session);
   const raw = runAlgo(session, algoId, labels, signalText);
+  session.lastRawAlgoDir = raw;
   const direction = applyAlgoFlip(session, raw, labels);
   if (direction !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
   return direction;
@@ -1212,6 +1248,7 @@ function decideBetAuto(session: TgSession): string | null {
   if (!labels.length || !session.cfg.algorithms.length) return null;
   const algoId = selectAlgoByPattern(session);
   const raw = runAlgo(session, algoId, labels);
+  session.lastRawAlgoDir = raw;
   const direction = applyAlgoFlip(session, raw, labels);
   if (direction !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
   return direction;
@@ -1583,6 +1620,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   const status = succeeded ? "sent" : "failed";
 
   const algoId = session.lastAlgoUsed;
+  const rawAlgoDir = session.lastRawAlgoDir ?? undefined;
   if (dualItems) {
     // 双组模式：合并为一条记录，betContent = "大单+小双"
     const dualRec: BetRecord = {
@@ -1591,6 +1629,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       timestamp: now, status,
       ...(failReason ? { failReason } : {}),
       ...(algoId ? { algoId } : {}),
+      ...(rawAlgoDir ? { rawAlgoDir } : {}),
     };
     betLog.unshift(dualRec);
     pushEvent(session, "bet:new", { bet: dualRec });
@@ -1602,6 +1641,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       timestamp: now, status,
       ...(failReason ? { failReason } : {}),
       ...(algoId ? { algoId } : {}),
+      ...(rawAlgoDir ? { rawAlgoDir } : {}),
     };
     betLog.unshift(mainRec);
     pushEvent(session, "bet:new", { bet: mainRec });
@@ -2643,7 +2683,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       consecutiveLosses: 0, consecutiveAlgoLosses: 0, recentAlgoOutcomes: [], sessionPnl: 0,
       currentBet: DEFAULT_CFG.betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0,
-      betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "", lastAIBet: null,
+      betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "", lastAIBet: null, lastRawAlgoDir: null, algoFlipCooldown: 0,
       algoStats: {},
       recentResults: [], chatLog: [],
       globalHandler: null, globalHandlerBuilder: null,
@@ -2859,6 +2899,8 @@ router.post("/tg/config", requireCard, (req, res) => {
     session.consecutiveLosses = 0;
     session.consecutiveAlgoLosses = 0;
     session.recentAlgoOutcomes = [];
+    session.algoFlipCooldown = 0;
+    session.lastRawAlgoDir = null;
   }
   if (body.algorithms !== undefined) session.algIndex = 0;
 
@@ -2883,6 +2925,8 @@ router.post("/tg/config", requireCard, (req, res) => {
     session.consecutiveLosses = 0;
     session.consecutiveAlgoLosses = 0;
     session.recentAlgoOutcomes = [];
+    session.algoFlipCooldown = 0;
+    session.lastRawAlgoDir = null;
     session.betPlacedThisCycle = false;
     // For lottery mode only: start poller
     if (session.cfg.gameMode !== "kuaisan") {

@@ -1,10 +1,10 @@
 {
   "sessionString": "1AQAOMTQ5LjE1NC4xNzUuNTgBu2PuCN9M4ZszLUt/2ikLSL7Nn0DIgNyepZzokrMt9BCLsmZAGvCeLd5F034TRE0bhPONrDjR8b0AKNajyQRCVxAsejbRBK+x9R3D1FrsahYYDJNZUzfP/HoQMJ4Z9wDbiBXIR+arxvA8Ze/qEhVbCrzG8jIQ/qH1RX94qAZwPNDPVG1NVldjp0L89se4eAAXvcqu0PLKmRhSnW8ggKKe4M4Emo1+SxikjcTAhE5K1I7L3fXAZ3b6SjhympHP0zo7+2R/zS8pk0R+EplvyjXk3ZHTgRjuSBBp0xW2NHWSdGJqQU8Td6UPTWDztiS61YbcP+cyHbZ7l8on+yP6twgLI44=",
   "phone": "1 519 916 3986",
-  "balance": 1354779.97,
-  "todayPnl": 39800,
+  "balance": 1134179.97,
+  "todayPnl": -186200,
   "todayResetAt": 1780012800000,
-  "sessionPnl": -131000,
+  "sessionPnl": -226000,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003858203119",
@@ -18,10 +18,10 @@
     "targetProfit": 300000,
     "cooldownSeconds": 0,
     "amountLevels": [
-      10000,
       20000,
       40000,
       80000,
+      160000,
       160000,
       320000
     ],
