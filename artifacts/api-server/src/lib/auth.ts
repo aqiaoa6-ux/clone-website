@@ -84,11 +84,11 @@ export function cardTypeDurationMs(type: CardType): number {
   return 30 * 24 * 60 * 60 * 1000;
 }
 
+// 不设 maxAge → session cookie，浏览器关闭即清除
 export const COOKIE_OPTS = {
   httpOnly: true,
   secure: process.env.NODE_ENV === "production",
   sameSite: "lax" as const,
-  maxAge: TOKEN_EXPIRY * 1000,
   path: "/",
 };
 
