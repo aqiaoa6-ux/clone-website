@@ -1,9 +1,9 @@
 {
   "sessionString": "1AQAOMTQ5LjE1NC4xNzUuNTgBu2PuCN9M4ZszLUt/2ikLSL7Nn0DIgNyepZzokrMt9BCLsmZAGvCeLd5F034TRE0bhPONrDjR8b0AKNajyQRCVxAsejbRBK+x9R3D1FrsahYYDJNZUzfP/HoQMJ4Z9wDbiBXIR+arxvA8Ze/qEhVbCrzG8jIQ/qH1RX94qAZwPNDPVG1NVldjp0L89se4eAAXvcqu0PLKmRhSnW8ggKKe4M4Emo1+SxikjcTAhE5K1I7L3fXAZ3b6SjhympHP0zo7+2R/zS8pk0R+EplvyjXk3ZHTgRjuSBBp0xW2NHWSdGJqQU8Td6UPTWDztiS61YbcP+cyHbZ7l8on+yP6twgLI44=",
   "phone": "1 519 916 3986",
-  "balance": 1031499.97,
-  "todayPnl": -313000,
-  "todayResetAt": 1780012800000,
+  "balance": 0,
+  "todayPnl": 0,
+  "todayResetAt": 1780099200000,
   "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
@@ -51,7 +51,7 @@
   },
   "kuaisanResults": [],
   "me": {
-    "firstName": "主页自动投注08",
+    "firstName": "暗影-自动投注02",
     "lastName": null,
     "username": null,
     "phone": "15199163986"
