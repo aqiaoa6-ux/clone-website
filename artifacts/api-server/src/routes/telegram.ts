@@ -185,6 +185,9 @@ interface TgSession {
   hashResults: HashResult[];
   hashPollTimer?: ReturnType<typeof setInterval>;
   hashLastMsgId: number;
+  // hash result channel poller (t.me/hx28kjw)
+  hashResultPollTimer?: ReturnType<typeof setInterval>;
+  hashResultLastMsgId: number;
 }
 
 interface PersistedData {
@@ -711,7 +714,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     chatLog: [],
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-    hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0,
+    hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -2824,108 +2827,153 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
   logger.info({ algoId, direction, amount }, "[hash] bet placed");
 }
 
+// ── 发布哈希开奖结果（供下注群和开奖频道共用）──
+function publishHashResult(session: TgSession, result: HashResult): void {
+  if (!session.hashResults) session.hashResults = [];
+  session.hashResults.unshift(result);
+  if (session.hashResults.length > 50) session.hashResults.pop();
+  saveSession(session);
+  pushEvent(session, "hash:result", { value: result.value, label: result.label, big: result.big, odd: result.odd });
+  logger.info({ value: result.value, label: result.label }, "[hash] result → settling bets");
+  settleHashBets(session, result);
+  session.hashPhase = "closed";
+  session.betPlacedThisCycle = false;
+  session.chasePlacedThisCycle = false;
+}
+
+// ── 解析开奖频道消息并发布结果 ──
+async function processHashResultMsg(session: TgSession, text: string): Promise<void> {
+  if (!text) return;
+  // 必须含开奖相关关键词，排除非结果消息（广告、公告等）
+  if (!/开奖|结果|号码|大单|大双|小单|小双/.test(text)) return;
+
+  // 优先：「数字 大/小单/双」格式，如 "结果：17 大单" / "17\n大单"
+  const fullMatch = text.match(/[：:\s\n](\d{1,2})\s*[\n\s]*(大单|大双|小单|小双)/);
+  if (fullMatch) {
+    const val = parseInt(fullMatch[1]!);
+    if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
+  }
+  // 次优：「数字 大|小」
+  const bigSmallMatch = text.match(/[：:\s\n](\d{1,2})\s*[\n\s]*(大|小)/);
+  if (bigSmallMatch) {
+    const val = parseInt(bigSmallMatch[1]!);
+    if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
+  }
+  // 备用：独立数字（排除时间 HH:MM 和比值 n/n）
+  const numMatch = text.match(/(?<![:/\d])(\d{1,2})(?![:/\d])/);
+  if (numMatch) {
+    const val = parseInt(numMatch[1]!);
+    if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
+  }
+}
+
+// ── 下注群消息：只负责相位检测（开盘 / 封盘），结果由开奖频道轮询器处理 ──
 async function processHashMessage(session: TgSession, text: string, _msgId: number): Promise<void> {
   if (!text) return;
 
-  // Log to chatLog
+  // 记录到群消息日志
   const logEntry = { text: text.slice(0, 200), ts: Date.now(), chatId: session.watchGroupId ?? "" };
   if (!session.chatLog) session.chatLog = [];
   session.chatLog.unshift(logEntry as unknown as typeof session.chatLog[number]);
   if (session.chatLog.length > 50) session.chatLog.pop();
 
-  const publishResult = (result: HashResult) => {
-    if (!session.hashResults) session.hashResults = [];
-    session.hashResults.unshift(result);
-    if (session.hashResults.length > 50) session.hashResults.pop();
-    saveSession(session);
-    pushEvent(session, "hash:result", { value: result.value, label: result.label, big: result.big, odd: result.odd });
-    logger.info({ value: result.value, label: result.label }, "[hash] result → settling bets");
-    settleHashBets(session, result);
-    session.hashPhase = "closed";
-    session.betPlacedThisCycle = false;
-    session.chasePlacedThisCycle = false;
-  };
-
   // ── 开始下注 ──
-  // 哈希PC28 发的是图片消息，「开始下注」在横幅图片里，caption 里只有
-  // 「期号 / 封盘时间 / 开奖时间 / 赔率」，所以需要额外识别这种格式。
+  // 哈希PC28 发的是图片消息，caption 含「封盘时间」+「期号/赔率」
   const isBetOpen =
     text.includes("开始下注") ||
     text.includes("开始投注") ||
     text.includes("现在开始") ||
-    // 哈希PC28 图片消息 caption：含「封盘时间」且含「期号」或「赔率」
-    // 注意：封盘通知含「开奖时间」但不含「封盘时间」，不会误触发
     (text.includes("封盘时间") && (text.includes("期号") || text.includes("赔率")));
 
   if (isBetOpen && session.hashPhase !== "betting") {
     const periodMatch = text.match(/期[号码][：:\s]*([a-fA-F0-9\d]{4,})/);
-    // 提取封盘时间（如 15:58:23），方便日志调试
     const closeTimeMatch = text.match(/封盘时间[：:\s]*(\d{1,2}:\d{2}:\d{2})/);
     session.hashPhase = "betting";
     session.hashPeriod = periodMatch?.[1] ?? null;
     session.betPlacedThisCycle = false;
     pushEvent(session, "hash:phase", { phase: "betting", period: session.hashPeriod });
-    logger.info({ period: session.hashPeriod, closeTime: closeTimeMatch?.[1] }, "[hash] bet open → placing bet immediately");
+    logger.info({ period: session.hashPeriod, closeTime: closeTimeMatch?.[1] }, "[hash] bet open");
     if (session.cfg.autoBet) await runHashAutoBet(session);
     return;
   }
 
-  // ── 封盘 ──
-  // 注意：「封盘时间」出现在开盘通知里，不能触发封盘逻辑
+  // ── 封盘 ──（「封盘时间」是开盘通知字段，不触发封盘）
   const isClosing = !text.includes("封盘时间") && /停止下注|停止投注|已封盘|封盘/.test(text);
   if (isClosing && session.hashPhase === "betting") {
     session.hashPhase = "closed";
     pushEvent(session, "hash:phase", { phase: "closed" });
-    return;
-  }
-
-  // ── 开奖：解析哈希值结果数字 ──
-  // 常见格式: "开奖结果: 17 大单" / "哈希值28 结果：7 小单" / "本期哈希 21" / "开奖：21 大单"
-  // ── 开奖结果 ──
-  // 只在已封盘（closed）状态下才解析结果，避免把历史消息或封盘通知误判为开奖结果
-  const isResultMsg =
-    session.hashPhase === "closed" &&
-    /开奖|结果|本期哈希|哈希值\s*\d|hash/i.test(text) &&
-    // 排除「封盘通知」（含「停止下注」）和「开始下注通知」
-    !text.includes("停止下注") && !text.includes("封盘时间");
-
-  if (isResultMsg) {
-    // 优先：「数字 大/小单/双」格式，如 "结果：17 大单"
-    const fullMatch = text.match(/[：:\s](\d{1,2})\s*(大单|大双|小单|小双|大|小|单|双)/);
-    if (fullMatch) {
-      const val = parseInt(fullMatch[1]!);
-      if (val >= 0 && val <= 27) {
-        publishResult(computeHashResult(val));
-        return;
-      }
-    }
-    // 备用：独立数字（排除时间格式 HH:MM:SS 和分数/比值格式 n/n）
-    const numMatch = text.match(/(?<![:/\d])(\d{1,2})(?![:/\d])/);
-    if (numMatch) {
-      const val = parseInt(numMatch[1]!);
-      if (val >= 0 && val <= 27) {
-        publishResult(computeHashResult(val));
-        return;
-      }
-    }
-    // 备用：只有标签（合成结果，数值用边界值占位）
-    const labelMatch = text.match(/(大单|大双|小单|小双)/);
-    if (labelMatch) {
-      const lbl = labelMatch[1]!;
-      const big = lbl.includes("大");
-      const odd = lbl.includes("单");
-      const synth: HashResult = { value: big ? (odd ? 15 : 14) : (odd ? 13 : 12), big, odd, label: lbl };
-      publishResult(synth);
-      return;
-    }
   }
 }
+
+// ─── Hash result channel poller (t.me/hx28kjw) ───────────────────────────────
+
+const HX28_RESULT_CHANNEL = "hx28kjw";
+
+function stopHashResultPoller(session: TgSession): void {
+  if (session.hashResultPollTimer) {
+    clearInterval(session.hashResultPollTimer);
+    session.hashResultPollTimer = undefined;
+  }
+}
+
+function startHashResultPoller(session: TgSession): void {
+  stopHashResultPoller(session);
+
+  void (async () => {
+    // 用字符串 username 直接传给 getMessages，GramJS 内部会自动解析
+    const chanTarget = HX28_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
+
+    // 取基准消息 ID，避免重启时把历史结果全部重算
+    try {
+      const baseline = await session.client.getMessages(chanTarget, { limit: 1 }) as Api.Message[];
+      if (baseline.length > 0) {
+        session.hashResultLastMsgId = baseline[0]!.id;
+        logger.info({ channel: HX28_RESULT_CHANNEL, baselineMsgId: session.hashResultLastMsgId }, "[hash-result] 开奖频道轮询已启动");
+      }
+    } catch (err) {
+      logger.warn({ err, channel: HX28_RESULT_CHANNEL }, "[hash-result] 无法读取开奖频道，30s 后重试");
+      setTimeout(() => {
+        if (tgSessions.get(session.userId) === session && session.cfg.gameMode === "hash") {
+          startHashResultPoller(session);
+        }
+      }, 30_000);
+      return;
+    }
+
+    if (tgSessions.get(session.userId) !== session) return;
+
+    session.hashResultPollTimer = setInterval(() => {
+      if (tgSessions.get(session.userId) !== session) {
+        clearInterval(session.hashResultPollTimer); session.hashResultPollTimer = undefined; return;
+      }
+      void (async () => {
+        try {
+          const msgs = await session.client.getMessages(chanTarget, {
+            limit: 10,
+            ...(session.hashResultLastMsgId > 0 ? { minId: session.hashResultLastMsgId } : {}),
+          }) as Api.Message[];
+          if (!msgs.length) return;
+          const sorted = [...msgs].sort((a, b) => a.id - b.id);
+          for (const msg of sorted) {
+            if (msg.id <= session.hashResultLastMsgId) continue;
+            session.hashResultLastMsgId = msg.id;
+            const text = msg.message ?? "";
+            await processHashResultMsg(session, text);
+          }
+        } catch { /* network hiccup */ }
+      })();
+    }, 3000);
+  })();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function stopHashListener(session: TgSession): void {
   if (session.hashPollTimer) {
     clearInterval(session.hashPollTimer);
     session.hashPollTimer = undefined;
   }
+  stopHashResultPoller(session);
 }
 
 function startHashListener(session: TgSession): void {
@@ -2937,6 +2985,9 @@ function startHashListener(session: TgSession): void {
     session.messageHandler = null; session.messageHandlerBuilder = null;
   }
   const targetId = session.watchGroupId;
+
+  // 同时启动开奖频道轮询器（hx28kjw → 获取实际开奖结果）
+  startHashResultPoller(session);
 
   // 先拿到最新消息 ID 再开始轮询，避免启动时把历史消息全部误处理
   void (async () => {
@@ -3227,7 +3278,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       adaptiveSwitchKillMode: false,
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-      hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0,
+      hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
