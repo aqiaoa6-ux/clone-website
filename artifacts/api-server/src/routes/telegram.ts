@@ -2905,15 +2905,18 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
     text.includes("现在开始") ||
     (text.includes("封盘时间") && (text.includes("期号") || text.includes("赔率")));
 
+  // ── 开始下注（仅更新相位显示，不触发下注——下注由开奖频道驱动）──
   if (isBetOpen && session.hashPhase !== "betting") {
     const periodMatch = text.match(/期[号码][：:\s]*([a-fA-F0-9\d]{4,})/);
     const closeTimeMatch = text.match(/封盘时间[：:\s]*(\d{1,2}:\d{2}:\d{2})/);
+    // 只有在开奖频道尚未设置期号时才从群里补充（避免覆盖频道已设的正确期号）
+    if (!session.hashPeriod) {
+      session.hashPeriod = periodMatch?.[1] ?? null;
+    }
     session.hashPhase = "betting";
-    session.hashPeriod = periodMatch?.[1] ?? null;
-    session.betPlacedThisCycle = false;
     pushEvent(session, "hash:phase", { phase: "betting", period: session.hashPeriod });
-    logger.info({ period: session.hashPeriod, closeTime: closeTimeMatch?.[1] }, "[hash] bet open");
-    if (session.cfg.autoBet) await runHashAutoBet(session);
+    logger.info({ period: session.hashPeriod, closeTime: closeTimeMatch?.[1] }, "[hash] group: bet open (phase only, no auto-bet)");
+    // 注意：不在这里调用 runHashAutoBet，防止与开奖频道触发重复下注
     return;
   }
 
