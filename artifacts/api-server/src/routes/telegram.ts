@@ -1209,7 +1209,232 @@ function ksSmart(session: TgSession, labels: string[]): string | null {
   return vA >= vB ? optA : optB;
 }
 
+// ─── Hash (哈希) 专属算法 ─────────────────────────────────────────────────────
+
+/**
+ * 将哈希历史结果映射到 labels 维度。
+ * session.hashResults 存储 HashResult 对象；session.recentResults 存储 label 字符串。
+ * 优先用 hashResults，不够时补 recentResults。
+ */
+function buildHashHistory(session: TgSession, labels: string[]): string[] {
+  const [optA, optB] = [labels[0]!, labels[1] ?? labels[0]!];
+  const raw: string[] = [];
+
+  // 从 hashResults 中提取
+  const hr = session.hashResults ?? [];
+  for (let i = hr.length - 1; i >= 0; i--) {
+    const r = hr[i]!;
+    if (labels.includes(r.label)) { raw.push(r.label); continue; }
+    // 映射大小单双
+    if (labels.includes("大") || labels.includes("小")) {
+      raw.push(r.big ? "大" : "小"); continue;
+    }
+    if (labels.includes("单") || labels.includes("双")) {
+      raw.push(r.odd ? "单" : "双"); continue;
+    }
+    if (labels.includes("大单") || labels.includes("小双") || labels.includes("大双") || labels.includes("小单")) {
+      const combo = `${r.big ? "大" : "小"}${r.odd ? "单" : "双"}`;
+      const mapped = labels.includes(combo) ? combo : null;
+      if (mapped) raw.push(mapped); else raw.push(optA);
+      continue;
+    }
+    raw.push(optA);
+  }
+
+  // 不够则补 recentResults
+  if (raw.length < 20) {
+    for (let i = session.recentResults.length - 1; i >= 0 && raw.length < 40; i--) {
+      const lbl = session.recentResults[i]!;
+      if (labels.includes(lbl)) { raw.push(lbl); continue; }
+      const isBig = lbl.startsWith("大");
+      const isSmall = lbl.startsWith("小");
+      const isOdd = lbl.includes("单");
+      if (labels.length === 2) {
+        if (labels[0] === "大" || labels[0] === "小") raw.push(isBig ? "大" : "小");
+        else if (labels[0] === "单" || labels[0] === "双") raw.push(isOdd ? "单" : "双");
+        else raw.push(optA);
+      } else {
+        const combo = `${isBig ? "大" : isSmall ? "小" : "大"}${isOdd ? "单" : "双"}`;
+        raw.push(labels.includes(combo) ? combo : optA);
+      }
+    }
+  }
+
+  // raw 是倒序（最新在最前），需要正序
+  return raw.reverse();
+}
+
+/**
+ * 哈希算法1 — 区块链龙形
+ *
+ * 原理：ETH/TRON 区块哈希是强随机源，连续同向超过5期后统计回归概率显著上升。
+ * 策略：
+ *   - 连续同向 1-5 期 → 跟随（顺势）
+ *   - 连续同向 6+ 期  → 反向（统计回归）
+ *   - 若近3期出现2次以上交替（ABAB）→ 跟最新一期（波段跟尾）
+ */
+function hashDragon(session: TgSession, labels: string[]): string | null {
+  if (labels.length < 2) return labels[0] ?? null;
+  const [optA, optB] = [labels[0]!, labels[1]!];
+  const h = buildHashHistory(session, labels);
+  if (h.length < 2) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+
+  const last = h[h.length - 1]!;
+  const opp = last === optA ? optB : optA;
+
+  // 计算当前连续龙长度
+  let streak = 1;
+  for (let i = h.length - 2; i >= 0; i--) {
+    if (h[i] === last) streak++;
+    else break;
+  }
+
+  // 近4期交替密度
+  const tail4 = h.slice(-4);
+  let altCnt = 0;
+  for (let i = 1; i < tail4.length; i++) if (tail4[i] !== tail4[i - 1]) altCnt++;
+  const isOscillating = tail4.length >= 3 && altCnt >= 3; // 4期3次交替 = ABAB型
+
+  if (isOscillating) return last; // 震荡尾部跟最新一期（波段惯性）
+  if (streak >= 6) return opp;    // 超长龙反转
+  return last;                    // 1-5期顺龙
+}
+
+/**
+ * 哈希算法2 — 双链均衡
+ *
+ * 原理：ETH+TRON 双链独立，理论上大小/单双长期各占50%。
+ * 策略：三窗口加权评分（3/6/12期），偏差超过阈值时押均值回归方向；
+ *        结果集中在边界附近（12-15）时，反映两链哈希接近边界值，押突破方向。
+ */
+function hashBalance(session: TgSession, labels: string[]): string | null {
+  if (labels.length < 2) return labels[0] ?? null;
+  const [optA, optB] = [labels[0]!, labels[1]!];
+  const h = buildHashHistory(session, labels);
+  if (h.length < 3) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+
+  // 三窗口加权：短期权重最高（近期更有参考价值）
+  type Window = { size: number; weight: number; revThresh: number };
+  const windows: Window[] = [
+    { size: 3,  weight: 3, revThresh: 3 },  // 3期全同方向 → 强回归
+    { size: 6,  weight: 2, revThresh: 5 },  // 6期5+同方向 → 回归
+    { size: 12, weight: 1, revThresh: 9 },  // 12期9+同方向 → 回归
+  ];
+
+  let scoreA = 0; // 正分 = 支持押 optA
+  let scoreB = 0;
+
+  for (const w of windows) {
+    const slice = h.slice(-w.size);
+    if (slice.length < Math.ceil(w.size * 0.5)) continue;
+    const cntA = slice.filter(x => x === optA).length;
+    const cntB = slice.length - cntA;
+
+    if (cntA >= w.revThresh) {
+      // optA 占比过高 → 回归信号支持 optB
+      scoreB += w.weight * (cntA - Math.floor(w.size / 2));
+    } else if (cntB >= w.revThresh) {
+      // optB 占比过高 → 回归信号支持 optA
+      scoreA += w.weight * (cntB - Math.floor(w.size / 2));
+    } else {
+      // 均衡区间：跟随近期多数
+      if (cntA > cntB) scoreA += w.weight;
+      else scoreB += w.weight;
+    }
+  }
+
+  // 边界聚集检测：近5期哈希值在12-15之间的数量
+  // 边界聚集意味着下期结果方向不稳定，跟随最近一期
+  const hr = (session.hashResults ?? []).slice(0, 5);
+  const boundaryCount = hr.filter(r => r.value >= 12 && r.value <= 15).length;
+  if (boundaryCount >= 3 && h.length > 0) {
+    // 边界聚集：跟最近一期
+    const lastLbl = h[h.length - 1]!;
+    return labels.includes(lastLbl) ? lastLbl : (scoreA >= scoreB ? optA : optB);
+  }
+
+  if (scoreA === scoreB) return h[h.length - 1] ?? optA; // 平局跟最近
+  return scoreA > scoreB ? optA : optB;
+}
+
+/**
+ * 哈希算法3 — MD5波段
+ *
+ * 原理：MD5 提取数字后取末3位求和，产生特定的"波段"结构——
+ *        短期动量 × 中期偏差修正 × 交替密度三维合力决策。
+ * 策略：
+ *   M1 短期动量（近3期）：一致则跟，不一致取最新
+ *   M2 中期偏差（近8期）：超过5.5:2.5偏差则押少数
+ *   M3 交替密度（近6期）：交替率≥0.7押反最新（震荡市），≤0.3押跟（龙市）
+ *   三维评分加权，取胜出方向
+ */
+function hashWave(session: TgSession, labels: string[]): string | null {
+  if (labels.length < 2) return labels[0] ?? null;
+  const [optA, optB] = [labels[0]!, labels[1]!];
+  const h = buildHashHistory(session, labels);
+  if (h.length < 3) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+
+  let scoreA = 0;
+  let scoreB = 0;
+
+  // ── M1 短期动量（近3期，权重3） ──────────────────────────────────
+  const t3 = h.slice(-3);
+  const m1A = t3.filter(x => x === optA).length;
+  const m1B = t3.length - m1A;
+  if (m1A === 3) scoreA += 3;       // 3连同方向 → 强动量
+  else if (m1B === 3) scoreB += 3;
+  else if (m1A > m1B) scoreA += 1;  // 2-1 多数方向
+  else if (m1B > m1A) scoreB += 1;
+  else {
+    // 1-1-? 平局时跟最新
+    const lnew = h[h.length - 1];
+    if (lnew === optA) scoreA += 1; else scoreB += 1;
+  }
+
+  // ── M2 中期偏差（近8期，权重2） ──────────────────────────────────
+  if (h.length >= 5) {
+    const t8 = h.slice(-8);
+    const m2A = t8.filter(x => x === optA).length;
+    const m2B = t8.length - m2A;
+    const ratio = t8.length > 0 ? m2A / t8.length : 0.5;
+    if (ratio >= 0.70) scoreB += 2;      // optA 强势 → 回归押 optB
+    else if (ratio <= 0.30) scoreA += 2; // optB 强势 → 回归押 optA
+    else if (m2A > m2B) scoreA += 1;
+    else if (m2B > m2A) scoreB += 1;
+  }
+
+  // ── M3 交替密度（近6期，权重2） ──────────────────────────────────
+  if (h.length >= 4) {
+    const t6 = h.slice(-6);
+    let altCnt = 0;
+    for (let i = 1; i < t6.length; i++) if (t6[i] !== t6[i - 1]) altCnt++;
+    const altRate = t6.length > 1 ? altCnt / (t6.length - 1) : 0.5;
+    const latest = h[h.length - 1]!;
+    const latestOpp = latest === optA ? optB : optA;
+    if (altRate >= 0.70) {
+      // 高频震荡市：押反最新（ABABAB → 下期可能继续交替）
+      if (latestOpp === optA) scoreA += 2; else scoreB += 2;
+    } else if (altRate <= 0.25) {
+      // 低频龙市：押跟最新
+      if (latest === optA) scoreA += 2; else scoreB += 2;
+    }
+    // 中间区间：M3不加分，由M1/M2决定
+  }
+
+  if (scoreA === scoreB) {
+    // 平局：取近5期少数方向（统计弱势更可能回归）
+    const t5 = h.slice(-5);
+    const a5 = t5.filter(x => x === optA).length;
+    return a5 < Math.ceil(t5.length / 2) ? optA : optB;
+  }
+
+  return scoreA > scoreB ? optA : optB;
+}
+
 function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
+  if (algoId === "hash_follow")  return hashDragon(session, labels);
+  if (algoId === "hash_reverse") return hashBalance(session, labels);
+  if (algoId === "hash_smart")   return hashWave(session, labels);
   if (algoId === "ks_follow")        return ksFollow(session, labels);
   if (algoId === "ks_reverse")       return ksReverse(session, labels);
   if (algoId === "ks_bb")            return ksBB(session, labels);

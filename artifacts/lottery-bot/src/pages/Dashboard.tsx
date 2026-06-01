@@ -25,6 +25,9 @@ const ALGO_LABELS: Record<string, string> = {
   ai_trend:         "通用-算法1",
   steady_ai:        "通用-算法2",
   adaptive_switch:  "通用-算法3",
+  hash_follow:      "哈希-算法1",
+  hash_reverse:     "哈希-算法2",
+  hash_smart:       "哈希-算法3",
 };
 
 const ALGO_DESC: Record<string, string> = {
@@ -35,6 +38,9 @@ const ALGO_DESC: Record<string, string> = {
   ai_trend:         "通用1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
   steady_ai:        "通用2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
   adaptive_switch:  "通用3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
+  hash_follow:      "哈希1 = 区块链龙形（顺龙1-5期，超6期反转，震荡跟尾）",
+  hash_reverse:     "哈希2 = 双链均衡（三窗口加权回归，边界聚集时顺势突破）",
+  hash_smart:       "哈希3 = MD5波段（短期动量×中期偏差×交替密度三维合力）",
 };
 
 const BET_OPT_LABELS: Record<string, string> = {
