@@ -1,10 +1,10 @@
 {
   "sessionString": "1BQANOTEuMTA4LjU2LjE3MQG7rI1vZdKwwuX6Ar0NI/4aiIVMFmIQzxnn0EsYH4009tSHUTfPpE8jp0rNRWT+ywkVzY5HuWmsKA3MTfdLbVlDwTCpEsk/rF6nCyGvMd6w3CUhMYdxwWDpIhjlnDNrx9JPGpUYmFmFMw+vCxqVmsMGMWGPJTFaqaaCvuNoJwGGK9psykwTUFVOTE9Hj3owSR5bW8NH6xvW39tsvLBs40+UA3aGOrtNEKlbIB+P38P/z6qH/GSrYWqZO3Pa7XDhtL9LX+QVmC/PXM2DJBRArp2dk3AFA1m9jUJaqLuItUSXpe4Bg/k3fqPtoiI5Lxp+JXbVuiu6UQ4T1fxmKE8/iY2YJQ==",
   "phone": "855 96 786 6238",
-  "balance": 98.369,
-  "todayPnl": 98,
+  "balance": 0.413,
+  "todayPnl": 196,
   "todayResetAt": 1780272000000,
-  "sessionPnl": 98,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003926163996",
@@ -35,6 +35,7 @@
       "hash_reverse",
       "hash_smart"
     ],
+    "algoFlipOnLoss": 2,
     "odds": 1.98,
     "oddsBigOdd": 1.98,
     "oddsBigEven": 1.98,
@@ -52,11 +53,58 @@
     "hashBetOptions": [
       "big",
       "small"
-    ],
-    "algoFlipOnLoss": 2
+    ]
   },
   "kuaisanResults": [],
   "hashResults": [
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 17,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 16,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 16,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
     {
       "value": 16,
       "big": true,

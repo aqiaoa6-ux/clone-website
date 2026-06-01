@@ -2847,25 +2847,33 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
   };
 
   // ── 开始下注 ──
+  // 哈希PC28 发的是图片消息，「开始下注」在横幅图片里，caption 里只有
+  // 「期号 / 封盘时间 / 开奖时间 / 赔率」，所以需要额外识别这种格式。
   const isBetOpen =
     text.includes("开始下注") ||
     text.includes("开始投注") ||
     text.includes("现在开始") ||
-    (text.includes("期号") && text.includes("下注"));
+    (text.includes("期号") && text.includes("下注")) ||
+    // 哈希PC28 图片消息 caption 格式：含「封盘时间」且含「期号」或「赔率」
+    (text.includes("封盘时间") && (text.includes("期号") || text.includes("赔率")));
 
   if (isBetOpen && session.hashPhase !== "betting") {
     const periodMatch = text.match(/期[号码][：:\s]*([a-fA-F0-9\d]{4,})/);
+    // 提取封盘时间（如 15:58:23），方便日志调试
+    const closeTimeMatch = text.match(/封盘时间[：:\s]*(\d{1,2}:\d{2}:\d{2})/);
     session.hashPhase = "betting";
     session.hashPeriod = periodMatch?.[1] ?? null;
     session.betPlacedThisCycle = false;
     pushEvent(session, "hash:phase", { phase: "betting", period: session.hashPeriod });
-    logger.info({ period: session.hashPeriod }, "[hash] bet open");
+    logger.info({ period: session.hashPeriod, closeTime: closeTimeMatch?.[1] }, "[hash] bet open → placing bet immediately");
     if (session.cfg.autoBet) await runHashAutoBet(session);
     return;
   }
 
   // ── 封盘 ──
-  if (/停止下注|停止投注|已封盘|封盘/.test(text) && session.hashPhase === "betting") {
+  // 注意：「封盘时间」出现在开盘通知里，不能触发封盘逻辑
+  const isClosing = !text.includes("封盘时间") && /停止下注|停止投注|已封盘|封盘/.test(text);
+  if (isClosing && session.hashPhase === "betting") {
     session.hashPhase = "closed";
     pushEvent(session, "hash:phase", { phase: "closed" });
     return;
