@@ -20,7 +20,8 @@ type BetStrategy = "normal" | "martingale" | "anti-martingale";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
-  | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart";
+  | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
+  | "hash_follow" | "hash_reverse" | "hash_smart";
 
 interface BetCfg {
   autoBet: boolean;
@@ -44,8 +45,9 @@ interface BetCfg {
   enableChase: boolean;
   dualGroupMode: boolean;
   killGroupMode: boolean;
-  gameMode: "lottery" | "kuaisan";
+  gameMode: "lottery" | "kuaisan" | "hash";
   kuaisanBetOptions: string[];
+  hashBetOptions: string[];
   algoFlipOnLoss: number; // 0=disabled; N=连续方向错N局后自动反转方向
 }
 
@@ -177,6 +179,12 @@ interface TgSession {
   kuaisanHandlerBuilder: NewMessage | null;
   kuaisanPollTimer?: ReturnType<typeof setInterval>;
   kuaisanLastMsgId: number;
+  // hash state
+  hashPhase: "idle" | "betting" | "closed";
+  hashPeriod: string | null;
+  hashResults: HashResult[];
+  hashPollTimer?: ReturnType<typeof setInterval>;
+  hashLastMsgId: number;
 }
 
 interface PersistedData {
@@ -191,6 +199,7 @@ interface PersistedData {
   watchGroupId?: string;
   cfg?: Partial<BetCfg>;
   kuaisanResults?: KuaisanResult[];
+  hashResults?: HashResult[];
   me?: { firstName?: string; lastName?: string; username?: string; phone?: string };
 }
 
@@ -224,6 +233,7 @@ const DEFAULT_CFG: BetCfg = {
   killGroupMode: false,
   gameMode: "lottery",
   kuaisanBetOptions: ["big", "small"],
+  hashBetOptions: ["big", "small"],
 };
 
 const BET_OPTION_LABELS: Record<BetOption, string> = {
@@ -250,6 +260,21 @@ const KS_BET_LABELS: Record<string, string> = {
   "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
   "big-dragon": "大龙", "small-tiger": "小虎",
   leopard: "豹子",
+};
+
+// ─── Hash (哈希) types & constants ────────────────────────────────────────────
+
+interface HashResult {
+  value: number; // 0-27
+  big: boolean;  // >= 14
+  odd: boolean;  // value % 2 === 1
+  label: string; // e.g. "大单", "小双"
+}
+
+const HASH_BET_LABELS: Record<string, string> = {
+  big: "大", small: "小", odd: "单", even: "双",
+  "big-odd": "大单", "big-even": "大双",
+  "small-odd": "小单", "small-even": "小双",
 };
 
 // ─── Module state ─────────────────────────────────────────────────────────────
@@ -467,6 +492,7 @@ function saveSession(session: TgSession): void {
       watchGroupId: session.watchGroupId,
       cfg: session.cfg,
       kuaisanResults: session.kuaisanResults.slice(0, 30),
+      hashResults: (session.hashResults ?? []).slice(0, 30),
       me: session.me ? {
         firstName: session.me.firstName,
         lastName: session.me.lastName,
@@ -685,6 +711,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     chatLog: [],
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
+    hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0,
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -2139,6 +2166,7 @@ function stopPoller(session: TgSession): void {
 function startGroupListener(session: TgSession): void {
   if (!session.watchGroupId) return;
   if (session.cfg.gameMode === "kuaisan") { startKuaisanListener(session); return; }
+  if (session.cfg.gameMode === "hash") { startHashListener(session); return; }
   if (session.messageHandler && session.messageHandlerBuilder) {
     try { session.client.removeEventHandler(session.messageHandler, session.messageHandlerBuilder); } catch { /* ok */ }
     session.messageHandler = null; session.messageHandlerBuilder = null;
@@ -2478,6 +2506,234 @@ async function processKuaisanMessage(session: TgSession, text: string, msgId: nu
   }
 }
 
+// ─── Hash (哈希) functions ────────────────────────────────────────────────────
+
+function computeHashResult(value: number): HashResult {
+  const big = value >= 14;
+  const odd = value % 2 === 1;
+  let label: string;
+  if (big && odd) label = "大单";
+  else if (big && !odd) label = "大双";
+  else if (!big && odd) label = "小单";
+  else label = "小双";
+  return { value, big, odd, label };
+}
+
+function evaluateHashBet(betLabel: string, r: HashResult): boolean {
+  switch (betLabel) {
+    case "大": return r.big;
+    case "小": return !r.big;
+    case "单": return r.odd;
+    case "双": return !r.odd;
+    case "大单": return r.big && r.odd;
+    case "大双": return r.big && !r.odd;
+    case "小单": return !r.big && r.odd;
+    case "小双": return !r.big && !r.odd;
+    default: return false;
+  }
+}
+
+function settleHashBets(session: TgSession, result: HashResult): void {
+  const pending = session.betLog.filter(b => b.status === "sent");
+  session.recentResults.push(result.label);
+  if (session.recentResults.length > 30) session.recentResults.shift();
+  for (const bet of pending) {
+    const won = evaluateHashBet(bet.betContent, result);
+    const odds = session.cfg.odds ?? 1.98;
+    const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
+    bet.lotteryResult = `${result.value} ${result.label}`;
+    settleBet(session, { won, pnl, betId: bet.id, period: 0 });
+  }
+}
+
+async function runHashAutoBet(session: TgSession): Promise<void> {
+  if (!session.cfg.autoBet || !session.watchGroupId) return;
+  if (session.betPlacedThisCycle) return;
+  const risk = checkRisk(session);
+  if (!risk.ok) return;
+
+  const opts = (session.cfg.hashBetOptions ?? ["big", "small"]).map(o => HASH_BET_LABELS[o] ?? o);
+  const labels = opts.length >= 2 ? opts : ["大", "小"];
+  const rawAlgoId = (session.cfg.algorithms[session.algIndex % Math.max(session.cfg.algorithms.length, 1)] ?? "ai_trend") as AlgorithmId;
+  const SIGNAL_ALGOS: AlgorithmId[] = ["signal_follow", "signal_reverse"];
+  const algoId: AlgorithmId = SIGNAL_ALGOS.includes(rawAlgoId) ? "ks_bb" : rawAlgoId;
+  const hashSession: TgSession = { ...session, cfg: { ...session.cfg, betOptions: (session.cfg.hashBetOptions ?? ["big", "small"]) as BetOption[] } };
+  let direction = runAlgo(hashSession, algoId, labels);
+  if (!direction) {
+    direction = labels[Math.floor(Math.random() * labels.length)] ?? "大";
+  }
+  session.algIndex++;
+  session.lastAlgoUsed = algoId;
+  session.betPlacedThisCycle = true;
+
+  const amount = session.currentBet;
+  const targetId = session.watchGroupId;
+  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
+  const msgText = `${direction} ${amount}`;
+
+  let succeeded = false;
+  let failReason: string | undefined;
+  try {
+    await session.client.sendMessage(targetId, { message: msgText });
+    session.lastBetAt = Date.now();
+    succeeded = true;
+  } catch (err) {
+    failReason = extractTgError(err);
+    handleBetSendError(session, failReason);
+  }
+
+  const betRecord: BetRecord = {
+    id: `hash-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    groupId: targetId, groupTitle,
+    messageText: msgText,
+    betContent: direction,
+    amount,
+    timestamp: Date.now(),
+    status: succeeded ? "sent" : "failed",
+    algoId,
+    ...(failReason ? { failReason } : {}),
+  };
+  session.betLog.unshift(betRecord);
+  if (session.betLog.length > 200) session.betLog.length = 200;
+  pushEvent(session, "bet:new", { bet: betRecord });
+  logger.info({ algoId, direction, amount }, "[hash] bet placed");
+}
+
+async function processHashMessage(session: TgSession, text: string, _msgId: number): Promise<void> {
+  if (!text) return;
+
+  // Log to chatLog
+  const logEntry = { text: text.slice(0, 200), ts: Date.now(), chatId: session.watchGroupId ?? "" };
+  if (!session.chatLog) session.chatLog = [];
+  session.chatLog.unshift(logEntry as unknown as typeof session.chatLog[number]);
+  if (session.chatLog.length > 50) session.chatLog.pop();
+
+  const publishResult = (result: HashResult) => {
+    if (!session.hashResults) session.hashResults = [];
+    session.hashResults.unshift(result);
+    if (session.hashResults.length > 50) session.hashResults.pop();
+    saveSession(session);
+    pushEvent(session, "hash:result", { value: result.value, label: result.label, big: result.big, odd: result.odd });
+    logger.info({ value: result.value, label: result.label }, "[hash] result → settling bets");
+    settleHashBets(session, result);
+    session.hashPhase = "closed";
+    session.betPlacedThisCycle = false;
+    session.chasePlacedThisCycle = false;
+  };
+
+  // ── 开始下注 ──
+  const isBetOpen =
+    text.includes("开始下注") ||
+    text.includes("开始投注") ||
+    text.includes("现在开始") ||
+    (text.includes("期号") && text.includes("下注"));
+
+  if (isBetOpen && session.hashPhase !== "betting") {
+    const periodMatch = text.match(/期[号码][：:\s]*([a-fA-F0-9\d]{4,})/);
+    session.hashPhase = "betting";
+    session.hashPeriod = periodMatch?.[1] ?? null;
+    session.betPlacedThisCycle = false;
+    pushEvent(session, "hash:phase", { phase: "betting", period: session.hashPeriod });
+    logger.info({ period: session.hashPeriod }, "[hash] bet open");
+    if (session.cfg.autoBet) await runHashAutoBet(session);
+    return;
+  }
+
+  // ── 封盘 ──
+  if (/停止下注|停止投注|已封盘|封盘/.test(text) && session.hashPhase === "betting") {
+    session.hashPhase = "closed";
+    pushEvent(session, "hash:phase", { phase: "closed" });
+    return;
+  }
+
+  // ── 开奖：解析哈希值结果数字 ──
+  // 常见格式: "开奖结果: 17 大单" / "哈希值28 结果：7 小单" / "本期哈希 21" / "开奖：21 大单"
+  const isResultMsg = /开奖|结果|本期|哈希值\s*\d|hash/i.test(text);
+  if (isResultMsg) {
+    // 先尝试 "数字 大/小/单/双" 格式
+    const fullMatch = text.match(/[：:\s](\d{1,2})\s*(大单|大双|小单|小双|大|小|单|双)/);
+    if (fullMatch) {
+      const val = parseInt(fullMatch[1]!);
+      if (val >= 0 && val <= 27) {
+        publishResult(computeHashResult(val));
+        return;
+      }
+    }
+    // 备用：只有数字
+    const numMatch = text.match(/\b(\d{1,2})\b/);
+    if (numMatch) {
+      const val = parseInt(numMatch[1]!);
+      if (val >= 0 && val <= 27) {
+        publishResult(computeHashResult(val));
+        return;
+      }
+    }
+    // 备用：只有标签
+    const labelMatch = text.match(/(大单|大双|小单|小双)/);
+    if (labelMatch) {
+      const lbl = labelMatch[1]!;
+      const big = lbl.includes("大");
+      const odd = lbl.includes("单");
+      const synth: HashResult = { value: big ? (odd ? 15 : 14) : (odd ? 13 : 12), big, odd, label: lbl };
+      publishResult(synth);
+      return;
+    }
+  }
+}
+
+function stopHashListener(session: TgSession): void {
+  if (session.hashPollTimer) {
+    clearInterval(session.hashPollTimer);
+    session.hashPollTimer = undefined;
+  }
+}
+
+function startHashListener(session: TgSession): void {
+  if (!session.watchGroupId) return;
+  stopHashListener(session);
+  // Remove any existing lottery handler
+  if (session.messageHandler && session.messageHandlerBuilder) {
+    try { session.client.removeEventHandler(session.messageHandler as Parameters<typeof session.client.removeEventHandler>[0], session.messageHandlerBuilder); } catch { /* ok */ }
+    session.messageHandler = null; session.messageHandlerBuilder = null;
+  }
+  const targetId = session.watchGroupId;
+
+  void session.client.getMessages(targetId, { limit: 1 }).then((msgs: Api.Message[]) => {
+    if (msgs.length > 0) {
+      session.hashLastMsgId = msgs[0].id;
+      logger.info({ targetId, baselineMsgId: session.hashLastMsgId }, "[hash] poller started");
+    }
+  }).catch(() => { /* ignore */ });
+
+  session.hashPollTimer = setInterval(() => {
+    if (tgSessions.get(session.userId) !== session) {
+      clearInterval(session.hashPollTimer); session.hashPollTimer = undefined; return;
+    }
+    void (async () => {
+      try {
+        const msgs = await session.client.getMessages(targetId, {
+          limit: 20,
+          ...(session.hashLastMsgId > 0 ? { minId: session.hashLastMsgId } : {}),
+        }) as Api.Message[];
+        if (!msgs.length) return;
+        const sorted = [...msgs].sort((a, b) => a.id - b.id);
+        // Auto-expire stale bets
+        const now = Date.now();
+        for (const stale of session.betLog.filter(b => b.status === "sent" && now - b.timestamp > 120_000)) {
+          logger.warn({ betId: stale.id }, "[hash] stale bet auto-expired");
+          settleBet(session, { won: false, pnl: -stale.amount, betId: stale.id });
+        }
+        for (const msg of sorted) {
+          if (msg.id <= session.hashLastMsgId) continue;
+          session.hashLastMsgId = msg.id;
+          const text = msg.message ?? "";
+          await processHashMessage(session, text, msg.id);
+        }
+      } catch { /* network hiccup */ }
+    })();
+  }, 2000);
+}
+
 function startKuaisanListener(session: TgSession): void {
   if (!session.watchGroupId) return;
   stopKuaisanListener(session);
@@ -2725,6 +2981,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       adaptiveSwitchKillMode: false,
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
+      hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
@@ -2827,6 +3084,10 @@ router.get("/tg/status", requireCard, (req, res) => {
     kuaisanLastDice: session.diceBuffer?.map(d => d.value),
     kuaisanResults: session.kuaisanResults?.slice(0, 20),
     kuaisanChatLog: (session.chatLog ?? []).slice(0, 20),
+    hashBetOptions: session.cfg.hashBetOptions,
+    hashPhase: session.hashPhase,
+    hashPeriod: session.hashPeriod,
+    hashResults: (session.hashResults ?? []).slice(0, 20),
     ...stats,
   });
 });
@@ -2920,6 +3181,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     killGroupMode: body.killGroupMode ?? prev.killGroupMode,
     gameMode: (body.gameMode as BetCfg["gameMode"]) ?? prev.gameMode,
     kuaisanBetOptions: body.kuaisanBetOptions ?? prev.kuaisanBetOptions,
+    hashBetOptions: (body as Partial<BetCfg>).hashBetOptions ?? prev.hashBetOptions,
     algoFlipOnLoss: body.algoFlipOnLoss ?? prev.algoFlipOnLoss,
   };
 
@@ -2939,9 +3201,15 @@ router.post("/tg/config", requireCard, (req, res) => {
   if (session.watchGroupId) {
     if (session.cfg.gameMode === "kuaisan") {
       stopPoller(session);
+      stopHashListener(session);
       startKuaisanListener(session);
+    } else if (session.cfg.gameMode === "hash") {
+      stopPoller(session);
+      stopKuaisanListener(session);
+      startHashListener(session);
     } else {
       stopKuaisanListener(session);
+      stopHashListener(session);
       startGroupListener(session);
     }
   }
@@ -2959,8 +3227,8 @@ router.post("/tg/config", requireCard, (req, res) => {
     session.algoFlipCooldown = 0;
     session.lastRawAlgoDir = null;
     session.betPlacedThisCycle = false;
-    // For lottery mode only: start poller
-    if (session.cfg.gameMode !== "kuaisan") {
+    // For lottery/hash mode only: start poller
+    if (session.cfg.gameMode !== "kuaisan" && session.cfg.gameMode !== "hash") {
       session.lastSeenLotteryPeriod = 0;
       startPoller(session);
       void pollLottery(session);

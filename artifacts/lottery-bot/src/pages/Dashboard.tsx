@@ -267,8 +267,9 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
   const [dualGroupMode, setDualGroupMode] = useState<boolean>(!!(status as unknown as { dualGroupMode?: boolean }).dualGroupMode);
   const [killGroupMode, setKillGroupMode] = useState<boolean>(!!(status as unknown as { killGroupMode?: boolean }).killGroupMode);
-  const [gameMode, setGameMode] = useState<"lottery" | "kuaisan">((status.gameMode ?? "lottery") as "lottery" | "kuaisan");
+  const [gameMode, setGameMode] = useState<"lottery" | "kuaisan" | "hash">((status.gameMode ?? "lottery") as "lottery" | "kuaisan" | "hash");
   const [kuaisanOpts, setKuaisanOpts] = useState<string[]>(status.kuaisanBetOptions ?? ["big", "small"]);
+  const [hashOpts, setHashOpts] = useState<string[]>((status as unknown as {hashBetOptions?: string[]}).hashBetOptions ?? ["big", "small"]);
   const [kkpay, setKkpay] = useState(status.kkpayUsername ?? "kkpay");
   const [levels, setLevels] = useState<string[]>(initLevels.map(String));
   const [stepBackOnWin, setStepBackOnWin] = useState(status.stepBackOnWin ?? true);
@@ -316,6 +317,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
         enableChase,
         gameMode,
         kuaisanBetOptions: kuaisanOpts,
+        hashBetOptions: hashOpts,
         algoFlipOnLoss: Number(algoFlip),
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
@@ -359,6 +361,13 @@ function SettingsDrawer({ status, onClose, onSave }: {
                 >
                   🎲 快三
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setGameMode("hash")}
+                  className={`flex-1 py-2 rounded-lg text-xs font-medium border transition ${gameMode === "hash" ? "bg-purple-600 border-purple-500 text-white" : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-purple-500/50"}`}
+                >
+                  #️⃣ 哈希
+                </button>
               </div>
             </div>
 
@@ -378,6 +387,25 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   ))}
                 </div>
                 <p className="text-[10px] text-slate-600 mt-1">选中的选项由算法从中选取一个方向下注</p>
+              </div>
+            )}
+
+            {/* Hash bet options */}
+            {gameMode === "hash" && (
+              <div>
+                <label className={labelCls}>哈希28下注选项</label>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries({ big: "大", small: "小", odd: "单", even: "双", "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双" }).map(([k, v]) => (
+                    <span
+                      key={k}
+                      className={tagCls(hashOpts.includes(k))}
+                      onClick={() => setHashOpts(prev => prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k])}
+                    >
+                      {v}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-[10px] text-slate-600 mt-1">大≥14，小≤13，算法从选中项中选取方向下注</p>
               </div>
             )}
 
@@ -684,6 +712,9 @@ export default function Dashboard() {
   const [kuaisanDice, setKuaisanDice] = useState<number[]>([]);
   const [kuaisanChatLog, setKuaisanChatLog] = useState<Array<{ text: string; ts: number; chatId?: string }>>([]);
   const [showChatLog, setShowChatLog] = useState(false);
+  const [hashPhase, setHashPhase] = useState<string>("idle");
+  const [hashPeriod, setHashPeriod] = useState<string | null>(null);
+  const [hashResults, setHashResults] = useState<Array<{ label: string; value: number; big: boolean; odd: boolean }>>([]);
   const [debugResult, setDebugResult] = useState<string | null>(null);
   const [debugLoading, setDebugLoading] = useState(false);
   const nextCloseRef = useRef<number>(0);
@@ -718,6 +749,10 @@ export default function Dashboard() {
       if (s.kuaisanLastDice) setKuaisanDice(s.kuaisanLastDice);
       if (s.kuaisanResults?.length) setKuaisanResults(s.kuaisanResults.map(r => ({ label: r.label, dice: Array.from(r.dice), sum: r.sum, leopard: r.leopard })));
       if (s.kuaisanChatLog?.length) setKuaisanChatLog(s.kuaisanChatLog);
+      if ((s as unknown as Record<string,unknown>).hashPhase) setHashPhase((s as unknown as Record<string,unknown>).hashPhase as string);
+      if ((s as unknown as Record<string,unknown>).hashPeriod !== undefined) setHashPeriod(((s as unknown as Record<string,unknown>).hashPeriod as string | null) ?? null);
+      const hr = (s as unknown as Record<string,unknown>).hashResults as Array<{label:string;value:number;big:boolean;odd:boolean}> | undefined;
+      if (hr?.length) setHashResults(hr);
       if (!s.connected) { setTgStep("login"); return; }
       if (!s.watchGroupId) {
         const { groups: g } = await api.tg.groups();
@@ -797,6 +832,21 @@ export default function Dashboard() {
             dice: ev.dice as number[],
             sum: ev.sum as number,
             leopard: ev.leopard as boolean,
+          }, ...prev].slice(0, 30));
+          void fetchBets();
+          void fetchStatus();
+        }
+        if (ev.type === "hash:phase") {
+          setHashPhase(ev.phase as string);
+          if (ev.period !== undefined) setHashPeriod(ev.period as string | null);
+        }
+        if (ev.type === "hash:result") {
+          setHashPhase("closed");
+          setHashResults(prev => [{
+            label: ev.label as string,
+            value: ev.value as number,
+            big: ev.big as boolean,
+            odd: ev.odd as boolean,
           }, ...prev].slice(0, 30));
           void fetchBets();
           void fetchStatus();
@@ -952,6 +1002,117 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
+
+            {/* ── Hash (哈希) Panel ── */}
+            {status.gameMode === "hash" && (
+              <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 space-y-4">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <span className="text-slate-400 text-xs">哈希28模式</span>
+                    <div className="text-white font-bold text-lg">
+                      {hashPhase === "betting" ? "🟢 下注中" : hashPhase === "closed" ? "🔴 已封盘" : "⚪ 等待中"}
+                    </div>
+                    {hashPeriod && <div className="text-slate-500 text-[10px] mt-0.5 font-mono">{hashPeriod}</div>}
+                  </div>
+                  {/* Hash value display */}
+                  <div className="flex items-center gap-2">
+                    {hashResults[0] !== undefined ? (
+                      <div className={`w-12 h-12 rounded-xl border-2 flex flex-col items-center justify-center font-bold transition-all ${
+                        hashResults[0].big ? "border-red-500 bg-red-500/15 text-red-300" : "border-blue-500 bg-blue-500/15 text-blue-300"
+                      }`}>
+                        <span className="text-lg leading-none">{hashResults[0].value}</span>
+                        <span className="text-[10px] leading-none mt-0.5">{hashResults[0].label}</span>
+                      </div>
+                    ) : (
+                      <div className="w-12 h-12 rounded-xl border-2 border-[#252a3d] bg-[#0f1220] flex items-center justify-center text-slate-600 text-xs">?</div>
+                    )}
+                  </div>
+                </div>
+
+                {status.autoBet && hashPhase === "betting" && (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-2 text-center">
+                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-2 align-middle" />
+                    <span className="text-emerald-400 text-sm font-semibold">自动下注已激活</span>
+                  </div>
+                )}
+
+                {status.riskBlocked && (
+                  <div className="bg-orange-500/10 border border-orange-500/20 rounded-xl px-4 py-2 text-center">
+                    <span className="text-orange-400 text-xs">⚠️ {status.riskReason}</span>
+                  </div>
+                )}
+
+                {hashResults.length > 0 && (
+                  <div>
+                    <div className="text-xs text-slate-500 mb-2">近期结果</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {hashResults.slice(0, 16).map((r, i) => (
+                        <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
+                          r.big ? "bg-red-500/15 text-red-400 border-red-500/25" : "bg-blue-500/15 text-blue-400 border-blue-500/25"
+                        }`}>
+                          {r.value}
+                          <span className="text-slate-500 ml-1">{r.label}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Group message debug log (same as kuaisan) */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setShowChatLog(v => !v)}
+                      className="text-[11px] text-slate-500 hover:text-slate-300 transition flex items-center gap-1"
+                    >
+                      <span>{showChatLog ? "▲" : "▶"}</span>
+                      群消息日志 {kuaisanChatLog.length > 0 ? `(${kuaisanChatLog.length})` : "(无)"}
+                    </button>
+                    <button
+                      disabled={debugLoading}
+                      onClick={async () => {
+                        setDebugLoading(true);
+                        setDebugResult(null);
+                        try {
+                          const r = await api.tg.debugGroup();
+                          if (!r.ok) {
+                            setDebugResult(`❌ 错误: ${r.error}`);
+                          } else if (!r.messages?.length) {
+                            setDebugResult(`⚠️ 群组 ${r.watchGroupId} 无消息`);
+                          } else {
+                            const lines = r.messages.map((m: {ts:number;hasMedia:boolean;text:string}) =>
+                              `[${new Date(m.ts).toLocaleTimeString("zh-CN")}]${m.hasMedia ? "📷" : ""} ${m.text || "(无文字)"}`
+                            ).join("\n");
+                            setDebugResult(`✅ 群ID: ${r.watchGroupId}\n最近消息:\n${lines}`);
+                          }
+                        } catch { setDebugResult("❌ 请求失败"); }
+                        setDebugLoading(false);
+                      }}
+                      className="text-[11px] text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded px-2 py-0.5 transition disabled:opacity-50"
+                    >
+                      {debugLoading ? "拉取中..." : "🔍 测试群连接"}
+                    </button>
+                  </div>
+                  {debugResult && (
+                    <div className="bg-[#0f1220] border border-[#252a3d] rounded-lg p-2 text-[11px] text-slate-300 whitespace-pre-wrap break-all max-h-40 overflow-y-auto">
+                      {debugResult}
+                    </div>
+                  )}
+                  {showChatLog && (
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {kuaisanChatLog.length === 0 ? (
+                        <div className="text-xs text-slate-600 italic">尚未收到实时消息。先点"测试群连接"看能否读取历史消息。</div>
+                      ) : kuaisanChatLog.map((m, i) => (
+                        <div key={i} className="bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5">
+                          <div className="text-[10px] text-slate-500 mb-0.5">{new Date(m.ts).toLocaleTimeString("zh-CN")}</div>
+                          <div className="text-xs text-slate-300 break-all whitespace-pre-wrap">{m.text}</div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* ── Kuaisan (快三) Panel ── */}
             {status.gameMode === "kuaisan" && (
