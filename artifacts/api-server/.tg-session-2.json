@@ -1,29 +1,29 @@
 {
   "sessionString": "1BQANOTEuMTA4LjU2LjE3MQG7rI1vZdKwwuX6Ar0NI/4aiIVMFmIQzxnn0EsYH4009tSHUTfPpE8jp0rNRWT+ywkVzY5HuWmsKA3MTfdLbVlDwTCpEsk/rF6nCyGvMd6w3CUhMYdxwWDpIhjlnDNrx9JPGpUYmFmFMw+vCxqVmsMGMWGPJTFaqaaCvuNoJwGGK9psykwTUFVOTE9Hj3owSR5bW8NH6xvW39tsvLBs40+UA3aGOrtNEKlbIB+P38P/z6qH/GSrYWqZO3Pa7XDhtL9LX+QVmC/PXM2DJBRArp2dk3AFA1m9jUJaqLuItUSXpe4Bg/k3fqPtoiI5Lxp+JXbVuiu6UQ4T1fxmKE8/iY2YJQ==",
   "phone": "855 96 786 6238",
-  "balance": 1879.559,
-  "todayPnl": 292,
+  "balance": 24039.559,
+  "todayPnl": 22452,
   "todayResetAt": 1780272000000,
-  "sessionPnl": 96,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003926163996",
   "cfg": {
-    "autoBet": true,
+    "autoBet": false,
     "betAmount": 100,
     "strategy": "normal",
     "betMultiplier": 2,
     "maxConsecutiveLosses": 0,
-    "stopLoss": 5000,
-    "targetProfit": 3000,
+    "stopLoss": 500000,
+    "targetProfit": 300000,
     "cooldownSeconds": 0,
     "amountLevels": [
-      100,
-      200,
-      400,
-      800,
-      1600,
-      3200
+      1000,
+      2000,
+      4000,
+      8000,
+      16000,
+      32000
     ],
     "stepBackOnWin": true,
     "betOptions": [
@@ -35,6 +35,7 @@
       "hash_reverse",
       "hash_smart"
     ],
+    "algoFlipOnLoss": 2,
     "odds": 1.98,
     "oddsBigOdd": 1.98,
     "oddsBigEven": 1.98,
@@ -52,19 +53,24 @@
     "hashBetOptions": [
       "big",
       "small"
-    ],
-    "algoFlipOnLoss": 2
+    ]
   },
   "kuaisanResults": [],
   "hashResults": [
     {
-      "value": 6,
+      "value": 8,
       "big": false,
       "odd": false,
       "label": "小双"
     },
     {
-      "value": 9,
+      "value": 13,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
+      "value": 11,
       "big": false,
       "odd": true,
       "label": "小单"
@@ -80,24 +86,6 @@
       "big": false,
       "odd": true,
       "label": "小单"
-    },
-    {
-      "value": 6,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
-    {
-      "value": 9,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 6,
-      "big": false,
-      "odd": false,
-      "label": "小双"
     },
     {
       "value": 8,
@@ -106,136 +94,10 @@
       "label": "小双"
     },
     {
-      "value": 7,
+      "value": 10,
       "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 20,
-      "big": true,
       "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
+      "label": "小双"
     }
   ],
   "me": {
