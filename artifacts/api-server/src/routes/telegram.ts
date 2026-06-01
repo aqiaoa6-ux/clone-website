@@ -2841,28 +2841,48 @@ function publishHashResult(session: TgSession, result: HashResult): void {
   session.chasePlacedThisCycle = false;
 }
 
-// ── 解析开奖频道消息并发布结果 ──
+// ── 解析开奖频道消息：驱动相位 + 发布结果（完全由 hx28kjw 频道控制）──
+// 消息格式（来自 哈希加拿大28开奖网）：
+//   开始通知（文本）: "第 1051350 期开始\n开奖时间: 2026-06-01 21:20:58\nETH区块高度: ...\nTRON区块高度: ..."
+//   开奖结果（图片 caption）: "1051349期 9+8+5=22 大双 杂六"
 async function processHashResultMsg(session: TgSession, text: string): Promise<void> {
   if (!text) return;
-  // 必须含开奖相关关键词，排除非结果消息（广告、公告等）
-  if (!/开奖|结果|号码|大单|大双|小单|小双/.test(text)) return;
 
-  // 优先：「数字 大/小单/双」格式，如 "结果：17 大单" / "17\n大单"
-  const fullMatch = text.match(/[：:\s\n](\d{1,2})\s*[\n\s]*(大单|大双|小单|小双)/);
-  if (fullMatch) {
-    const val = parseInt(fullMatch[1]!);
+  // ── 1. 新期开始通知 → 触发下注 ──
+  // 格式: "第 1051350 期开始" 或 "第1051350期开始"
+  const openMatch = text.match(/第\s*(\d{4,})\s*期\s*开始/);
+  if (openMatch) {
+    const period = openMatch[1]!;
+    // 防止同一期重复触发
+    if (session.hashPeriod === period && session.hashPhase === "betting") return;
+    session.hashPeriod = period;
+    session.hashPhase = "betting";
+    session.betPlacedThisCycle = false;
+    pushEvent(session, "hash:phase", { phase: "betting", period });
+    logger.info({ period }, "[hash-result] 新期开始 → 自动下注");
+    if (session.cfg.autoBet) await runHashAutoBet(session);
+    return;
+  }
+
+  // ── 2. 开奖结果 caption → 解析数值 ──
+  // 主格式: "1051349期 9+8+5=22 大双 杂六"
+  const captionMatch = text.match(/(\d{4,})期\s*\d+\+\d+\+\d+=(\d{1,2})\s*(大单|大双|小单|小双)/);
+  if (captionMatch) {
+    const val = parseInt(captionMatch[2]!);
     if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
   }
-  // 次优：「数字 大|小」
-  const bigSmallMatch = text.match(/[：:\s\n](\d{1,2})\s*[\n\s]*(大|小)/);
-  if (bigSmallMatch) {
-    const val = parseInt(bigSmallMatch[1]!);
+
+  // 备用：只有 A+B+C=D 公式（无期号或无标签时）
+  const sumMatch = text.match(/\d+\+\d+\+\d+=(\d{1,2})/);
+  if (sumMatch) {
+    const val = parseInt(sumMatch[1]!);
     if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
   }
-  // 备用：独立数字（排除时间 HH:MM 和比值 n/n）
-  const numMatch = text.match(/(?<![:/\d])(\d{1,2})(?![:/\d])/);
-  if (numMatch) {
-    const val = parseInt(numMatch[1]!);
+
+  // 末级备用：「数字 大/小单/双」在一行内
+  const labelMatch = text.match(/(?<![:/\d])(\d{1,2})\s*(大单|大双|小单|小双)/);
+  if (labelMatch) {
+    const val = parseInt(labelMatch[1]!);
     if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
   }
 }
@@ -2985,6 +3005,11 @@ function startHashListener(session: TgSession): void {
     session.messageHandler = null; session.messageHandlerBuilder = null;
   }
   const targetId = session.watchGroupId;
+
+  // 清空历史缓存，避免旧脏数据显示在面板
+  session.hashResults = [];
+  session.hashPhase = "idle";
+  session.hashPeriod = null;
 
   // 同时启动开奖频道轮询器（hx28kjw → 获取实际开奖结果）
   startHashResultPoller(session);
