@@ -2881,9 +2881,16 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
 
   // ── 开奖：解析哈希值结果数字 ──
   // 常见格式: "开奖结果: 17 大单" / "哈希值28 结果：7 小单" / "本期哈希 21" / "开奖：21 大单"
-  const isResultMsg = /开奖|结果|本期|哈希值\s*\d|hash/i.test(text);
+  // ── 开奖结果 ──
+  // 只在已封盘（closed）状态下才解析结果，避免把历史消息或封盘通知误判为开奖结果
+  const isResultMsg =
+    session.hashPhase === "closed" &&
+    /开奖|结果|本期哈希|哈希值\s*\d|hash/i.test(text) &&
+    // 排除「封盘通知」（含「停止下注」）和「开始下注通知」
+    !text.includes("停止下注") && !text.includes("封盘时间");
+
   if (isResultMsg) {
-    // 先尝试 "数字 大/小/单/双" 格式
+    // 优先：「数字 大/小单/双」格式，如 "结果：17 大单"
     const fullMatch = text.match(/[：:\s](\d{1,2})\s*(大单|大双|小单|小双|大|小|单|双)/);
     if (fullMatch) {
       const val = parseInt(fullMatch[1]!);
@@ -2892,8 +2899,8 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
         return;
       }
     }
-    // 备用：只有数字
-    const numMatch = text.match(/\b(\d{1,2})\b/);
+    // 备用：独立数字（排除时间格式 HH:MM:SS 和分数/比值格式 n/n）
+    const numMatch = text.match(/(?<![:/\d])(\d{1,2})(?![:/\d])/);
     if (numMatch) {
       const val = parseInt(numMatch[1]!);
       if (val >= 0 && val <= 27) {
@@ -2901,7 +2908,7 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
         return;
       }
     }
-    // 备用：只有标签
+    // 备用：只有标签（合成结果，数值用边界值占位）
     const labelMatch = text.match(/(大单|大双|小单|小双)/);
     if (labelMatch) {
       const lbl = labelMatch[1]!;
@@ -2931,14 +2938,19 @@ function startHashListener(session: TgSession): void {
   }
   const targetId = session.watchGroupId;
 
-  void session.client.getMessages(targetId, { limit: 1 }).then((msgs: Api.Message[]) => {
-    if (msgs.length > 0) {
-      session.hashLastMsgId = msgs[0].id;
-      logger.info({ targetId, baselineMsgId: session.hashLastMsgId }, "[hash] poller started");
-    }
-  }).catch(() => { /* ignore */ });
+  // 先拿到最新消息 ID 再开始轮询，避免启动时把历史消息全部误处理
+  void (async () => {
+    try {
+      const baseline = await session.client.getMessages(targetId, { limit: 1 }) as Api.Message[];
+      if (baseline.length > 0) {
+        session.hashLastMsgId = baseline[0]!.id;
+        logger.info({ targetId, baselineMsgId: session.hashLastMsgId }, "[hash] poller started");
+      }
+    } catch { /* ignore, poller will start with minId=0 and skip gracefully */ }
 
-  session.hashPollTimer = setInterval(() => {
+    if (tgSessions.get(session.userId) !== session) return; // session already replaced
+
+    session.hashPollTimer = setInterval(() => {
     if (tgSessions.get(session.userId) !== session) {
       clearInterval(session.hashPollTimer); session.hashPollTimer = undefined; return;
     }
@@ -2965,6 +2977,7 @@ function startHashListener(session: TgSession): void {
       } catch { /* network hiccup */ }
     })();
   }, 2000);
+  })(); // end async baseline IIFE
 }
 
 function startKuaisanListener(session: TgSession): void {
