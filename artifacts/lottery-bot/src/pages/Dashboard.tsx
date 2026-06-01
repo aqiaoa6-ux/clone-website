@@ -1339,11 +1339,25 @@ export default function Dashboard() {
                   <div className="text-slate-500 text-xs mt-0.5">
                     {status.autoBet ? (() => {
                       const patternLabel = status.currentPattern === "streak" ? "📈长龙局" : status.currentPattern === "oscillating" ? "🔄震荡局" : null;
-                      const algoLabel = ALGO_LABELS[status.lastAlgoUsed ?? status.algorithms?.[0] ?? ""] ?? "未知算法";
-                      const adaptiveLabel = status.algorithms?.includes("adaptive_switch")
-                        ? (status.adaptiveSwitchKillMode ? " · 🎯杀组中" : " · 大小中")
+                      const algos = status.algorithms ?? [];
+                      const algIdx = (status as unknown as { algIndex?: number }).algIndex ?? 0;
+                      // 当前算法：lastAlgoUsed 优先，否则按 algIndex 推算
+                      const currentAlgoId = status.lastAlgoUsed ?? algos[0] ?? "";
+                      const adaptiveLabel = algos.includes("adaptive_switch")
+                        ? (status.adaptiveSwitchKillMode ? " 🎯杀组" : " 大小")
                         : "";
-                      return `运行中 · ${patternLabel ? patternLabel + " · " : ""}${algoLabel}${adaptiveLabel}`;
+                      if (algos.length <= 1) {
+                        // 只有一个算法：直接显示名称
+                        const label = ALGO_LABELS[currentAlgoId] ?? "未知算法";
+                        return `运行中 · ${patternLabel ? patternLabel + " · " : ""}${label}${adaptiveLabel}`;
+                      }
+                      // 多算法：显示所有，当前高亮（括号标注）
+                      const nextIdx = algIdx % algos.length;
+                      const algoLine = algos.map((k, i) => {
+                        const short = (ALGO_LABELS[k] ?? k).replace(/^(哈希|快三|通用)-/, "");
+                        return i === nextIdx ? `[${short}]` : short;
+                      }).join(" / ");
+                      return `运行中 · ${patternLabel ? patternLabel + " · " : ""}${algoLine}${adaptiveLabel}`;
                     })() : "已停止"}
                   </div>
                 </div>

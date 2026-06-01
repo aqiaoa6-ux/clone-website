@@ -3436,6 +3436,7 @@ router.get("/tg/status", requireCard, (req, res) => {
     riskBlocked: !checkRisk(session).ok,
     riskReason: checkRisk(session).reason,
     lastAlgoUsed: session.lastAlgoUsed,
+    algIndex: session.algIndex,
     currentPattern: session.currentPattern,
     adaptiveSwitchKillMode: session.adaptiveSwitchKillMode,
     gameMode: session.cfg.gameMode,
@@ -3894,6 +3895,7 @@ router.get("/admin/tg/sessions", requireAdminSecret, (_req, res) => {
       riskBlocked: !checkRisk(session).ok,
       riskReason: checkRisk(session).reason,
       lastAlgoUsed: session.lastAlgoUsed,
+      algIndex: session.algIndex,
       currentPattern: session.currentPattern,
     });
   }
