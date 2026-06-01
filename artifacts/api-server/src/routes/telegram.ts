@@ -188,6 +188,7 @@ interface TgSession {
   // hash result channel poller (t.me/hx28kjw)
   hashResultPollTimer?: ReturnType<typeof setInterval>;
   hashResultLastMsgId: number;
+  hashBetDelayTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface PersistedData {
@@ -2845,45 +2846,78 @@ function publishHashResult(session: TgSession, result: HashResult): void {
 // 消息格式（来自 哈希加拿大28开奖网）：
 //   开始通知（文本）: "第 1051350 期开始\n开奖时间: 2026-06-01 21:20:58\nETH区块高度: ...\nTRON区块高度: ..."
 //   开奖结果（图片 caption）: "1051349期 9+8+5=22 大双 杂六"
+// 清除哈希延迟下注定时器（供多处调用）
+function clearHashBetDelayTimer(session: TgSession) {
+  if (session.hashBetDelayTimer) {
+    clearTimeout(session.hashBetDelayTimer);
+    session.hashBetDelayTimer = undefined;
+  }
+}
+
+// 开奖结果发布后，延迟 50 秒触发下注
+function scheduleHashAutoBet(session: TgSession) {
+  clearHashBetDelayTimer(session);
+  if (!session.cfg.autoBet) return;
+  logger.info("[hash-result] 开奖结果已收到，50 秒后自动下注");
+  session.hashBetDelayTimer = setTimeout(() => {
+    session.hashBetDelayTimer = undefined;
+    session.betPlacedThisCycle = false;
+    session.chasePlacedThisCycle = false;
+    if (session.cfg.autoBet) {
+      logger.info("[hash-result] 50 秒延迟到期 → 触发自动下注");
+      void runHashAutoBet(session);
+    }
+  }, 50_000);
+}
+
 async function processHashResultMsg(session: TgSession, text: string): Promise<void> {
   if (!text) return;
 
-  // ── 1. 新期开始通知 → 触发下注 ──
+  // ── 1. 新期开始通知 → 仅更新相位显示，不触发下注（下注由开奖结果延迟 50s 驱动）──
   // 格式: "第 1051350 期开始" 或 "第1051350期开始"
   const openMatch = text.match(/第\s*(\d{4,})\s*期\s*开始/);
   if (openMatch) {
     const period = openMatch[1]!;
-    // 防止同一期重复触发
     if (session.hashPeriod === period && session.hashPhase === "betting") return;
     session.hashPeriod = period;
     session.hashPhase = "betting";
-    session.betPlacedThisCycle = false;
     pushEvent(session, "hash:phase", { phase: "betting", period });
-    logger.info({ period }, "[hash-result] 新期开始 → 自动下注");
-    if (session.cfg.autoBet) await runHashAutoBet(session);
+    logger.info({ period }, "[hash-result] 新期开始通知（仅更新相位）");
     return;
   }
 
-  // ── 2. 开奖结果 caption → 解析数值 ──
+  // ── 2. 开奖结果 caption → 解析数值，发布结果，并启动 50 秒延迟下注 ──
   // 主格式: "1051349期 9+8+5=22 大双 杂六"
   const captionMatch = text.match(/(\d{4,})期\s*\d+\+\d+\+\d+=(\d{1,2})\s*(大单|大双|小单|小双)/);
   if (captionMatch) {
     const val = parseInt(captionMatch[2]!);
-    if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
+    if (val >= 0 && val <= 27) {
+      publishHashResult(session, computeHashResult(val));
+      scheduleHashAutoBet(session);
+      return;
+    }
   }
 
   // 备用：只有 A+B+C=D 公式（无期号或无标签时）
   const sumMatch = text.match(/\d+\+\d+\+\d+=(\d{1,2})/);
   if (sumMatch) {
     const val = parseInt(sumMatch[1]!);
-    if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
+    if (val >= 0 && val <= 27) {
+      publishHashResult(session, computeHashResult(val));
+      scheduleHashAutoBet(session);
+      return;
+    }
   }
 
   // 末级备用：「数字 大/小单/双」在一行内
   const labelMatch = text.match(/(?<![:/\d])(\d{1,2})\s*(大单|大双|小单|小双)/);
   if (labelMatch) {
     const val = parseInt(labelMatch[1]!);
-    if (val >= 0 && val <= 27) { publishHashResult(session, computeHashResult(val)); return; }
+    if (val >= 0 && val <= 27) {
+      publishHashResult(session, computeHashResult(val));
+      scheduleHashAutoBet(session);
+      return;
+    }
   }
 }
 
@@ -2937,6 +2971,7 @@ function stopHashResultPoller(session: TgSession): void {
     clearInterval(session.hashResultPollTimer);
     session.hashResultPollTimer = undefined;
   }
+  clearHashBetDelayTimer(session);
 }
 
 function startHashResultPoller(session: TgSession): void {
@@ -3010,6 +3045,7 @@ function startHashListener(session: TgSession): void {
   const targetId = session.watchGroupId;
 
   // 清空历史缓存，避免旧脏数据显示在面板
+  clearHashBetDelayTimer(session);
   session.hashResults = [];
   session.hashPhase = "idle";
   session.hashPeriod = null;
