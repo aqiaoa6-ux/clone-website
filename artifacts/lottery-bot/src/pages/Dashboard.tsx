@@ -1012,6 +1012,7 @@ export default function Dashboard() {
             {/* ── Hash (哈希) Panel ── */}
             {status.gameMode === "hash" && (
               <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 space-y-4">
+                {/* Phase + period */}
                 <div className="flex justify-between items-center">
                   <div>
                     <span className="text-slate-400 text-xs">哈希28模式</span>
@@ -1020,21 +1021,22 @@ export default function Dashboard() {
                     </div>
                     {hashPeriod && <div className="text-slate-500 text-[10px] mt-0.5 font-mono">{hashPeriod}</div>}
                   </div>
-                  {/* Hash value display */}
-                  <div className="flex items-center gap-2">
+                  {/* Hash value badge — same size/style as kuaisan sum ball */}
+                  <div className="flex gap-1.5 items-center">
                     {hashResults[0] !== undefined ? (
-                      <div className={`w-12 h-12 rounded-xl border-2 flex flex-col items-center justify-center font-bold transition-all ${
+                      <div className={`w-9 h-9 rounded-lg border-2 flex flex-col items-center justify-center font-bold transition-all ${
                         hashResults[0].big ? "border-red-500 bg-red-500/15 text-red-300" : "border-blue-500 bg-blue-500/15 text-blue-300"
                       }`}>
-                        <span className="text-lg leading-none">{hashResults[0].value}</span>
-                        <span className="text-[10px] leading-none mt-0.5">{hashResults[0].label}</span>
+                        <span className="text-sm leading-none">{hashResults[0].value}</span>
+                        <span className="text-[8px] leading-none mt-0.5 text-slate-400">{hashResults[0].label}</span>
                       </div>
                     ) : (
-                      <div className="w-12 h-12 rounded-xl border-2 border-[#252a3d] bg-[#0f1220] flex items-center justify-center text-slate-600 text-xs">?</div>
+                      <div className="w-9 h-9 rounded-lg border-2 border-[#252a3d] bg-[#0f1220] flex items-center justify-center text-slate-600 text-xs">?</div>
                     )}
                   </div>
                 </div>
 
+                {/* AutoBet active indicator */}
                 {status.autoBet && hashPhase === "betting" && (
                   <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl px-4 py-2 text-center">
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-2 align-middle" />
@@ -1042,29 +1044,31 @@ export default function Dashboard() {
                   </div>
                 )}
 
+                {/* Risk blocked */}
                 {status.riskBlocked && (
                   <div className="bg-orange-500/10 border border-orange-500/20 rounded-xl px-4 py-2 text-center">
                     <span className="text-orange-400 text-xs">⚠️ {status.riskReason}</span>
                   </div>
                 )}
 
+                {/* Recent results */}
                 {hashResults.length > 0 && (
                   <div>
                     <div className="text-xs text-slate-500 mb-2">近期结果</div>
                     <div className="flex flex-wrap gap-1.5">
-                      {hashResults.slice(0, 16).map((r, i) => (
+                      {hashResults.slice(0, 12).map((r, i) => (
                         <span key={i} className={`text-[11px] px-2 py-0.5 rounded font-medium border ${
                           r.big ? "bg-red-500/15 text-red-400 border-red-500/25" : "bg-blue-500/15 text-blue-400 border-blue-500/25"
                         }`}>
                           {r.value}
-                          <span className="text-slate-500 ml-1">{r.label}</span>
+                          <span className="text-slate-600 ml-1 text-[9px]">{r.label}</span>
                         </span>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Group message debug log (same as kuaisan) */}
+                {/* Group message debug log */}
                 <div className="space-y-2">
                   <div className="flex items-center gap-2">
                     <button
@@ -1232,8 +1236,8 @@ export default function Dashboard() {
               </div>
             )}
 
-            {/* Period & Countdown (lottery mode only) */}
-            {status.gameMode !== "kuaisan" && (
+            {/* Period & Countdown (lottery mode only — hidden in kuaisan / hash) */}
+            {status.gameMode === "lottery" && (
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5">
               <div className="flex justify-between items-center mb-3">
                 <div>
