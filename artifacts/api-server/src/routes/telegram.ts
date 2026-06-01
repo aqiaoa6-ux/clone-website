@@ -2853,8 +2853,8 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
     text.includes("开始下注") ||
     text.includes("开始投注") ||
     text.includes("现在开始") ||
-    (text.includes("期号") && text.includes("下注")) ||
-    // 哈希PC28 图片消息 caption 格式：含「封盘时间」且含「期号」或「赔率」
+    // 哈希PC28 图片消息 caption：含「封盘时间」且含「期号」或「赔率」
+    // 注意：封盘通知含「开奖时间」但不含「封盘时间」，不会误触发
     (text.includes("封盘时间") && (text.includes("期号") || text.includes("赔率")));
 
   if (isBetOpen && session.hashPhase !== "betting") {
