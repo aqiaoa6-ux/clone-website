@@ -58,6 +58,18 @@
   "kuaisanResults": [],
   "hashResults": [
     {
+      "value": 11,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
+      "value": 9,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
       "value": 8,
       "big": false,
       "odd": false,
