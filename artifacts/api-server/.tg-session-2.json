@@ -70,6 +70,12 @@
       "label": "大单"
     },
     {
+      "value": 19,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
       "value": 18,
       "big": true,
       "odd": false,
