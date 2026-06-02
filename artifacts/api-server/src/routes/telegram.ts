@@ -21,7 +21,7 @@ type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "sm
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
-  | "hash_follow" | "hash_reverse" | "hash_smart";
+  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_kill";
 
 interface BetCfg {
   autoBet: boolean;
@@ -2040,6 +2040,166 @@ function decideKillGroup(session: TgSession): KillGroupOption {
   return killed;
 }
 
+// ─── 哈希28 杀组专用决策 ─────────────────────────────────────────────────────
+// 使用 session.hashResults（最新优先）进行七维评分，选出最冷组杀掉
+function hashDecideKillGroup(session: TgSession): KillGroupOption {
+  // hashResults 是 unshift 存储（index 0 = 最新），取最近 30 期
+  const hr = (session.hashResults ?? []).slice(0, 30);
+  if (hr.length < 3) return KILL_GROUP_ALL[Math.floor(Math.random() * 4)]!;
+
+  const history = hr
+    .map(r => r.label)
+    .filter((l): l is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(l));
+  if (history.length < 3) return KILL_GROUP_ALL[Math.floor(Math.random() * 4)]!;
+
+  const n = history.length;
+  const scores: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
+
+  // ── 遗漏计算（history[0]=最新） ──
+  const absence: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
+  for (const opt of KILL_GROUP_ALL) {
+    let ab = 0;
+    for (let i = 0; i < n && history[i] !== opt; i++) ab++;
+    absence[opt] = ab;
+  }
+
+  // ── 当前连出组 ──
+  const latest = history[0]!;
+  let streak = 0;
+  for (let i = 0; i < n && history[i] === latest; i++) streak++;
+
+  // ── 维度 1：动量保护（最高优先级）──
+  // 正在连出的组有趋势，绝对不杀
+  scores[latest] -= (streak >= 2 ? 999 : 6.0);
+
+  // ── 维度 2：遗漏分 — 越冷门杀分越高 ──
+  const maxAb = Math.max(...Object.values(absence));
+  for (const opt of KILL_GROUP_ALL) {
+    const coldness = maxAb > 0 ? absence[opt] / maxAb : 0.25;
+    scores[opt] += coldness * 5.0;
+  }
+
+  // ── 维度 3：多时间窗口频率（5/10/20 期权重 4/2.5/1.2）──
+  for (const { size, w } of [{ size: 5, w: 4 }, { size: 10, w: 2.5 }, { size: 20, w: 1.2 }]) {
+    const slice = history.slice(0, Math.min(size, n));
+    for (const opt of KILL_GROUP_ALL) {
+      const freq = slice.filter(r => r === opt).length / slice.length;
+      scores[opt] += (0.25 - freq) * w * 4.0; // 低于均值 = 冷门 = 加杀分
+    }
+  }
+
+  // ── 维度 4：大/小、单/双维度偏向（保护当前强势维度）──
+  const recentN = Math.min(10, hr.length);
+  const bigCnt = hr.slice(0, recentN).filter(r => r.big).length;
+  const oddCnt = hr.slice(0, recentN).filter(r => r.odd).length;
+  const bigRatio = bigCnt / recentN;
+  const oddRatio = oddCnt / recentN;
+  if (bigRatio >= 0.65) {
+    scores["大单"] -= 2.0; scores["大双"] -= 2.0;
+    scores["小单"] += 2.0; scores["小双"] += 2.0;
+  } else if (bigRatio <= 0.35) {
+    scores["小单"] -= 2.0; scores["小双"] -= 2.0;
+    scores["大单"] += 2.0; scores["大双"] += 2.0;
+  }
+  if (oddRatio >= 0.65) {
+    scores["大单"] -= 2.0; scores["小单"] -= 2.0;
+    scores["大双"] += 2.0; scores["小双"] += 2.0;
+  } else if (oddRatio <= 0.35) {
+    scores["大双"] -= 2.0; scores["小双"] -= 2.0;
+    scores["大单"] += 2.0; scores["小单"] += 2.0;
+  }
+
+  // ── 维度 5：哈希值分布分析（基于实际 0-27 值）──
+  // 近期值聚集在极端区间时，对应大/小方向即将回归中心
+  if (hr.length >= 5) {
+    const avgVal = hr.slice(0, 5).map(r => r.value).reduce((a, b) => a + b, 0) / 5;
+    if (avgVal <= 5) {
+      // 近期值极低 → 大侧欠出 → 大侧不该被杀
+      scores["大单"] -= 1.5; scores["大双"] -= 1.5;
+    } else if (avgVal >= 22) {
+      scores["小单"] -= 1.5; scores["小双"] -= 1.5;
+    }
+  }
+
+  // ── 维度 6：极度欠出保护（即将补出，不可杀）──
+  for (const opt of KILL_GROUP_ALL) {
+    const ab = absence[opt];
+    if (ab >= 10)     scores[opt] -= 20;
+    else if (ab >= 8) scores[opt] -= 10;
+    else if (ab >= 6) scores[opt] -= 4;
+  }
+
+  // ── 维度 7：震荡形态检测（近 6 期交替≥75% → 刚出的组更不应再出）──
+  const tail6 = history.slice(0, Math.min(6, n));
+  if (tail6.length >= 4) {
+    let altCount = 0;
+    for (let i = 0; i < tail6.length - 1; i++) {
+      if (tail6[i] !== tail6[i + 1]) altCount++;
+    }
+    if (altCount / (tail6.length - 1) >= 0.75) {
+      for (const opt of KILL_GROUP_ALL) {
+        if (absence[opt] === 0 && scores[opt] > -900) scores[opt] += 2.0;
+        if (absence[opt] === 1 && scores[opt] > -900) scores[opt] += 0.8;
+      }
+    }
+  }
+
+  const killed = (Object.entries(scores) as [KillGroupOption, number][])
+    .sort((a, b) => b[1] - a[1])[0]![0];
+
+  logger.info({
+    killed, latest, streak, absence,
+    scores: Object.fromEntries(Object.entries(scores).map(([k, v]) => [k, Math.round((v as number) * 10) / 10])),
+  }, "[hash-kill] 杀组决策");
+
+  return killed;
+}
+
+/**
+ * 哈希28 杀组下注：发送三注（除被杀组外的大单/大双/小单/小双），合并一条消息。
+ */
+async function placeHashKillGroupBets(session: TgSession, killedGroup: KillGroupOption): Promise<void> {
+  if (!session.watchGroupId) return;
+  const targetId = session.watchGroupId;
+  const amount = session.currentBet;
+  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
+
+  const toBet = KILL_GROUP_ALL.filter(o => o !== killedGroup);
+  const message = toBet.map(opt => `${opt} ${amount}`).join("  ");
+
+  const now = Date.now();
+  session.betPlacedThisCycle = true;
+  session.chasePlacedThisCycle = true;
+
+  let succeeded = false;
+  let failReason: string | undefined;
+  try {
+    await session.client.sendMessage(targetId, { message });
+    session.lastBetAt = now;
+    succeeded = true;
+  } catch (err) {
+    failReason = extractTgError(err);
+    handleBetSendError(session, failReason);
+  }
+
+  const betRecord: BetRecord = {
+    id: `hash-kill-${now}-${Math.random().toString(36).slice(2, 6)}`,
+    groupId: targetId, groupTitle,
+    messageText: message,
+    betContent: toBet.join("+"),
+    amount,
+    timestamp: now,
+    status: succeeded ? "sent" : "failed",
+    algoId: "hash_kill",
+    ...(failReason ? { failReason } : {}),
+  };
+  session.betLog.unshift(betRecord);
+  if (session.betLog.length > 200) session.betLog.length = 200;
+  pushEvent(session, "bet:new", { bet: betRecord });
+  pushEvent(session, "bet:kill", { killed: killedGroup, algo: "hash_kill" });
+  logger.info({ killedGroup, toBet, amount }, "[hash-kill] 杀组下注发送");
+}
+
 /**
  * 发出三注：下注除被杀组以外的三个选项，共享一条消息。
  */
@@ -2660,6 +2820,10 @@ function computeHashResult(value: number): HashResult {
 }
 
 function evaluateHashBet(betLabel: string, r: HashResult): boolean {
+  // 杀组合并格式 "大双+大单+小双"：任意一项命中即赢
+  if (betLabel.includes("+")) {
+    return betLabel.split("+").some(part => evaluateHashBet(part.trim(), r));
+  }
   switch (betLabel) {
     case "大": return r.big;
     case "小": return !r.big;
@@ -2692,18 +2856,28 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
   const risk = checkRisk(session);
   if (!risk.ok) return;
 
-  const opts = (session.cfg.hashBetOptions ?? ["big", "small"]).map(o => HASH_BET_LABELS[o] ?? o);
-  const labels = opts.length >= 2 ? opts : ["大", "小"];
   const rawAlgoId = (session.cfg.algorithms[session.algIndex % Math.max(session.cfg.algorithms.length, 1)] ?? "ai_trend") as AlgorithmId;
   const SIGNAL_ALGOS: AlgorithmId[] = ["signal_follow", "signal_reverse"];
   const algoId: AlgorithmId = SIGNAL_ALGOS.includes(rawAlgoId) ? "ks_bb" : rawAlgoId;
+
+  session.algIndex++;
+  session.lastAlgoUsed = algoId;
+
+  // ── 算法4 杀组专用：选出最冷组，押其余三组 ─────────────────────────────────
+  if (algoId === "hash_kill") {
+    const killed = hashDecideKillGroup(session);
+    pushEvent(session, "bet:kill", { killed, algo: "hash_kill" });
+    await placeHashKillGroupBets(session, killed);
+    return;
+  }
+
+  const opts = (session.cfg.hashBetOptions ?? ["big", "small"]).map(o => HASH_BET_LABELS[o] ?? o);
+  const labels = opts.length >= 2 ? opts : ["大", "小"];
   const hashSession: TgSession = { ...session, cfg: { ...session.cfg, betOptions: (session.cfg.hashBetOptions ?? ["big", "small"]) as BetOption[] } };
   let direction = runAlgo(hashSession, algoId, labels);
   if (!direction) {
     direction = labels[Math.floor(Math.random() * labels.length)] ?? "大";
   }
-  session.algIndex++;
-  session.lastAlgoUsed = algoId;
   session.betPlacedThisCycle = true;
 
   const amount = session.currentBet;
