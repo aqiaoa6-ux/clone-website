@@ -21,7 +21,7 @@ type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "sm
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
-  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_kill";
+  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_kill" | "hash_kill_plus";
 
 interface BetCfg {
   autoBet: boolean;
@@ -2889,6 +2889,14 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
 
     const killed = hashDecideKillGroup(session);
     pushEvent(session, "bet:kill", { killed, algo: "hash_kill" });
+    await placeHashKillGroupBets(session, killed);
+    return;
+  }
+
+  // ── 算法5 杀组升级版：无暂停保护，每期必下 ──────────────────────────────────
+  if (algoId === "hash_kill_plus") {
+    const killed = hashDecideKillGroup(session);
+    pushEvent(session, "bet:kill", { killed, algo: "hash_kill_plus" });
     await placeHashKillGroupBets(session, killed);
     return;
   }
