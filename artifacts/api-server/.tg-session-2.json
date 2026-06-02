@@ -4,7 +4,7 @@
   "balance": 7051.442,
   "todayPnl": 6978000,
   "todayResetAt": 1780358400000,
-  "sessionPnl": 777000,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1002988362774",
@@ -30,6 +30,7 @@
     "algorithms": [
       "hash_kill"
     ],
+    "algoFlipOnLoss": 2,
     "odds": 1.98,
     "oddsBigOdd": 4.2,
     "oddsBigEven": 4.6,
@@ -44,190 +45,15 @@
       "big",
       "small"
     ],
-    "hashBetOptions": [],
-    "algoFlipOnLoss": 2
+    "hashBetOptions": []
   },
   "kuaisanResults": [],
   "hashResults": [
-    {
-      "value": 21,
-      "big": true,
-      "odd": true,
-      "label": "大单"
-    },
-    {
-      "value": 14,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 10,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
-    {
-      "value": 23,
-      "big": true,
-      "odd": true,
-      "label": "大单"
-    },
-    {
-      "value": 10,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
-    {
-      "value": 13,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 15,
-      "big": true,
-      "odd": true,
-      "label": "大单"
-    },
-    {
-      "value": 14,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 17,
-      "big": true,
-      "odd": true,
-      "label": "大单"
-    },
-    {
-      "value": 11,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 5,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 7,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 13,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 22,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 7,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 4,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 10,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
     {
       "value": 18,
       "big": true,
       "odd": false,
       "label": "大双"
-    },
-    {
-      "value": 11,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 20,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 16,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 7,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 5,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 12,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
-    {
-      "value": 14,
-      "big": true,
-      "odd": false,
-      "label": "大双"
-    },
-    {
-      "value": 21,
-      "big": true,
-      "odd": true,
-      "label": "大单"
-    },
-    {
-      "value": 9,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 12,
-      "big": false,
-      "odd": false,
-      "label": "小双"
     }
   ],
   "me": {

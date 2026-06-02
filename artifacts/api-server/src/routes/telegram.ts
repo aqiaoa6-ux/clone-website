@@ -2867,6 +2867,26 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
 
   // ── 算法4 杀组专用：选出最冷组，押其余三组 ─────────────────────────────────
   if (algoId === "hash_kill") {
+    const recentCache = (hashHistoryCache.length > 0 ? hashHistoryCache : (session.hashResults ?? []));
+
+    // ── 散点循环检测：近3期全部是不同组 = ABCD 轮循，本期跳过 ──
+    const recent3 = recentCache.slice(0, 3).map(r => r.label);
+    const isScatterLoop = recent3.length === 3 && new Set(recent3).size === 3;
+
+    // ── 连败保护：近2条 hash_kill 记录均为 lost ──
+    const recentKillBets = session.betLog.filter(b => b.algoId === "hash_kill").slice(0, 2);
+    const consecKillLoss = recentKillBets.length >= 2 && recentKillBets.every(b => b.status === "lost");
+
+    if (isScatterLoop || consecKillLoss) {
+      session.betPlacedThisCycle = true; // 标记本期已处理，防止重复触发
+      const reason = isScatterLoop
+        ? `散点循环 ${recent3.join("→")}，四组轮出中，跳过本期`
+        : `连败保护，连续2局杀组失误，跳过1期等待形态`;
+      pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
+      logger.info({ recent3, consecKillLoss }, `[hash-kill] ${reason}`);
+      return;
+    }
+
     const killed = hashDecideKillGroup(session);
     pushEvent(session, "bet:kill", { killed, algo: "hash_kill" });
     await placeHashKillGroupBets(session, killed);
