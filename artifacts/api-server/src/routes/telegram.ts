@@ -1959,16 +1959,15 @@ type KillGroupOption = typeof KILL_GROUP_ALL[number];
 /**
  * 根据走势分析决定杀哪一组（返回被杀组的标签）。
  *
- * 核心策略：杀"近期最热"的组——刚出过、出现频率高的组，
- * 下一期继续出的概率相对最低；长期缺席的组"欠出"，绝对不杀。
+ * 核心策略：杀冷门（遗漏久 / 频率低的组），保护热门（正在出现的组有惯性）。
+ * 哈希PC28 结果有动量特性，热组倾向于持续出现，冷组反而应该杀掉。
  *
  * 模块：
- *  A: 近期遗漏（越短越热，越值得杀）
- *  B: 短周期频率（近10期出现次数）
- *  C: 中周期频率（近20期出现次数）
- *  D: 当前连出加杀（连出≥2期，本期再出概率下降）
- *  E: 长缺席强保护（≥6期未出，绝对不杀）
- *  F: 大/小、单/双双面均衡修正
+ *  A: 遗漏分（遗漏越久 → 杀分越高，即杀冷门）
+ *  B: 近期频率（频率越低 → 杀分越高）
+ *  C: 正在连出的组绝对保护（≥1期连出不可杀）
+ *  D: 极度欠出保护（≥6期未出，接近正常，给降杀分）
+ *  E: 大/小维度趋势感知
  */
 function decideKillGroup(session: TgSession): KillGroupOption {
   const history = [...lotteryHistoryCache, ...session.recentResults]
@@ -1993,136 +1992,48 @@ function decideKillGroup(session: TgSession): KillGroupOption {
     absence[opt] = ab;
   }
 
-  // ── 趋势保护（最高优先级）────────────────────────────────────────────────
-  // 规则1：当前有效连出 ≥ 2 → 强烈保护，不能杀（趋势中）
-  if (streak >= 2) {
-    scores[latest] -= 999;
+  // ── C: 正在连出的组强保护（最高优先级）──────────────────────────────────────
+  // 连出≥1期：有动量，绝对不杀
+  if (streak >= 1) {
+    scores[latest] -= (streak >= 2 ? 999 : 4.0);
   }
 
-  // 规则2：刚断大龙缓冲保护
-  // 某组遗漏 1-5 期，但在最近 (absence+8) 期的历史里出现次数 ≥ 5 → 刚断龙，保护期
-  for (const opt of KILL_GROUP_ALL) {
-    if (opt === latest && streak >= 2) continue; // 已被规则1处理
-    const ab = absence[opt];
-    if (ab >= 1 && ab <= 5) {
-      const lookback = Math.min(ab + 10, n);
-      const preSlice = history.slice(-lookback, ab > 0 ? -ab : undefined);
-      const hotCount = preSlice.filter(r => r === opt).length;
-      if (hotCount >= 5) {
-        // 刚断龙，可能短暂喘息后继续 → 缓冲期保护
-        scores[opt] -= (6 - ab) * 1.5; // 断得越近保护越强
-      }
-    }
-  }
-
-  // ── A: 遗漏分：遗漏越少（越近期出现）→ 杀分越高 ───────────────────────────
-  // 注意：已被趋势保护覆盖的组即使遗漏=0也不会被杀
+  // ── A: 遗漏分：遗漏越久（越冷门）→ 杀分越高 ──────────────────────────────
   const maxAb = Math.max(...Object.values(absence));
   for (const opt of KILL_GROUP_ALL) {
-    const hotness = maxAb > 0 ? (maxAb - absence[opt]) / maxAb : 0.5;
-    scores[opt] += hotness * 3.0;
+    const coldness = maxAb > 0 ? absence[opt] / maxAb : 0.5;
+    scores[opt] += coldness * 4.0;
   }
 
-  // ── B: 近10期出现频率（短期热度）────────────────────────────────────────────
-  const h10 = history.slice(-Math.min(10, n));
-  for (const opt of KILL_GROUP_ALL) {
-    const cnt = h10.filter(r => r === opt).length;
-    if (cnt >= 4) scores[opt] += (cnt - 2.5) * 1.2;
-    else if (cnt >= 3) scores[opt] += 0.6;
-  }
-
-  // ── C: 近20期出现频率（中期热度）────────────────────────────────────────────
+  // ── B: 近20期频率：频率越低 → 杀分越高 ──────────────────────────────────
   const h20 = history.slice(-Math.min(20, n));
   for (const opt of KILL_GROUP_ALL) {
     const freq20 = h20.filter(r => r === opt).length / h20.length;
-    const excess = freq20 - 0.25;
-    if (excess > 0.1) scores[opt] += excess * 4.0;
+    // 频率低于均值(0.25)的组视为冷门，加杀分
+    scores[opt] += (0.25 - freq20) * 6.0;
   }
 
-  // ── D: 单次刚出加杀（streak=1，非龙非缓冲时）──────────────────────────────
-  // streak≥2 已被规则1强保护，streak=1 且无断龙缓冲才正常加杀分
-  if (streak === 1 && scores[latest] > -10) {
-    scores[latest] += 0.5;
-  }
-
-  // ── E: 长缺席强保护（欠出，绝对不杀）────────────────────────────────────────
+  // ── D: 极度欠出降杀分（遗漏≥6期，接近补出时段，降低被杀概率）──────────────
   for (const opt of KILL_GROUP_ALL) {
     const ab = absence[opt];
-    if (ab >= 8)      scores[opt] -= 20;
-    else if (ab >= 6) scores[opt] -= 10;
-    else if (ab >= 4) scores[opt] -= 3;
-    else if (ab >= 3) scores[opt] -= 1;
+    if (ab >= 10)     scores[opt] -= 15;
+    else if (ab >= 8) scores[opt] -= 8;
+    else if (ab >= 6) scores[opt] -= 3;
   }
 
-  // ── F/G: 均衡修正 + 大/小维度龙形感知 + 4组形态感知 ─────────────────────
-  const h30 = history.slice(-Math.min(30, n));
-  const bigFreq = h30.filter(r => r.startsWith("大")).length / h30.length;
-  const oddFreq = h30.filter(r => r.endsWith("单")).length / h30.length;
-
-  // 单/双 均衡修正（始终生效：单或双极端偏斜时加杀分）
-  if (oddFreq > 0.58) { scores["大单"] += 0.8; scores["小单"] += 0.8; }
-  else if (oddFreq < 0.42) { scores["大双"] += 0.8; scores["小双"] += 0.8; }
-
-  // 大/小 维度独立形态检测（8期）
-  const patternH = history.slice(-Math.min(8, n));
-  let patternAlt = 0;
-  for (let i = 1; i < patternH.length; i++) if (patternH[i] !== patternH[i - 1]) patternAlt++;
-  const patternRatio = patternH.length > 1 ? patternAlt / (patternH.length - 1) : 0.5;
-
-  const bigSmallH = patternH.map(r => r.startsWith("大") ? "大" : "小");
-  let bsAlt = 0;
-  for (let i = 1; i < bigSmallH.length; i++) if (bigSmallH[i] !== bigSmallH[i - 1]) bsAlt++;
-  const bsRatio = bigSmallH.length > 1 ? bsAlt / (bigSmallH.length - 1) : 0.5;
-
-  if (bsRatio <= 0.30) {
-    // 大/小维度龙形：顺龙押注策略 —— 杀对立方（冷侧）的一个子组，保留热侧在注单
-    // 这样注单里始终包含热侧的两个子组（大单+大双 或 小单+小双）
-    if (bigFreq < 0.42) {
-      // 小龙（小侧连续出）：提高大侧杀分，压低小侧杀分 → 注单保留 小单+小双+一个大组
-      for (const opt of KILL_GROUP_ALL) {
-        if (scores[opt] > -900) {
-          if (opt.startsWith("大")) scores[opt] += 2.0;
-          if (opt.startsWith("小")) scores[opt] -= 2.0;
-        }
-      }
-    } else if (bigFreq > 0.58) {
-      // 大龙：提高小侧杀分，压低大侧杀分 → 注单保留 大单+大双+一个小组
-      for (const opt of KILL_GROUP_ALL) {
-        if (scores[opt] > -900) {
-          if (opt.startsWith("小")) scores[opt] += 2.0;
-          if (opt.startsWith("大")) scores[opt] -= 2.0;
-        }
-      }
-    }
-    // bigFreq 接近0.5时大/小均衡，不作方向调整，继续用下方4组逻辑
-  } else {
-    // 非大/小龙形：大/小均衡修正（偏斜时加杀分纠偏）
-    if (bigFreq > 0.58) { scores["大单"] += 0.8; scores["大双"] += 0.8; }
-    else if (bigFreq < 0.42) { scores["小单"] += 0.8; scores["小双"] += 0.8; }
+  // ── E: 大/小维度趋势感知（近10期）────────────────────────────────────────
+  const h10 = history.slice(-Math.min(10, n));
+  const bigCnt = h10.filter(r => r.startsWith("大")).length;
+  const smallCnt = h10.length - bigCnt;
+  if (bigCnt >= 7) {
+    // 大侧强势：小侧两组遗漏偏高，优先杀小侧里最冷的
+    if (absence["小单"] >= absence["小双"]) scores["小单"] += 2.0;
+    else scores["小双"] += 2.0;
+  } else if (smallCnt >= 7) {
+    // 小侧强势：大侧两组遗漏偏高，优先杀大侧里最冷的
+    if (absence["大单"] >= absence["大双"]) scores["大单"] += 2.0;
+    else scores["大双"] += 2.0;
   }
-
-  // 4组维度形态感知（在大/小非极端龙形时生效）
-  if (bsRatio > 0.20) {
-    if (patternRatio <= 0.30) {
-      // 4组龙形市场：活跃组有惯性 → 杀"最冷"组
-      for (const opt of KILL_GROUP_ALL) {
-        if (scores[opt] > -900) {
-          const coldness = absence[opt];
-          const hotness = maxAb > 0 ? (maxAb - absence[opt]) / maxAb : 0;
-          scores[opt] += coldness * 1.2 - hotness * 4.0;
-        }
-      }
-    } else if (patternRatio >= 0.70) {
-      // 4组强震荡市场：刚出的组大概率不再出 → 加权杀刚出现的组
-      for (const opt of KILL_GROUP_ALL) {
-        if (scores[opt] > -900) {
-          if (absence[opt] === 0) scores[opt] += 2.5;
-          else if (absence[opt] === 1) scores[opt] += 1.0;
-        }
-      }
-    }
-  }
-  // 中性市场：保持基础统计逻辑，不额外调整
 
   const killed = (Object.entries(scores) as [KillGroupOption, number][])
     .sort((a, b) => b[1] - a[1])[0]![0];

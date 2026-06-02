@@ -1,7 +1,7 @@
 {
   "sessionString": "1BQANOTEuMTA4LjU2LjE3MQG7rI1vZdKwwuX6Ar0NI/4aiIVMFmIQzxnn0EsYH4009tSHUTfPpE8jp0rNRWT+ywkVzY5HuWmsKA3MTfdLbVlDwTCpEsk/rF6nCyGvMd6w3CUhMYdxwWDpIhjlnDNrx9JPGpUYmFmFMw+vCxqVmsMGMWGPJTFaqaaCvuNoJwGGK9psykwTUFVOTE9Hj3owSR5bW8NH6xvW39tsvLBs40+UA3aGOrtNEKlbIB+P38P/z6qH/GSrYWqZO3Pa7XDhtL9LX+QVmC/PXM2DJBRArp2dk3AFA1m9jUJaqLuItUSXpe4Bg/k3fqPtoiI5Lxp+JXbVuiu6UQ4T1fxmKE8/iY2YJQ==",
   "phone": "855 96 786 6238",
-  "balance": 24039.559,
+  "balance": 0.16,
   "todayPnl": 22452,
   "todayResetAt": 1780272000000,
   "sessionPnl": 0,
@@ -58,13 +58,181 @@
   "kuaisanResults": [],
   "hashResults": [
     {
-      "value": 6,
+      "value": 11,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 9,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
+      "value": 12,
       "big": false,
       "odd": false,
       "label": "小双"
     },
     {
+      "value": 13,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
+      "value": 13,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
+      "value": 10,
+      "big": false,
+      "odd": false,
+      "label": "小双"
+    },
+    {
+      "value": 19,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 22,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 15,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 14,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 19,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 12,
+      "big": false,
+      "odd": false,
+      "label": "小双"
+    },
+    {
+      "value": 13,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
       "value": 8,
+      "big": false,
+      "odd": false,
+      "label": "小双"
+    },
+    {
+      "value": 17,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 11,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
+      "value": 5,
+      "big": false,
+      "odd": true,
+      "label": "小单"
+    },
+    {
+      "value": 12,
+      "big": false,
+      "odd": false,
+      "label": "小双"
+    },
+    {
+      "value": 15,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 18,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 15,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 8,
+      "big": false,
+      "odd": false,
+      "label": "小双"
+    },
+    {
+      "value": 16,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 14,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 17,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 21,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 12,
       "big": false,
       "odd": false,
       "label": "小双"
