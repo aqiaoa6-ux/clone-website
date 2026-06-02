@@ -91,7 +91,9 @@ function BetTag({ status, won }: { status: string; won?: boolean }) {
   if (status === "sent") return <span className="text-[10px] bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded">待开奖</span>;
   if (status === "won" || won === true) return <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">中奖</span>;
   if (status === "lost" || won === false) return <span className="text-[10px] bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded">未中</span>;
-  return <span className="text-[10px] bg-slate-500/20 text-slate-400 px-1.5 py-0.5 rounded">失败</span>;
+  if (status === "skipped") return <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded">跳过</span>;
+  if (status === "failed") return <span className="text-[10px] bg-orange-500/20 text-orange-400 px-1.5 py-0.5 rounded">发送失败</span>;
+  return <span className="text-[10px] bg-slate-500/20 text-slate-400 px-1.5 py-0.5 rounded">未知</span>;
 }
 
 function NumBall({ n, sum }: { n?: number; sum?: boolean }) {
