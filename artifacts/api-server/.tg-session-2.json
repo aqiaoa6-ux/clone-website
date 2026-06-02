@@ -50,34 +50,10 @@
   "kuaisanResults": [],
   "hashResults": [
     {
-      "value": 13,
-      "big": false,
-      "odd": true,
-      "label": "小单"
-    },
-    {
-      "value": 17,
+      "value": 19,
       "big": true,
       "odd": true,
       "label": "大单"
-    },
-    {
-      "value": 12,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
-    {
-      "value": 12,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
-    {
-      "value": 12,
-      "big": false,
-      "odd": false,
-      "label": "小双"
     }
   ],
   "me": {
