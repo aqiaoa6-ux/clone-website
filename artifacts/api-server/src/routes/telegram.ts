@@ -2869,40 +2869,37 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
   if (algoId === "hash_kill") {
     const recentCache = (hashHistoryCache.length > 0 ? hashHistoryCache : (session.hashResults ?? []));
 
-    // ── 上一期已跳过 → 本期强制下注，不再连续跳过 ──
+    // ── 散点循环检测：每期独立判断，散点不清就不投（不受上期是否跳过影响）──
+    const recent3 = recentCache.slice(0, 3).map(r => r.label);
+    const isScatterLoop = recent3.length === 3 && new Set(recent3).size === 3;
+
+    // ── 连败保护：近2条已结算 kill 记录均为 lost，且上期未已跳过（最多跳1期，然后试1次）──
     const lastKillRecord = session.betLog.find(b => b.algoId === "hash_kill" || b.algoId === "hash_kill_plus");
     const lastWasSkip = lastKillRecord?.status === "skipped";
+    const recentKillBets = session.betLog
+      .filter(b => (b.algoId === "hash_kill" || b.algoId === "hash_kill_plus") && b.status !== "skipped")
+      .slice(0, 2);
+    const consecKillLoss = !lastWasSkip
+      && recentKillBets.length >= 2
+      && recentKillBets.every(b => b.status === "lost");
 
-    if (!lastWasSkip) {
-      // ── 散点循环检测：近3期全部是不同组 = ABCD 轮循，本期跳过 ──
-      const recent3 = recentCache.slice(0, 3).map(r => r.label);
-      const isScatterLoop = recent3.length === 3 && new Set(recent3).size === 3;
-
-      // ── 连败保护：近2条已结算 hash_kill 记录均为 lost ──
-      const recentKillBets = session.betLog
-        .filter(b => (b.algoId === "hash_kill" || b.algoId === "hash_kill_plus") && b.status !== "skipped")
-        .slice(0, 2);
-      const consecKillLoss = recentKillBets.length >= 2 && recentKillBets.every(b => b.status === "lost");
-
-      if (isScatterLoop || consecKillLoss) {
-        session.betPlacedThisCycle = true;
-        const reason = isScatterLoop
-          ? `散点循环 ${recent3.join("→")}，四组轮出中，跳过本期`
-          : `连败保护，连续2局杀组失误，跳过1期等待形态`;
-        // 写入 skipped 记录，防止下期再次触发跳过逻辑
-        const skipRec: BetRecord = {
-          id: `hash-kill-skip-${Date.now()}`,
-          groupId: session.watchGroupId ?? "",
-          groupTitle: "（跳过本期）",
-          messageText: "", betContent: "skip", amount: 0,
-          timestamp: Date.now(), status: "skipped", algoId,
-        };
-        session.betLog.unshift(skipRec);
-        if (session.betLog.length > 200) session.betLog.length = 200;
-        pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
-        logger.info({ recent3, consecKillLoss }, `[hash-kill] ${reason}`);
-        return;
-      }
+    if (isScatterLoop || consecKillLoss) {
+      session.betPlacedThisCycle = true;
+      const reason = isScatterLoop
+        ? `散点循环 ${recent3.join("→")}，等待形态聚集`
+        : `连败保护，连续2局失误，跳过1期缓冲`;
+      const skipRec: BetRecord = {
+        id: `hash-kill-skip-${Date.now()}`,
+        groupId: session.watchGroupId ?? "",
+        groupTitle: "（跳过本期）",
+        messageText: "", betContent: "skip", amount: 0,
+        timestamp: Date.now(), status: "skipped", algoId,
+      };
+      session.betLog.unshift(skipRec);
+      if (session.betLog.length > 200) session.betLog.length = 200;
+      pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
+      logger.info({ recent3, isScatterLoop, consecKillLoss }, `[hash-kill] ${reason}`);
+      return;
     }
 
     const killed = hashDecideKillGroup(session);
