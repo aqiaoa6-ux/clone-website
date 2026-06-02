@@ -3122,12 +3122,32 @@ function startHashResultPoller(session: TgSession): void {
     // 用字符串 username 直接传给 getMessages，GramJS 内部会自动解析
     const chanTarget = HX28_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
 
-    // 取基准消息 ID，避免重启时把历史结果全部重算
+    // 取最近10条消息：解析出历史结果预填 session.hashResults，供散点检测使用
     try {
-      const baseline = await session.client.getMessages(chanTarget, { limit: 1 }) as Api.Message[];
-      if (baseline.length > 0) {
-        session.hashResultLastMsgId = baseline[0]!.id;
-        logger.info({ channel: HX28_RESULT_CHANNEL, baselineMsgId: session.hashResultLastMsgId }, "[hash-result] 开奖频道轮询已启动");
+      const recent = await session.client.getMessages(chanTarget, { limit: 10 }) as Api.Message[];
+      if (recent.length > 0) {
+        session.hashResultLastMsgId = recent[0]!.id; // 最新的作为基准 ID
+        // 按旧→新顺序解析，收集有效结果
+        const sorted = [...recent].sort((a, b) => a.id - b.id);
+        const seededResults: HashResult[] = [];
+        for (const msg of sorted) {
+          const text = msg.message ?? "";
+          const captionMatch = text.match(/(\d{4,})期\s*\d+\+\d+\+\d+=(\d{1,2})\s*(大单|大双|小单|小双)/);
+          const sumMatch = !captionMatch && text.match(/\d+\+\d+\+\d+=(\d{1,2})/);
+          const raw = captionMatch ? captionMatch[2]! : (sumMatch ? sumMatch[1]! : "");
+          const val = raw !== "" ? parseInt(raw) : -1;
+          if (val >= 0 && val <= 27) seededResults.push(computeHashResult(val));
+        }
+        // 最新在前写入 session.hashResults（散点检测 fallback）
+        session.hashResults = seededResults.reverse();
+        // 若全局缓存为空，也用种子数据预填（全局缓存不重复添加已有项）
+        if (hashHistoryCache.length === 0) {
+          hashHistoryCache = [...session.hashResults];
+        }
+        logger.info(
+          { channel: HX28_RESULT_CHANNEL, baselineMsgId: session.hashResultLastMsgId, seeded: seededResults.length },
+          "[hash-result] 开奖频道轮询已启动，已预填历史缓存",
+        );
       }
     } catch (err) {
       logger.warn({ err, channel: HX28_RESULT_CHANNEL }, "[hash-result] 无法读取开奖频道，30s 后重试");
