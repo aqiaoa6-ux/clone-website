@@ -50,6 +50,12 @@
   "kuaisanResults": [],
   "hashResults": [
     {
+      "value": 21,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
       "value": 15,
       "big": true,
       "odd": true,
