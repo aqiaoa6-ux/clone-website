@@ -2869,42 +2869,24 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
   if (algoId === "hash_kill") {
     const recentCache = (hashHistoryCache.length > 0 ? hashHistoryCache : (session.hashResults ?? []));
 
-    // ── 散点循环检测：每期独立判断，散点不清就不投 ──
+    // ── 散点循环检测：近3期全不同 → 跳过本期，等形态聚集 ──
     const recent3 = recentCache.slice(0, 3).map(r => r.label);
     const isScatterLoop = recent3.length === 3 && new Set(recent3).size === 3;
 
-    // ── 连败保护：近2条已结算 kill 记录均为 lost，则暂停；连续跳过未超2期才继续跳 ──
-    // 统计 betLog 头部连续 skipped 数量（中间只要出现非 skip 就停止计数）
-    let consecSkipsFromLog = 0;
-    for (const b of session.betLog) {
-      if (b.algoId !== "hash_kill" && b.algoId !== "hash_kill_plus") continue;
-      if (b.status === "skipped") consecSkipsFromLog++;
-      else break;
-    }
-    const recentKillBets = session.betLog
-      .filter(b => (b.algoId === "hash_kill" || b.algoId === "hash_kill_plus") && b.status !== "skipped")
-      .slice(0, 2);
-    const hasConsecLoss = recentKillBets.length >= 2 && recentKillBets.every(b => b.status === "lost");
-    // 连败最多跳 2 期缓冲，超过则放行（散点检测仍独立生效）
-    const consecKillLoss = hasConsecLoss && consecSkipsFromLog < 2;
-
-    if (isScatterLoop || consecKillLoss) {
+    if (isScatterLoop) {
       session.betPlacedThisCycle = true;
-      const skipLabel = isScatterLoop ? `散点·${recent3.join("→")}` : `连败保护·第${consecSkipsFromLog + 1}期`;
-      const reason = isScatterLoop
-        ? `散点循环 ${recent3.join("→")}，等待形态聚集`
-        : `连败保护，连续2局失误，跳过第 ${consecSkipsFromLog + 1} 期缓冲（最多2期）`;
+      const reason = `散点循环 ${recent3.join("→")}，等待形态聚集`;
       const skipRec: BetRecord = {
         id: `hash-kill-skip-${Date.now()}`,
         groupId: session.watchGroupId ?? "",
         groupTitle: "（跳过本期）",
-        messageText: reason, betContent: skipLabel, amount: 0,
+        messageText: reason, betContent: `散点·${recent3.join("→")}`, amount: 0,
         timestamp: Date.now(), status: "skipped", algoId,
       };
       session.betLog.unshift(skipRec);
       if (session.betLog.length > 200) session.betLog.length = 200;
       pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
-      logger.info({ recent3, isScatterLoop, consecKillLoss, consecSkipsFromLog }, `[hash-kill] ${reason}`);
+      logger.info({ recent3 }, `[hash-kill] ${reason}`);
       return;
     }
 
