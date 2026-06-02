@@ -1348,10 +1348,14 @@ export default function Dashboard() {
                       const adaptiveLabel = algos.includes("adaptive_switch")
                         ? (status.adaptiveSwitchKillMode ? " 🎯杀组" : " 大小")
                         : "";
+                      // 相位提示：哈希模式看 hashPhase，其余看 kuaisanPhase
+                      const isHashMode = algos.some(a => a.startsWith("hash_"));
+                      const phase = isHashMode ? hashPhase : kuaisanPhase;
+                      const phaseLabel = phase === "betting" ? "⏱ 等待中" : phase === "closed" ? "🎯 投注中" : "⏳ 等待中";
                       if (algos.length <= 1) {
                         // 只有一个算法：直接显示名称
                         const label = ALGO_LABELS[currentAlgoId] ?? "未知算法";
-                        return `运行中 · ${patternLabel ? patternLabel + " · " : ""}${label}${adaptiveLabel}`;
+                        return `运行中 · ${phaseLabel} · ${patternLabel ? patternLabel + " · " : ""}${label}${adaptiveLabel}`;
                       }
                       // 多算法：显示所有，当前高亮（括号标注）
                       const nextIdx = algIdx % algos.length;
@@ -1359,7 +1363,7 @@ export default function Dashboard() {
                         const short = (ALGO_LABELS[k] ?? k).replace(/^(哈希|快三|通用)-/, "");
                         return i === nextIdx ? `[${short}]` : short;
                       }).join(" / ");
-                      return `运行中 · ${patternLabel ? patternLabel + " · " : ""}${algoLine}${adaptiveLabel}`;
+                      return `运行中 · ${phaseLabel} · ${patternLabel ? patternLabel + " · " : ""}${algoLine}${adaptiveLabel}`;
                     })() : "已停止"}
                   </div>
                 </div>
