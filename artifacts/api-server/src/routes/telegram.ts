@@ -285,6 +285,8 @@ const HASH_BET_LABELS: Record<string, string> = {
 
 const tgSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
+// 哈希28 全局开奖历史（所有用户共享，最新优先，最多保留 100 期）
+let hashHistoryCache: HashResult[] = [];
 
 // ─── 独立走势缓存预热（不依赖 TG 会话，服务启动即运行）────────────────────────
 async function warmLotteryCache(): Promise<void> {
@@ -1217,15 +1219,15 @@ function ksSmart(session: TgSession, labels: string[]): string | null {
 
 /**
  * 将哈希历史结果映射到 labels 维度。
- * session.hashResults 存储 HashResult 对象；session.recentResults 存储 label 字符串。
- * 优先用 hashResults，不够时补 recentResults。
+ * 优先用全局 hashHistoryCache，不够时补 session.recentResults。
+ * 全局缓存由 publishHashResult 实时更新，所有用户共享。
  */
 function buildHashHistory(session: TgSession, labels: string[]): string[] {
   const [optA, optB] = [labels[0]!, labels[1] ?? labels[0]!];
   const raw: string[] = [];
 
-  // 从 hashResults 中提取
-  const hr = session.hashResults ?? [];
+  // 优先使用全局共享历史（所有用户一致）
+  const hr = hashHistoryCache.length > 0 ? hashHistoryCache : (session.hashResults ?? []);
   for (let i = hr.length - 1; i >= 0; i--) {
     const r = hr[i]!;
     if (labels.includes(r.label)) { raw.push(r.label); continue; }
@@ -1349,7 +1351,7 @@ function hashBalance(session: TgSession, labels: string[]): string | null {
 
   // 边界聚集检测：近5期哈希值在12-15之间的数量
   // 边界聚集意味着下期结果方向不稳定，跟随最近一期
-  const hr = (session.hashResults ?? []).slice(0, 5);
+  const hr = (hashHistoryCache.length > 0 ? hashHistoryCache : (session.hashResults ?? [])).slice(0, 5);
   const boundaryCount = hr.filter(r => r.value >= 12 && r.value <= 15).length;
   if (boundaryCount >= 3 && h.length > 0) {
     // 边界聚集：跟最近一期
@@ -2043,8 +2045,8 @@ function decideKillGroup(session: TgSession): KillGroupOption {
 // ─── 哈希28 杀组专用决策 ─────────────────────────────────────────────────────
 // 使用 session.hashResults（最新优先）进行七维评分，选出最冷组杀掉
 function hashDecideKillGroup(session: TgSession): KillGroupOption {
-  // hashResults 是 unshift 存储（index 0 = 最新），取最近 30 期
-  const hr = (session.hashResults ?? []).slice(0, 30);
+  // 使用全局共享缓存（所有用户一致），回退到 session 级别
+  const hr = (hashHistoryCache.length > 0 ? hashHistoryCache : (session.hashResults ?? [])).slice(0, 30);
   if (hr.length < 3) return KILL_GROUP_ALL[Math.floor(Math.random() * 4)]!;
 
   const history = hr
@@ -2915,6 +2917,11 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
 
 // ── 发布哈希开奖结果（供下注群和开奖频道共用）──
 function publishHashResult(session: TgSession, result: HashResult): void {
+  // ── 全局缓存：所有用户共享同一份开奖历史 ──
+  hashHistoryCache.unshift(result);
+  if (hashHistoryCache.length > 100) hashHistoryCache.pop();
+
+  // ── 会话级缓存：供 API 状态接口序列化展示 ──
   if (!session.hashResults) session.hashResults = [];
   session.hashResults.unshift(result);
   if (session.hashResults.length > 50) session.hashResults.pop();
