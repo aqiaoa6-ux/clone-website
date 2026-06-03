@@ -1425,6 +1425,7 @@ function hashWave(session: TgSession, labels: string[]): string | null {
 }
 
 function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
+  if (algoId === "canada_kill") return null; // 仅在杀组模式下有效，普通下注路径直接跳过
   if (algoId === "hash_follow")  return hashDragon(session, labels);
   if (algoId === "hash_reverse") return hashBalance(session, labels);
   if (algoId === "hash_smart")   return hashWave(session, labels);
