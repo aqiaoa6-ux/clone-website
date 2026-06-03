@@ -22,8 +22,9 @@ const ALGO_LABELS: Record<string, string> = {
   ks_reverse:       "快三-反上期",
   ks_bb:            "快三-AABB",
   ks_smart:         "快三-均值回归",
-  ai_trend:         "加拿大-算法1",
-  steady_ai:        "加拿大-算法2",
+  ai_trend:         "通用-算法1",
+  steady_ai:        "通用-算法2",
+  adaptive_switch:  "通用-算法3",
   hash_follow:      "哈希-算法1",
   hash_reverse:     "哈希-算法2",
   hash_smart:       "哈希-算法3",
@@ -36,8 +37,9 @@ const ALGO_DESC: Record<string, string> = {
   ks_reverse:       "反上期 = 押上一局反方向（适合震荡交替局）",
   ks_bb:            "AABB = 两期相同则顺，两期不同则反（自动识别节奏）",
   ks_smart:         "均值回归 = 近5期某方向≥4次时押反，其余跟3期多数",
-  ai_trend:         "加拿大1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
-  steady_ai:        "加拿大2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
+  ai_trend:         "通用1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
+  steady_ai:        "通用2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
+  adaptive_switch:  "通用3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
   hash_follow:      "哈希1 = 区块链龙形（顺龙1-5期，超6期反转，震荡跟尾）",
   hash_reverse:     "哈希2 = 双链均衡（三窗口加权回归，边界聚集时顺势突破）",
   hash_smart:       "哈希3 = MD5波段（短期动量×中期偏差×交替密度三维合力）",
@@ -482,26 +484,9 @@ function SettingsDrawer({ status, onClose, onSave }: {
             <div>
               <label className={labelCls}>算法选择</label>
               <div className="flex flex-wrap gap-2">
-                {Object.entries(ALGO_LABELS).map(([k, v]) => {
-                  const active = algos.includes(k);
-                  let cls: string;
-                  if (k.startsWith("ks_")) {
-                    cls = active
-                      ? "bg-emerald-600 border-emerald-500 text-white"
-                      : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-emerald-500/50";
-                  } else if (k.startsWith("hash_")) {
-                    cls = active
-                      ? "bg-violet-600 border-violet-500 text-white"
-                      : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50";
-                  } else {
-                    cls = active
-                      ? "bg-blue-600 border-blue-500 text-white"
-                      : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50";
-                  }
-                  return (
-                    <span key={k} className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition border ${cls}`} onClick={() => toggleAlgo(k)}>{v}</span>
-                  );
-                })}
+                {Object.entries(ALGO_LABELS).map(([k, v]) => (
+                  <span key={k} className={tagCls(algos.includes(k))} onClick={() => toggleAlgo(k)}>{v}</span>
+                ))}
               </div>
               {algos.length > 0 && (
                 <div className="mt-2 space-y-1">
@@ -1379,7 +1364,7 @@ export default function Dashboard() {
                       // 多算法：显示所有，当前高亮（括号标注）
                       const nextIdx = algIdx % algos.length;
                       const algoLine = algos.map((k, i) => {
-                        const short = (ALGO_LABELS[k] ?? k).replace(/^(哈希|快三|通用|加拿大)-/, "");
+                        const short = (ALGO_LABELS[k] ?? k).replace(/^(哈希|快三|通用)-/, "");
                         return i === nextIdx ? `[${short}]` : short;
                       }).join(" / ");
                       return `运行中 · ${phaseLabel} · ${patternLabel ? patternLabel + " · " : ""}${algoLine}${adaptiveLabel}`;
