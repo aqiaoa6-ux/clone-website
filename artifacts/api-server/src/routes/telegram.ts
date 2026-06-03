@@ -2312,27 +2312,6 @@ async function runAutoBet(session: TgSession): Promise<void> {
 
   // 四组杀组模式：AI 决定杀哪组，剩余三组全押
   if (session.cfg.killGroupMode) {
-    // 散点检测：近3期全不同 → 跳过本期，等形态聚集（与算法4逻辑一致）
-    const lotteryRecent3 = [...lotteryHistoryCache, ...session.recentResults]
-      .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
-      .slice(-3);
-    const lotteryScatter = lotteryRecent3.length === 3 && new Set(lotteryRecent3).size === 3;
-    if (lotteryScatter) {
-      session.betPlacedThisCycle = true;
-      const reason = `散点循环 ${lotteryRecent3.join("→")}，等待形态聚集`;
-      const skipRec: BetRecord = {
-        id: `lottery-kill-skip-${Date.now()}`,
-        groupId: session.watchGroupId ?? "",
-        groupTitle: "（跳过本期）",
-        messageText: reason, betContent: `散点·${lotteryRecent3.join("→")}`, amount: 0,
-        timestamp: Date.now(), status: "skipped", algoId: "adaptive_switch",
-      };
-      session.betLog.unshift(skipRec);
-      if (session.betLog.length > 200) session.betLog.length = 200;
-      pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
-      logger.info({ lotteryRecent3 }, "[lottery-kill] 散点循环，跳过本期");
-      return;
-    }
     const killed = decideKillGroup(session);
     pushEvent(session, "bet:kill", { killed });
     await placeKillGroupBets(session, killed);
@@ -2537,27 +2516,6 @@ function startGroupListener(session: TgSession): void {
       if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
       if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
       if (session.adaptiveSwitchKillMode) {
-        // 散点检测：近3期全不同 → 跳过（与算法4一致）
-        const asRecent3 = [...lotteryHistoryCache, ...session.recentResults]
-          .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
-          .slice(-3);
-        const asScatter = asRecent3.length === 3 && new Set(asRecent3).size === 3;
-        if (asScatter) {
-          session.betPlacedThisCycle = true;
-          const reason = `散点循环 ${asRecent3.join("→")}，等待形态聚集`;
-          const skipRec: BetRecord = {
-            id: `lottery-kill-skip-${Date.now()}`,
-            groupId: session.watchGroupId ?? "",
-            groupTitle: "（跳过本期）",
-            messageText: reason, betContent: `散点·${asRecent3.join("→")}`, amount: 0,
-            timestamp: Date.now(), status: "skipped", algoId: "adaptive_switch",
-          };
-          session.betLog.unshift(skipRec);
-          if (session.betLog.length > 200) session.betLog.length = 200;
-          pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
-          logger.info({ asRecent3 }, "[adaptive-kill] 散点循环，跳过本期");
-          return;
-        }
         const killed = decideKillGroup(session);
         pushEvent(session, "bet:kill", { killed, adaptive: true });
         void placeKillGroupBets(session, killed, true);
