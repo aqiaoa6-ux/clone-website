@@ -22,9 +22,10 @@ const ALGO_LABELS: Record<string, string> = {
   ks_reverse:       "快三-反上期",
   ks_bb:            "快三-AABB",
   ks_smart:         "快三-均值回归",
-  ai_trend:         "通用-算法1",
-  steady_ai:        "通用-算法2",
-  adaptive_switch:  "通用-算法3",
+  ai_trend:         "加拿大-算法1",
+  steady_ai:        "加拿大-算法2",
+  adaptive_switch:  "加拿大-算法3",
+  canada_kill:      "加拿大-算法4 🎯 杀组专用",
   hash_follow:      "哈希-算法1",
   hash_reverse:     "哈希-算法2",
   hash_smart:       "哈希-算法3",
@@ -37,9 +38,10 @@ const ALGO_DESC: Record<string, string> = {
   ks_reverse:       "反上期 = 押上一局反方向（适合震荡交替局）",
   ks_bb:            "AABB = 两期相同则顺，两期不同则反（自动识别节奏）",
   ks_smart:         "均值回归 = 近5期某方向≥4次时押反，其余跟3期多数",
-  ai_trend:         "通用1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
-  steady_ai:        "通用2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
-  adaptive_switch:  "通用3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
+  ai_trend:         "加拿大1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
+  steady_ai:        "加拿大2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
+  adaptive_switch:  "加拿大3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
+  canada_kill:      "加拿大4 🎯 = 杀组专用·热门策略（杀近期最热组，保护极冷组，需配合杀组模式使用）",
   hash_follow:      "哈希1 = 区块链龙形（顺龙1-5期，超6期反转，震荡跟尾）",
   hash_reverse:     "哈希2 = 双链均衡（三窗口加权回归，边界聚集时顺势突破）",
   hash_smart:       "哈希3 = MD5波段（短期动量×中期偏差×交替密度三维合力）",
@@ -1364,7 +1366,7 @@ export default function Dashboard() {
                       // 多算法：显示所有，当前高亮（括号标注）
                       const nextIdx = algIdx % algos.length;
                       const algoLine = algos.map((k, i) => {
-                        const short = (ALGO_LABELS[k] ?? k).replace(/^(哈希|快三|通用)-/, "");
+                        const short = (ALGO_LABELS[k] ?? k).replace(/^(哈希|快三|通用|加拿大)-/, "");
                         return i === nextIdx ? `[${short}]` : short;
                       }).join(" / ");
                       return `运行中 · ${phaseLabel} · ${patternLabel ? patternLabel + " · " : ""}${algoLine}${adaptiveLabel}`;
