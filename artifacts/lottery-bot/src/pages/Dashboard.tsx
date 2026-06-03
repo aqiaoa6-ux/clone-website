@@ -25,7 +25,7 @@ const ALGO_LABELS: Record<string, string> = {
   ai_trend:         "加拿大-算法1",
   steady_ai:        "加拿大-算法2",
   adaptive_switch:  "加拿大-算法3",
-  canada_kill:      "加拿大-算法4 🎯 杀组专用",
+  canada_kill:      "加拿大-算法4",
   hash_follow:      "哈希-算法1",
   hash_reverse:     "哈希-算法2",
   hash_smart:       "哈希-算法3",
