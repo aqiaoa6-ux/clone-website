@@ -4,7 +4,7 @@
   "balance": 7790860.059,
   "todayPnl": -717600,
   "todayResetAt": 1780444800000,
-  "sessionPnl": 182400,
+  "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003294529818",
@@ -36,6 +36,7 @@
       "ai_trend",
       "steady_ai"
     ],
+    "algoFlipOnLoss": 2,
     "odds": 1.98,
     "oddsBigOdd": 4.32,
     "oddsBigEven": 3.71,
@@ -59,8 +60,7 @@
       "big",
       "small"
     ],
-    "hashBetOptions": [],
-    "algoFlipOnLoss": 2
+    "hashBetOptions": []
   },
   "kuaisanResults": [],
   "hashResults": [
