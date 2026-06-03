@@ -1961,15 +1961,14 @@ type KillGroupOption = typeof KILL_GROUP_ALL[number];
 /**
  * 根据走势分析决定杀哪一组（返回被杀组的标签）。
  *
- * 核心策略：杀冷门（遗漏久 / 频率低的组），保护热门（正在出现的组有惯性）。
- * 哈希PC28 结果有动量特性，热组倾向于持续出现，冷组反而应该杀掉。
+ * 核心策略：杀热门（出现频率高的组更可能阶段停歇），保护极冷门（欠出久接近补出）。
  *
  * 模块：
- *  A: 遗漏分（遗漏越久 → 杀分越高，即杀冷门）
- *  B: 近期频率（频率越低 → 杀分越高）
- *  C: 正在连出的组绝对保护（≥1期连出不可杀）
- *  D: 极度欠出保护（≥6期未出，接近正常，给降杀分）
- *  E: 大/小维度趋势感知
+ *  A: 近10期热门杀分（出现越多越该杀）
+ *  B: 近30期频率辅助（高频加杀分，低频降杀分）
+ *  C: 正在连出的组强保护（≥1期连出不可杀，≥2期绝对保护）
+ *  D: 极度欠出保护（≥6期未出，降杀分，接近补出不宜杀）
+ *  E: 大/小侧趋势感知（强势侧里杀最热的组）
  */
 function decideKillGroup(session: TgSession): KillGroupOption {
   const history = [...lotteryHistoryCache, ...session.recentResults]
@@ -1995,27 +1994,23 @@ function decideKillGroup(session: TgSession): KillGroupOption {
   }
 
   // ── C: 正在连出的组强保护（最高优先级）──────────────────────────────────────
-  // 连出≥1期：有动量，绝对不杀
-  if (streak >= 1) {
-    scores[latest] -= (streak >= 2 ? 999 : 4.0);
-  }
+  scores[latest] -= (streak >= 2 ? 999 : 4.0);
 
-  // ── A: 遗漏分：遗漏越久（越冷门）→ 杀分越高 ──────────────────────────────
-  const maxAb = Math.max(...Object.values(absence));
+  // ── A: 近10期热门杀分（出现越多越该杀，热门组更可能阶段性停歇）──────────────
+  const h10 = history.slice(-Math.min(10, n));
   for (const opt of KILL_GROUP_ALL) {
-    const coldness = maxAb > 0 ? absence[opt] / maxAb : 0.5;
-    scores[opt] += coldness * 4.0;
+    const cnt10 = h10.filter(r => r === opt).length;
+    scores[opt] += cnt10 * 0.6; // 近10期出现越多 → 杀分越高
   }
 
-  // ── B: 近20期频率：频率越低 → 杀分越高 ──────────────────────────────────
-  const h20 = history.slice(-Math.min(20, n));
+  // ── B: 近30期频率辅助（高于均值的组加杀分，方向与A一致）──────────────────
+  const h30 = history.slice(-Math.min(30, n));
   for (const opt of KILL_GROUP_ALL) {
-    const freq20 = h20.filter(r => r === opt).length / h20.length;
-    // 频率低于均值(0.25)的组视为冷门，加杀分
-    scores[opt] += (0.25 - freq20) * 6.0;
+    const freq30 = h30.filter(r => r === opt).length / h30.length;
+    scores[opt] += (freq30 - 0.25) * 5.0; // 高频 → 加杀分，低频 → 降杀分
   }
 
-  // ── D: 极度欠出降杀分（遗漏≥6期，接近补出时段，降低被杀概率）──────────────
+  // ── D: 极度欠出保护（遗漏越多越接近补出，降低被杀概率）──────────────────
   for (const opt of KILL_GROUP_ALL) {
     const ab = absence[opt];
     if (ab >= 10)     scores[opt] -= 15;
@@ -2023,18 +2018,19 @@ function decideKillGroup(session: TgSession): KillGroupOption {
     else if (ab >= 6) scores[opt] -= 3;
   }
 
-  // ── E: 大/小维度趋势感知（近10期）────────────────────────────────────────
-  const h10 = history.slice(-Math.min(10, n));
+  // ── E: 大/小侧趋势：优先杀强势侧里出现最多的组 ───────────────────────────
   const bigCnt = h10.filter(r => r.startsWith("大")).length;
   const smallCnt = h10.length - bigCnt;
   if (bigCnt >= 7) {
-    // 大侧强势：小侧两组遗漏偏高，优先杀小侧里最冷的
-    if (absence["小单"] >= absence["小双"]) scores["小单"] += 2.0;
-    else scores["小双"] += 2.0;
+    // 大侧强势：优先杀大侧里最热的组
+    const hottestBig = (["大单", "大双"] as KillGroupOption[])
+      .sort((a, b) => h10.filter(r => r === b).length - h10.filter(r => r === a).length)[0]!;
+    scores[hottestBig] += 2.0;
   } else if (smallCnt >= 7) {
-    // 小侧强势：大侧两组遗漏偏高，优先杀大侧里最冷的
-    if (absence["大单"] >= absence["大双"]) scores["大单"] += 2.0;
-    else scores["大双"] += 2.0;
+    // 小侧强势：优先杀小侧里最热的组
+    const hottestSmall = (["小单", "小双"] as KillGroupOption[])
+      .sort((a, b) => h10.filter(r => r === b).length - h10.filter(r => r === a).length)[0]!;
+    scores[hottestSmall] += 2.0;
   }
 
   const killed = (Object.entries(scores) as [KillGroupOption, number][])
