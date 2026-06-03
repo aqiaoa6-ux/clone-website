@@ -1,10 +1,10 @@
 {
   "sessionString": "1BQANOTEuMTA4LjU2LjE3MQG7rI1vZdKwwuX6Ar0NI/4aiIVMFmIQzxnn0EsYH4009tSHUTfPpE8jp0rNRWT+ywkVzY5HuWmsKA3MTfdLbVlDwTCpEsk/rF6nCyGvMd6w3CUhMYdxwWDpIhjlnDNrx9JPGpUYmFmFMw+vCxqVmsMGMWGPJTFaqaaCvuNoJwGGK9psykwTUFVOTE9Hj3owSR5bW8NH6xvW39tsvLBs40+UA3aGOrtNEKlbIB+P38P/z6qH/GSrYWqZO3Pa7XDhtL9LX+QVmC/PXM2DJBRArp2dk3AFA1m9jUJaqLuItUSXpe4Bg/k3fqPtoiI5Lxp+JXbVuiu6UQ4T1fxmKE8/iY2YJQ==",
   "phone": "855 96 786 6238",
-  "balance": 9448998.059,
-  "todayPnl": -874000,
+  "balance": 9422998.059,
+  "todayPnl": -900000,
   "todayResetAt": 1780444800000,
-  "sessionPnl": -285000,
+  "sessionPnl": -26000,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1003294529818",
@@ -18,8 +18,8 @@
     "targetProfit": 0,
     "cooldownSeconds": 0,
     "amountLevels": [
-      50000,
-      50000,
+      10000,
+      10000,
       50000,
       8000,
       16000,
@@ -36,8 +36,17 @@
     "oddsBigEven": 3.71,
     "oddsSmallOdd": 3.71,
     "oddsSmallEven": 4.32,
-    "chaseNumbers": [],
-    "enableChase": false,
+    "chaseNumbers": [
+      {
+        "num": 0,
+        "amount": 3000
+      },
+      {
+        "num": 27,
+        "amount": 3000
+      }
+    ],
+    "enableChase": true,
     "dualGroupMode": true,
     "killGroupMode": false,
     "gameMode": "lottery",

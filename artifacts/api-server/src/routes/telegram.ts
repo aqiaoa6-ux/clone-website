@@ -21,8 +21,7 @@ type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "sm
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
-  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_kill" | "hash_kill_plus"
-  | "canada_kill";
+  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_kill" | "hash_kill_plus";
 
 interface BetCfg {
   autoBet: boolean;
@@ -1425,7 +1424,6 @@ function hashWave(session: TgSession, labels: string[]): string | null {
 }
 
 function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
-  if (algoId === "canada_kill") return null; // 仅在杀组模式下有效，普通下注路径直接跳过
   if (algoId === "hash_follow")  return hashDragon(session, labels);
   if (algoId === "hash_reverse") return hashBalance(session, labels);
   if (algoId === "hash_smart")   return hashWave(session, labels);
@@ -2024,82 +2022,6 @@ function decideKillGroup(session: TgSession): KillGroupOption {
   return killed;
 }
 
-/**
- * 加拿大杀组决策 - 算法4（热门策略）
- * 杀近期出现频率最高的组（热门停歇），保护极冷门组（欠出久接近补出）。
- *
- * 模块：
- *  A: 近10期热门杀分（出现越多越该杀）
- *  B: 近30期频率辅助（高频加杀分，低频降杀分）
- *  C: 正在连出的组强保护（≥1期连出不可杀，≥2期绝对保护）
- *  D: 极度欠出保护（≥6期未出，降杀分）
- *  E: 大/小侧趋势：强势侧里杀最热的组
- */
-function decideKillGroupV4(session: TgSession): KillGroupOption {
-  const history = [...lotteryHistoryCache, ...session.recentResults]
-    .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
-
-  if (history.length < 4) {
-    return KILL_GROUP_ALL[Math.floor(Math.random() * 4)]!;
-  }
-
-  const n = history.length;
-  const scores: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
-
-  // ── 预计算遗漏 & 当前连出 ──────────────────────────────────────────────────
-  const latest = history[n - 1]!;
-  let streak = 0;
-  for (let i = n - 1; i >= 0 && history[i] === latest; i--) streak++;
-
-  const absence: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
-  for (const opt of KILL_GROUP_ALL) {
-    let ab = 0;
-    for (let i = n - 1; i >= 0 && history[i] !== opt; i--) ab++;
-    absence[opt] = ab;
-  }
-
-  // ── C: 正在连出的组强保护（最高优先级）──────────────────────────────────────
-  scores[latest] -= (streak >= 2 ? 999 : 4.0);
-
-  // ── A: 近10期热门杀分（出现越多越该杀）──────────────────────────────────
-  const h10 = history.slice(-Math.min(10, n));
-  for (const opt of KILL_GROUP_ALL) {
-    const cnt10 = h10.filter(r => r === opt).length;
-    scores[opt] += cnt10 * 0.6;
-  }
-
-  // ── B: 近30期频率辅助（高频加杀分，低频降杀分）──────────────────────────
-  const h30 = history.slice(-Math.min(30, n));
-  for (const opt of KILL_GROUP_ALL) {
-    const freq30 = h30.filter(r => r === opt).length / h30.length;
-    scores[opt] += (freq30 - 0.25) * 5.0;
-  }
-
-  // ── D: 极度欠出保护（遗漏越多越接近补出，降低被杀概率）──────────────────
-  for (const opt of KILL_GROUP_ALL) {
-    const ab = absence[opt];
-    if (ab >= 10)     scores[opt] -= 15;
-    else if (ab >= 8) scores[opt] -= 8;
-    else if (ab >= 6) scores[opt] -= 3;
-  }
-
-  // ── E: 大/小侧趋势：优先杀强势侧里出现最多的组 ───────────────────────────
-  const bigCnt = h10.filter(r => r.startsWith("大")).length;
-  const smallCnt = h10.length - bigCnt;
-  if (bigCnt >= 7) {
-    const hottestBig = (["大单", "大双"] as KillGroupOption[])
-      .sort((a, b) => h10.filter(r => r === b).length - h10.filter(r => r === a).length)[0]!;
-    scores[hottestBig] += 2.0;
-  } else if (smallCnt >= 7) {
-    const hottestSmall = (["小单", "小双"] as KillGroupOption[])
-      .sort((a, b) => h10.filter(r => r === b).length - h10.filter(r => r === a).length)[0]!;
-    scores[hottestSmall] += 2.0;
-  }
-
-  const killed = (Object.entries(scores) as [KillGroupOption, number][])
-    .sort((a, b) => b[1] - a[1])[0]![0];
-  return killed;
-}
 
 // ─── 哈希28 杀组专用决策 ─────────────────────────────────────────────────────
 // 使用 session.hashResults（最新优先）进行七维评分，选出最冷组杀掉
@@ -2371,9 +2293,8 @@ async function runAutoBet(session: TgSession): Promise<void> {
 
   // 四组杀组模式：AI 决定杀哪组，剩余三组全押
   if (session.cfg.killGroupMode) {
-    const useV4 = session.cfg.algorithms.includes("canada_kill");
-    const killed = useV4 ? decideKillGroupV4(session) : decideKillGroup(session);
-    pushEvent(session, "bet:kill", { killed, algo: useV4 ? "v4-hot" : "v1-cold" });
+    const killed = decideKillGroup(session);
+    pushEvent(session, "bet:kill", { killed });
     await placeKillGroupBets(session, killed);
     return;
   }
@@ -2576,9 +2497,8 @@ function startGroupListener(session: TgSession): void {
       if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
       if (triggerPeriod) session.lastBetPeriod = triggerPeriod;
       if (session.adaptiveSwitchKillMode) {
-        const useV4 = session.cfg.algorithms.includes("canada_kill");
-        const killed = useV4 ? decideKillGroupV4(session) : decideKillGroup(session);
-        pushEvent(session, "bet:kill", { killed, adaptive: true, algo: useV4 ? "v4-hot" : "v1-cold" });
+        const killed = decideKillGroup(session);
+        pushEvent(session, "bet:kill", { killed, adaptive: true });
         void placeKillGroupBets(session, killed, true);
       } else {
         // 大小模式：强制只用大/小选项
