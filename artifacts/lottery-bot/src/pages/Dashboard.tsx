@@ -484,9 +484,26 @@ function SettingsDrawer({ status, onClose, onSave }: {
             <div>
               <label className={labelCls}>算法选择</label>
               <div className="flex flex-wrap gap-2">
-                {Object.entries(ALGO_LABELS).map(([k, v]) => (
-                  <span key={k} className={tagCls(algos.includes(k))} onClick={() => toggleAlgo(k)}>{v}</span>
-                ))}
+                {Object.entries(ALGO_LABELS).map(([k, v]) => {
+                  const active = algos.includes(k);
+                  let cls: string;
+                  if (k.startsWith("ks_")) {
+                    cls = active
+                      ? "bg-emerald-600 border-emerald-500 text-white"
+                      : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-emerald-500/50";
+                  } else if (k.startsWith("hash_")) {
+                    cls = active
+                      ? "bg-violet-600 border-violet-500 text-white"
+                      : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-violet-500/50";
+                  } else {
+                    cls = active
+                      ? "bg-blue-600 border-blue-500 text-white"
+                      : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-blue-500/50";
+                  }
+                  return (
+                    <span key={k} className={`px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition border ${cls}`} onClick={() => toggleAlgo(k)}>{v}</span>
+                  );
+                })}
               </div>
               {algos.length > 0 && (
                 <div className="mt-2 space-y-1">
