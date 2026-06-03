@@ -935,20 +935,6 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
     session.consecutiveLosses = won ? 0 : session.consecutiveLosses + 1;
     session.currentBet = computeNextBet(session, won);
 
-    // adaptive_switch: 大小未中→切杀组；杀组中奖→切回大小
-    if (session.cfg.algorithms.includes("adaptive_switch") && record) {
-      if (record.isAdaptiveKillBet) {
-        if (won) {
-          session.adaptiveSwitchKillMode = false;
-          pushEvent(session, "bet:alert", { message: "✅ 杀组命中，切回大小模式", level: "info" });
-        }
-      } else {
-        if (!won) {
-          session.adaptiveSwitchKillMode = true;
-          pushEvent(session, "bet:alert", { message: "🔄 大小未中，切换杀组模式", level: "warn" });
-        }
-      }
-    }
   }
 
   if (record) {
