@@ -1,0 +1,106 @@
+{
+  "sessionString": "1BQANOTEuMTA4LjU2LjE3NAG7OeylNuWKZ5yG7cft+m5qk+dDAj/lReV9JhBHWSOhkv8ndl36P54BEjI9IGfAkfD2cSqsN1blC2fpoDXT/RnG4DkAWJIAF4jcoflfgOzOF+pHiul+NQVNZE40lqHUnn4svrkFANuZI2D2IS+gQmwbFeSGIfL6OC/enC7cZVnXdXfUrIBW0HqpAo1FJqna2JglAoB7wvXmQYubhnOs/HcEhZgNnV4H5DjHKHO6/l0zXtQLLBeTRRk9VKf6mENL4pMWQnu0LpTWGVF2VlBiXelf4TvPfLgbjm6QXV7Z2f3sycgUMsjkh0yBA27yb50AoBijRe3A65qCipf5gRcqytbuIQ==",
+  "phone": "855 96 786 6238",
+  "balance": 1000000,
+  "todayPnl": 0,
+  "todayResetAt": 1780531200000,
+  "sessionPnl": 0,
+  "kkpayUsername": "kkpay",
+  "balanceSource": "manual",
+  "watchGroupId": "-1002400383803",
+  "cfg": {
+    "autoBet": false,
+    "betAmount": 100,
+    "strategy": "normal",
+    "betMultiplier": 2,
+    "maxConsecutiveLosses": 5,
+    "stopLoss": 5000,
+    "targetProfit": 3000,
+    "cooldownSeconds": 0,
+    "amountLevels": [
+      100,
+      200,
+      400,
+      800,
+      1600,
+      3200
+    ],
+    "stepBackOnWin": true,
+    "betOptions": [
+      "big",
+      "small"
+    ],
+    "algorithms": [
+      "ai_trend"
+    ],
+    "algoFlipOnLoss": 2,
+    "odds": 1.98,
+    "oddsBigOdd": 1.98,
+    "oddsBigEven": 1.98,
+    "oddsSmallOdd": 1.98,
+    "oddsSmallEven": 1.98,
+    "chaseNumbers": [],
+    "enableChase": false,
+    "chaseOnly": false,
+    "chaseDoubleOnLoss": false,
+    "chaseAmountLevels": [
+      100,
+      200,
+      300,
+      500,
+      800,
+      1200,
+      1800,
+      2700,
+      4000,
+      6000,
+      9000,
+      13000,
+      19000,
+      28000,
+      40000,
+      58000,
+      84000,
+      120000,
+      175000,
+      250000,
+      360000,
+      520000,
+      750000,
+      1000000
+    ],
+    "dualGroupMode": false,
+    "killGroupMode": false,
+    "gameMode": "lottery",
+    "kuaisanBetOptions": [
+      "big",
+      "small"
+    ],
+    "hashBetOptions": [
+      "big",
+      "small"
+    ]
+  },
+  "kuaisanResults": [],
+  "hashResults": [],
+  "me": {
+    "firstName": "11",
+    "lastName": null,
+    "username": "jk4419",
+    "phone": "855967866238"
+  },
+  "canadaMonitorGroupIds": [
+    "-1003447817417",
+    "-1002046488932",
+    "-1003020298977",
+    "-1003858203119",
+    "-1003124083583",
+    "-1003438999312",
+    "-1003445074017",
+    "-1003722607373",
+    "-1003294529818",
+    "-1003192630769",
+    "-1002362569097",
+    "-1003066890553"
+  ]
+}

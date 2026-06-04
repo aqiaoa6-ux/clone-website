@@ -879,10 +879,19 @@ export default function Dashboard() {
   // ─── SSE stream ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    const es = new EventSource("/api/tg/events", { withCredentials: true });
-    sseRef.current = es;
+    let destroyed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-    es.onmessage = (e) => {
+    const connect = () => {
+      if (destroyed) return;
+      const es = new EventSource("/api/tg/events", { withCredentials: true });
+      sseRef.current = es;
+      es.onerror = () => {
+        es.close();
+        sseRef.current = null;
+        if (!destroyed) reconnectTimer = setTimeout(connect, 2000);
+      };
+      es.onmessage = (e) => {
       if (!e.data) return;
       try {
         const ev = JSON.parse(e.data as string) as Record<string, unknown>;
@@ -957,9 +966,15 @@ export default function Dashboard() {
           void fetchStatus();
         }
       } catch { /* ignore */ }
+      };
     };
 
-    return () => { es.close(); sseRef.current = null; };
+    connect();
+    return () => {
+      destroyed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
+    };
   }, [fetchBets, fetchStatus]);
 
   // ─── Init & polling ──────────────────────────────────────────────────────
@@ -1563,7 +1578,7 @@ export default function Dashboard() {
         <div className="fixed inset-0 z-50 flex items-end">
           <div className="flex-1 bg-black/60 absolute inset-0" onClick={() => setShowGroupSetup(false)} />
           <div className="relative w-full bg-[#0f1220] border-t border-[#252a3d] rounded-t-2xl p-4 pb-8 max-h-[80vh] overflow-y-auto z-50">
-            <GroupSetupCard groups={groups} onDone={() => { setShowGroupSetup(false); void fetchStatus(); }} />
+            <GroupSetupCard groups={groups} onDone={() => { setShowGroupSetup(false); void fetchStatus(); }} onRelogin={() => { setShowGroupSetup(false); setTgStep("login"); }} />
           </div>
         </div>
       )}

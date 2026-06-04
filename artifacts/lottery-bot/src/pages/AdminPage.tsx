@@ -397,58 +397,77 @@ export default function AdminPage() {
     }
     betBufferRef.current = [];
     resetPendingRef.current = null;
+
+    let destroyed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
     // 先 REST 拉一次历史，防止 SSE init 竞态导致历史为空
     void fetch("/api/admin/hash-period-history", { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then((d: { history?: PeriodRecord[] } | null) => {
         if (d?.history && d.history.length > 0) setHashHistory(prev => mergeHistory(prev, d.history!));
       }).catch(() => { /* ignore */ });
-    const es = new EventSource("/api/admin/hash-group-bets/events", { withCredentials: true });
-    hashSseRef.current = es;
-    es.onmessage = (e) => {
-      if (!e.data) return;
-      try {
-        const ev = JSON.parse(e.data as string) as Record<string, unknown>;
-        if (ev.type === "init") {
-          betBufferRef.current = [];
-          resetPendingRef.current = null;
-          setHashBets((ev.bets as GroupBetEntry[]) ?? []);
-          setHashPeriod((ev.period as string | null) ?? null);
-          if (ev.term) setHashTerm(ev.term as number);
-          if (ev.lastBetAt) setHashLastBetAt(ev.lastBetAt as number);
-          if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(prev => mergeHistory(prev, ev.history as PeriodRecord[]));
-        } else if (ev.type === "bets:batch") {
-          const bets = (ev.bets as GroupBetEntry[]) ?? [];
-          if (ev.period) latestPeriodRef.current = ev.period as string;
-          if (ev.term) latestTermRef.current = ev.term as number;
-          if (ev.lastBetAt) latestLastBetAtRef.current = ev.lastBetAt as number;
-          for (const b of bets) betBufferRef.current.push(b);
-        } else if (ev.type === "bets:cleanup") {
-          betBufferRef.current = [];
-          resetPendingRef.current = null;
-          setHashPeriod((ev.period as string | null) ?? null);
-          void fetch("/api/admin/hash-group-bets", { credentials: "include" })
-            .then(r => r.ok ? r.json() : null)
-            .then((d: { bets?: GroupBetEntry[]; period?: string | null } | null) => {
-              if (d?.bets) { setHashBets(d.bets); setHashPeriod(d.period ?? null); }
-            }).catch(() => { /* ignore */ });
-        } else if (ev.type === "history:update") {
-          if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(prev => mergeHistory(prev, ev.history as PeriodRecord[]));
-        } else if (ev.type === "bet:new") {
-          betBufferRef.current.push(ev.bet as GroupBetEntry);
-        } else if (ev.type === "bets:reset") {
-          betBufferRef.current = [];
-          latestTermRef.current = null;
-          latestLastBetAtRef.current = 0;
-          setHashLastBetAt(0);
-          if (ev.term) setHashTerm(ev.term as number);
-          resetPendingRef.current = {
-            bets: (ev.bets as GroupBetEntry[]) ?? [],
-            period: (ev.period as string | null) ?? null,
-          };
-        }
-      } catch { /* ignore */ }
+
+    const connect = () => {
+      if (destroyed) return;
+      const es = new EventSource("/api/admin/hash-group-bets/events", { withCredentials: true });
+      hashSseRef.current = es;
+
+      es.onmessage = (e) => {
+        if (!e.data) return;
+        try {
+          const ev = JSON.parse(e.data as string) as Record<string, unknown>;
+          if (ev.type === "init") {
+            betBufferRef.current = [];
+            resetPendingRef.current = null;
+            setHashBets((ev.bets as GroupBetEntry[]) ?? []);
+            setHashPeriod((ev.period as string | null) ?? null);
+            if (ev.term) setHashTerm(ev.term as number);
+            if (ev.lastBetAt) setHashLastBetAt(ev.lastBetAt as number);
+            if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(prev => mergeHistory(prev, ev.history as PeriodRecord[]));
+          } else if (ev.type === "bets:batch") {
+            const bets = (ev.bets as GroupBetEntry[]) ?? [];
+            if (ev.period) latestPeriodRef.current = ev.period as string;
+            if (ev.term) latestTermRef.current = ev.term as number;
+            if (ev.lastBetAt) latestLastBetAtRef.current = ev.lastBetAt as number;
+            for (const b of bets) betBufferRef.current.push(b);
+          } else if (ev.type === "bets:cleanup") {
+            betBufferRef.current = [];
+            resetPendingRef.current = null;
+            setHashPeriod((ev.period as string | null) ?? null);
+            void fetch("/api/admin/hash-group-bets", { credentials: "include" })
+              .then(r => r.ok ? r.json() : null)
+              .then((d: { bets?: GroupBetEntry[]; period?: string | null } | null) => {
+                if (d?.bets) { setHashBets(d.bets); setHashPeriod(d.period ?? null); }
+              }).catch(() => { /* ignore */ });
+          } else if (ev.type === "history:update") {
+            if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(prev => mergeHistory(prev, ev.history as PeriodRecord[]));
+          } else if (ev.type === "bet:new") {
+            betBufferRef.current.push(ev.bet as GroupBetEntry);
+          } else if (ev.type === "bets:reset") {
+            betBufferRef.current = [];
+            latestTermRef.current = null;
+            latestLastBetAtRef.current = 0;
+            setHashLastBetAt(0);
+            if (ev.term) setHashTerm(ev.term as number);
+            resetPendingRef.current = {
+              bets: (ev.bets as GroupBetEntry[]) ?? [],
+              period: (ev.period as string | null) ?? null,
+            };
+          }
+        } catch { /* ignore */ }
+      };
+
+      // 断线自动重连（生产代理每5分钟断一次）
+      es.onerror = () => {
+        es.close();
+        hashSseRef.current = null;
+        if (!destroyed) reconnectTimer = setTimeout(connect, 2000);
+      };
     };
+
+    connect();
+
     // 每 1s flush 一次缓冲，多群消息合并为一次 setState
     const flushId = setInterval(() => {
       const reset = resetPendingRef.current;
@@ -476,7 +495,13 @@ export default function AdminPage() {
         setHashPeriod(reset.period);
       }
     }, 1000);
-    return () => { clearInterval(flushId); es.close(); hashSseRef.current = null; };
+
+    return () => {
+      destroyed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      clearInterval(flushId);
+      if (hashSseRef.current) { hashSseRef.current.close(); hashSseRef.current = null; }
+    };
   }, [tab, secretVerified]);
 
   // Auto-poll kkpay every 5s while kkpay console is open
