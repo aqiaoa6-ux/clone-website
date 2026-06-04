@@ -125,5 +125,7 @@
     "username": "jk4419",
     "phone": "855967866238"
   },
-  "hashMonitorGroupId": "-1003847260357"
+  "canadaMonitorGroupIds": [
+    "-1003020298977"
+  ]
 }

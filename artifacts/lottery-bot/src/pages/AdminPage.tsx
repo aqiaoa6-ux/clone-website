@@ -1842,6 +1842,58 @@ export default function AdminPage() {
               </div>
             </div>
 
+            {/* 方向统计 */}
+            {hashBets.length > 0 && (() => {
+              const dirs = ["大单", "大双", "大", "小单", "小双", "小"] as const;
+              type Dir = typeof dirs[number];
+              const totals: Record<Dir, number> = { "大单": 0, "大双": 0, "大": 0, "小单": 0, "小双": 0, "小": 0 };
+              for (const b of hashBets) {
+                const d = b.direction as Dir;
+                if (d in totals) totals[d] += b.amount;
+              }
+              const bigTotal = totals["大单"] + totals["大双"] + totals["大"];
+              const smallTotal = totals["小单"] + totals["小双"] + totals["小"];
+              const grandTotal = bigTotal + smallTotal;
+              const fmt = (n: number) => n > 0 ? n.toLocaleString("zh-CN", { maximumFractionDigits: 0 }) : "0";
+              const pct = (n: number) => grandTotal > 0 ? Math.round(n / grandTotal * 100) : 0;
+              return (
+                <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4 space-y-3">
+                  <span className="text-white font-semibold text-sm">方向统计</span>
+                  {/* 大 vs 小 总览 */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2.5 text-center">
+                      <div className="text-[10px] text-red-400 font-semibold mb-1">🔴 大（合计）</div>
+                      <div className="text-red-300 font-bold text-base">{fmt(bigTotal)}</div>
+                      <div className="text-red-500/60 text-[10px] mt-0.5">{pct(bigTotal)}%</div>
+                    </div>
+                    <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 px-3 py-2.5 text-center">
+                      <div className="text-[10px] text-sky-400 font-semibold mb-1">🔵 小（合计）</div>
+                      <div className="text-sky-300 font-bold text-base">{fmt(smallTotal)}</div>
+                      <div className="text-sky-500/60 text-[10px] mt-0.5">{pct(smallTotal)}%</div>
+                    </div>
+                  </div>
+                  {/* 进度条 */}
+                  {grandTotal > 0 && (
+                    <div className="h-1.5 rounded-full bg-sky-500/30 overflow-hidden">
+                      <div className="h-full rounded-full bg-red-500/70 transition-all duration-300" style={{ width: `${pct(bigTotal)}%` }} />
+                    </div>
+                  )}
+                  {/* 细分 */}
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {(["大单", "大双", "大", "小单", "小双", "小"] as const).map(d => {
+                      const isBig = d.startsWith("大");
+                      return (
+                        <div key={d} className={`rounded-lg border px-2 py-1.5 text-center ${isBig ? "border-red-500/20 bg-red-500/5" : "border-sky-500/20 bg-sky-500/5"}`}>
+                          <div className={`text-[10px] font-semibold mb-0.5 ${isBig ? "text-red-400" : "text-sky-400"}`}>{d}</div>
+                          <div className={`font-bold text-sm ${isBig ? "text-red-300" : "text-sky-300"}`}>{fmt(totals[d])}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* 下注列表 */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
               <div className="px-4 py-3 border-b border-[#252a3d] flex items-center justify-between">
