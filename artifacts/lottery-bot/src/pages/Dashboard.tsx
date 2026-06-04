@@ -264,8 +264,9 @@ function SettingsDrawer({ status, onClose, onSave }: {
   onClose: () => void;
   onSave: (cfg: Record<string, unknown>) => Promise<void>;
 }) {
-  const DEFAULT_LEVELS = [100, 200, 400, 800, 1600, 3200];
-  const initLevels = status.amountLevels?.length === 6 ? status.amountLevels : DEFAULT_LEVELS;
+  const DEFAULT_LEVELS = [100, 200, 300, 500, 800, 1200, 1800, 2700, 4000, 6000, 9000, 13000, 19000, 28000, 40000, 58000, 84000, 120000, 175000, 250000, 360000, 520000, 750000, 1000000];
+  const serverLevels = status.amountLevels ?? [];
+  const initLevels = Array.from({ length: 24 }, (_, i) => serverLevels[i] ?? DEFAULT_LEVELS[i] ?? 100);
 
   const [betAmount, setBetAmount] = useState(String(status.betAmount ?? 100));
   const [strategy, setStrategy] = useState(status.strategy ?? "normal");
@@ -501,8 +502,8 @@ function SettingsDrawer({ status, onClose, onSave }: {
           <div className={sectionCls}>
             <h4 className="text-xs text-slate-500 font-medium uppercase tracking-wider mb-2">金额策略</h4>
             <div>
-              <label className={labelCls}>自定义金额（6层，输负加注）</label>
-              <div className="grid grid-cols-3 gap-2">
+              <label className={labelCls}>自定义金额 — 24层追号（输→进下层，中→回第一层）</label>
+              <div className="grid grid-cols-4 gap-x-2 gap-y-1.5">
                 {levels.map((v, i) => (
                   <div key={i}>
                     <label className="block text-[10px] text-slate-500 mb-0.5">第{i + 1}层</label>

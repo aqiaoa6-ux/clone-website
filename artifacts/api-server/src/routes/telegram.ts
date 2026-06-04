@@ -341,7 +341,7 @@ const DEFAULT_CFG: BetCfg = {
   stopLoss: 5000,
   targetProfit: 3000,
   cooldownSeconds: 0,
-  amountLevels: [100, 200, 400, 800, 1600, 3200],
+  amountLevels: [100, 200, 300, 500, 800, 1200, 1800, 2700, 4000, 6000, 9000, 13000, 19000, 28000, 40000, 58000, 84000, 120000, 175000, 250000, 360000, 520000, 750000, 1000000],
   stepBackOnWin: true,
   betOptions: ["big", "small"],
   algorithms: ["ai_trend"],
@@ -1041,8 +1041,8 @@ function computeNextBet(session: TgSession, won: boolean): number {
   if (amountLevels.length > 1) {
     let lvl = session.currentLevel;
     lvl = won
-      ? (stepBackOnWin ? 0 : lvl)
-      : (lvl >= amountLevels.length - 1 ? 0 : lvl + 1);
+      ? (stepBackOnWin ? 0 : lvl)                          // 中 → 回第一层
+      : (lvl >= amountLevels.length - 1 ? lvl : lvl + 1); // 输 → 进下一层，已到顶则停留
     session.currentLevel = lvl;
     return amountLevels[lvl]!;
   }
