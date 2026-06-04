@@ -212,6 +212,22 @@ export default function AdminPage() {
     dirs: Record<string, { kk: number; usdt: number; cny: number }>;
   };
   const [hashHistory, setHashHistory] = useState<PeriodRecord[]>([]);
+  const mergeHistory = (prev: PeriodRecord[], incoming: PeriodRecord[]): PeriodRecord[] => {
+    if (!incoming.length) return prev;
+    const map = new Map(prev.map(r => [r.term, r]));
+    for (const r of incoming) {
+      const ex = map.get(r.term);
+      if (!ex) { map.set(r.term, r); continue; }
+      const hasBets = (d: PeriodRecord) => Object.values(d.dirs).some(v => v.kk + v.usdt + v.cny > 0);
+      map.set(r.term, {
+        ...ex,
+        result: r.result ?? ex.result,
+        closedAt: r.closedAt || ex.closedAt,
+        dirs: hasBets(r) ? r.dirs : ex.dirs,
+      });
+    }
+    return Array.from(map.values()).sort((a, b) => (b.term ?? 0) - (a.term ?? 0)).slice(0, 30);
+  };
   const hashSseRef = useRef<EventSource | null>(null);
   const betBufferRef = useRef<GroupBetEntry[]>([]);
   const resetPendingRef = useRef<{ bets: GroupBetEntry[]; period: string | null } | null>(null);
@@ -372,7 +388,7 @@ export default function AdminPage() {
     void fetch("/api/admin/hash-period-history", { credentials: "include" })
       .then(r => r.ok ? r.json() : null)
       .then((d: { history?: PeriodRecord[] } | null) => {
-        if (d?.history && d.history.length > 0) setHashHistory(d.history);
+        if (d?.history && d.history.length > 0) setHashHistory(prev => mergeHistory(prev, d.history!));
       }).catch(() => { /* ignore */ });
     const es = new EventSource("/api/admin/hash-group-bets/events", { withCredentials: true });
     hashSseRef.current = es;
@@ -387,7 +403,7 @@ export default function AdminPage() {
           setHashPeriod((ev.period as string | null) ?? null);
           if (ev.term) setHashTerm(ev.term as number);
           if (ev.lastBetAt) setHashLastBetAt(ev.lastBetAt as number);
-          if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(ev.history as PeriodRecord[]);
+          if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(prev => mergeHistory(prev, ev.history as PeriodRecord[]));
         } else if (ev.type === "bets:batch") {
           const bets = (ev.bets as GroupBetEntry[]) ?? [];
           if (ev.period) latestPeriodRef.current = ev.period as string;
@@ -404,7 +420,7 @@ export default function AdminPage() {
               if (d?.bets) { setHashBets(d.bets); setHashPeriod(d.period ?? null); }
             }).catch(() => { /* ignore */ });
         } else if (ev.type === "history:update") {
-          if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(ev.history as PeriodRecord[]);
+          if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(prev => mergeHistory(prev, ev.history as PeriodRecord[]));
         } else if (ev.type === "bet:new") {
           betBufferRef.current.push(ev.bet as GroupBetEntry);
         } else if (ev.type === "bets:reset") {
