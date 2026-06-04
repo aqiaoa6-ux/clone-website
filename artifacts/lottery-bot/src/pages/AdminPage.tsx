@@ -1870,20 +1870,35 @@ export default function AdminPage() {
                 </span>
               </div>
               {(() => {
+                const KK_RATE = 100_000; // KK 100,000 = 1 USDT
                 const ct = hashBets.reduce((acc, b) => { acc[b.currency] += b.amount; return acc; }, { kk: 0, usdt: 0, cny: 0 });
                 const colors: Record<string, string> = { kk: "border-yellow-500/40 bg-yellow-500/8", usdt: "border-emerald-500/40 bg-emerald-500/8", cny: "border-blue-500/40 bg-blue-500/8" };
                 const textColors: Record<string, string> = { kk: "text-yellow-400", usdt: "text-emerald-400", cny: "text-blue-400" };
+                const kkUsdt = ct.kk / KK_RATE;
                 return (
-                  <div className="grid grid-cols-3 gap-2">
-                    {(["kk", "usdt", "cny"] as const).map(cur => (
-                      <div key={cur} className={`rounded-xl border px-3 py-2.5 text-center ${colors[cur]}`}>
-                        <div className={`text-xs font-semibold uppercase tracking-wider mb-1 ${textColors[cur]}`}>{cur}</div>
-                        <div className="text-white font-bold text-base">
-                          {ct[cur] > 0 ? ct[cur].toLocaleString("zh-CN", { maximumFractionDigits: 2 }) : "—"}
+                  <>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(["kk", "usdt", "cny"] as const).map(cur => (
+                        <div key={cur} className={`rounded-xl border px-3 py-2.5 text-center ${colors[cur]}`}>
+                          <div className={`text-xs font-semibold uppercase tracking-wider mb-1 ${textColors[cur]}`}>{cur === "kk" ? "KK" : cur.toUpperCase()}</div>
+                          <div className="text-white font-bold text-base">
+                            {ct[cur] > 0 ? ct[cur].toLocaleString("zh-CN", { maximumFractionDigits: 2 }) : "—"}
+                          </div>
                         </div>
+                      ))}
+                    </div>
+                    {/* KK 闪兑折合 USDT */}
+                    {ct.kk > 0 && (
+                      <div className="flex items-center justify-between px-3 py-2 rounded-xl bg-yellow-500/5 border border-yellow-500/20 text-xs mt-1">
+                        <span className="text-yellow-400/70">⚡ KK 闪兑折合</span>
+                        <span className="text-white font-mono">
+                          {ct.kk.toLocaleString("zh-CN", { maximumFractionDigits: 0 })} KK
+                          <span className="text-slate-500 mx-1">÷ 100,000 =</span>
+                          <span className="text-emerald-400 font-bold">{kkUsdt.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} USDT</span>
+                        </span>
                       </div>
-                    ))}
-                  </div>
+                    )}
+                  </>
                 );
               })()}
             </div>
@@ -1912,6 +1927,7 @@ export default function AdminPage() {
                 usdt: { label: "USDT", cls: "text-emerald-400" },
                 cny:  { label: "CNY",  cls: "text-blue-400" },
               };
+              const KK_RATE = 100_000;
               const CurLines = ({ totCur }: { totCur: { kk: number; usdt: number; cny: number } }) => (
                 <div className="space-y-0.5 mt-1">
                   {(["kk", "usdt", "cny"] as Cur[]).map(c => totCur[c] > 0 ? (
@@ -1920,6 +1936,14 @@ export default function AdminPage() {
                       <span className="text-white font-mono">{fmt(totCur[c])}</span>
                     </div>
                   ) : null)}
+                  {totCur.kk > 0 && (
+                    <div className="flex items-center justify-between gap-1 text-[10px] border-t border-yellow-500/10 pt-0.5 mt-0.5">
+                      <span className="text-yellow-500/60">⚡≈</span>
+                      <span className="text-emerald-400 font-mono font-semibold">
+                        {(totCur.kk / KK_RATE).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} U
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
               const bigCur = { kk: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].kk, 0), usdt: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].usdt, 0), cny: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].cny, 0) };
