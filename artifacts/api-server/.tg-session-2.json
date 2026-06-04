@@ -1,12 +1,12 @@
 {
   "sessionString": "1BQANOTEuMTA4LjU2LjE3NAG7OeylNuWKZ5yG7cft+m5qk+dDAj/lReV9JhBHWSOhkv8ndl36P54BEjI9IGfAkfD2cSqsN1blC2fpoDXT/RnG4DkAWJIAF4jcoflfgOzOF+pHiul+NQVNZE40lqHUnn4svrkFANuZI2D2IS+gQmwbFeSGIfL6OC/enC7cZVnXdXfUrIBW0HqpAo1FJqna2JglAoB7wvXmQYubhnOs/HcEhZgNnV4H5DjHKHO6/l0zXtQLLBeTRRk9VKf6mENL4pMWQnu0LpTWGVF2VlBiXelf4TvPfLgbjm6QXV7Z2f3sycgUMsjkh0yBA27yb50AoBijRe3A65qCipf5gRcqytbuIQ==",
   "phone": "855 96 786 6238",
-  "balance": 1000000,
+  "balance": 159748.823,
   "todayPnl": 0,
   "todayResetAt": 1780531200000,
   "sessionPnl": 0,
   "kkpayUsername": "kkpay",
-  "balanceSource": "manual",
+  "balanceSource": "kkpay",
   "watchGroupId": "-1002400383803",
   "cfg": {
     "autoBet": false,

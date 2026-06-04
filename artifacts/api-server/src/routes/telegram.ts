@@ -5079,11 +5079,12 @@ router.post("/admin/canada-monitor-groups/remove", requireAdminSecret, (req, res
   res.json({ ok: true });
 });
 
-// GET /admin/tg-groups — 列出所有已连接账号的群组列表（用于选群）
-router.get("/admin/tg-groups", requireAdminSecret, (_req, res) => {
+// GET /admin/tg-groups — 仅返回当前管理员自己账号的群组列表（用于选群）
+router.get("/admin/tg-groups", requireAdminSecret, (req, res) => {
+  const uid = req.user!.userId;
+  const session = tgSessions.get(uid);
   const result: Array<{ userId: number; username: string; groups: { id: string; title: string; type: string }[] }> = [];
-  for (const [uid, session] of tgSessions.entries()) {
-    if (!session.me) continue;
+  if (session?.me) {
     result.push({
       userId: uid,
       username: session.me.username ?? session.me.firstName ?? String(uid),
