@@ -135,7 +135,8 @@ type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "sm
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
-  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_kill" | "hash_kill_plus";
+  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_kill" | "hash_kill_plus"
+  | "canada_kill" | "canada_kill_plus";
 
 interface BetCfg {
   autoBet: boolean;
@@ -2290,6 +2291,111 @@ function decideKillGroup(session: TgSession): KillGroupOption {
 }
 
 
+// ─── 加拿大杀组 V2 — 六维近热杀法 ────────────────────────────────────────────
+/**
+ * 核心思路（与旧版完全相反）：
+ *  旧版：杀遗漏最久的冷组  → 错误，冷组最可能补出
+ *  新版：杀近期出现最多的热组 → 热组下期降温概率高
+ *
+ * 六个维度：
+ *  D1 近热得分       近3/5/10期频率越高 → 杀分越高（短窗权重更大）
+ *  D2 动量反向       最近1期刚出的组 → 轻加杀分；≥2连出 → 绝对保护（顺势）
+ *  D3 极度欠出保护   ≥10期未出 -20；≥8期 -10；≥6期 -4
+ *  D4 大/小维度感知  近10期某侧≥7次 → 在该侧选最热的组来杀
+ *  D5 单/双维度感知  近10期某侧≥7次 → 在该侧选最热的组来杀
+ *  D6 震荡形态加速   近6期高频交替(≥75%)且无连出 → 刚出的组额外+2杀分
+ */
+function canadaDecideKillGroupV2(session: TgSession): KillGroupOption {
+  const raw = [...lotteryHistoryCache, ...session.recentResults].slice(-50);
+  const history = raw.filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
+
+  if (history.length < 3) return KILL_GROUP_ALL[Math.floor(Math.random() * 4)]!;
+
+  const n = history.length;
+  const scores: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
+
+  // 预计算遗漏 & 当前连出（history末尾=最新）
+  const latest = history[n - 1]!;
+  let streak = 0;
+  for (let i = n - 1; i >= 0 && history[i] === latest; i--) streak++;
+
+  const absence: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
+  for (const opt of KILL_GROUP_ALL) {
+    let ab = 0;
+    for (let i = n - 1; i >= 0 && history[i] !== opt; i--) ab++;
+    absence[opt] = ab;
+  }
+
+  // ── D1: 近热得分（短窗频率越高 → 杀分越高）────────────────────────────────
+  for (const { size, w } of [{ size: 3, w: 5.0 }, { size: 5, w: 3.0 }, { size: 10, w: 1.5 }]) {
+    const slice = history.slice(-Math.min(size, n));
+    for (const opt of KILL_GROUP_ALL) {
+      const freq = slice.filter(r => r === opt).length / slice.length;
+      scores[opt] += (freq - 0.25) * w * 4.0; // 高于均值=热=加杀分
+    }
+  }
+
+  // ── D2: 动量反向 & 连出强保护 ──────────────────────────────────────────────
+  if (streak >= 2) {
+    scores[latest] -= 999; // 连出≥2：绝对不杀（顺势保护）
+  } else if (streak === 1) {
+    scores[latest] += 1.5; // 刚出1次：热，轻加杀分
+  }
+
+  // ── D3: 极度欠出保护（即将补出，不可杀）───────────────────────────────────
+  for (const opt of KILL_GROUP_ALL) {
+    const ab = absence[opt];
+    if (ab >= 10)     scores[opt] -= 20;
+    else if (ab >= 8) scores[opt] -= 10;
+    else if (ab >= 6) scores[opt] -= 4;
+  }
+
+  // ── D4: 大/小维度感知（在强势侧选最热的来杀）──────────────────────────────
+  const h10 = history.slice(-Math.min(10, n));
+  const bigCnt10 = h10.filter(r => r.startsWith("大")).length;
+  const smlCnt10 = h10.length - bigCnt10;
+  if (bigCnt10 >= 7) {
+    const hotter = scores["大单"] >= scores["大双"] ? "大单" : "大双";
+    scores[hotter] += 2.0;
+  } else if (smlCnt10 >= 7) {
+    const hotter = scores["小单"] >= scores["小双"] ? "小单" : "小双";
+    scores[hotter] += 2.0;
+  }
+
+  // ── D5: 单/双维度感知 ──────────────────────────────────────────────────────
+  const oddCnt10 = h10.filter(r => r.includes("单")).length;
+  const evnCnt10 = h10.length - oddCnt10;
+  if (oddCnt10 >= 7) {
+    const hotter = scores["大单"] >= scores["小单"] ? "大单" : "小单";
+    scores[hotter] += 1.5;
+  } else if (evnCnt10 >= 7) {
+    const hotter = scores["大双"] >= scores["小双"] ? "大双" : "小双";
+    scores[hotter] += 1.5;
+  }
+
+  // ── D6: 震荡形态加速 ───────────────────────────────────────────────────────
+  const tail6 = history.slice(-Math.min(6, n));
+  if (tail6.length >= 4 && streak < 2) {
+    let altCount = 0;
+    for (let i = 0; i < tail6.length - 1; i++) {
+      if (tail6[i] !== tail6[i + 1]) altCount++;
+    }
+    if (altCount / (tail6.length - 1) >= 0.75) {
+      scores[latest] += 2.0; // 震荡市：刚出的更热，更应被杀
+    }
+  }
+
+  const killed = (Object.entries(scores) as [KillGroupOption, number][])
+    .sort((a, b) => b[1] - a[1])[0]![0];
+
+  logger.info({
+    killed, latest, streak, absence,
+    scores: Object.fromEntries(Object.entries(scores).map(([k, v]) => [k, Math.round((v as number) * 10) / 10])),
+  }, "[canada-kill-v2] 近热杀组决策");
+
+  return killed;
+}
+
 // ─── 哈希28 杀组专用决策 ─────────────────────────────────────────────────────
 // 使用 session.hashResults（最新优先）进行七维评分，选出最冷组杀掉
 function hashDecideKillGroup(session: TgSession): KillGroupOption {
@@ -2563,6 +2669,39 @@ async function runAutoBet(session: TgSession): Promise<void> {
     session.lastAlgoUsed = bigSmallSession.lastAlgoUsed;
     session.algIndex = bigSmallSession.algIndex;
     await placeAllBets(session, direction);
+    return;
+  }
+
+  // 加拿大六维近热杀组（canada_kill = 有散点保护，canada_kill_plus = 每期必下）
+  const canadaKillAlgo = session.cfg.algorithms.find(a => a === "canada_kill" || a === "canada_kill_plus");
+  if (canadaKillAlgo) {
+    if (canadaKillAlgo === "canada_kill") {
+      // 散点循环检测：近3期全不同 → 跳过本期，等形态聚集
+      const raw3 = [...lotteryHistoryCache, ...session.recentResults].slice(-50)
+        .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
+        .slice(-3);
+      const isScatter = raw3.length === 3 && new Set(raw3).size === 3;
+      if (isScatter) {
+        session.betPlacedThisCycle = true;
+        const reason = `散点循环 ${raw3.join("→")}，等待形态聚集`;
+        const skipRec: BetRecord = {
+          id: `canada-kill-skip-${Date.now()}`,
+          groupId: session.watchGroupId ?? "",
+          groupTitle: "（跳过本期）",
+          messageText: reason, betContent: `散点·${raw3.join("→")}`, amount: 0,
+          timestamp: Date.now(), status: "skipped", algoId: "canada_kill",
+        };
+        session.betLog.unshift(skipRec);
+        if (session.betLog.length > 200) session.betLog.length = 200;
+        pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
+        logger.info({ raw3 }, `[canada-kill] ${reason}`);
+        return;
+      }
+    }
+    const killed = canadaDecideKillGroupV2(session);
+    session.lastAlgoUsed = canadaKillAlgo;
+    pushEvent(session, "bet:kill", { killed, algo: canadaKillAlgo });
+    await placeKillGroupBets(session, killed);
     return;
   }
 
