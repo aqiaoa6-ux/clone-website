@@ -3069,6 +3069,13 @@ function settleHashBets(session: TgSession, result: HashResult): void {
 async function runHashAutoBet(session: TgSession): Promise<void> {
   if (!session.cfg.autoBet || !session.watchGroupId) return;
   if (session.betPlacedThisCycle) return;
+  // 仅追号模式：只发追号注，不发主注
+  if (session.cfg.chaseOnly) {
+    if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
+      await placeChaseOnly(session);
+    }
+    return;
+  }
   const risk = checkRisk(session);
   if (!risk.ok) return;
 
