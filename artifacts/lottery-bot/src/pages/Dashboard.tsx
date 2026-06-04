@@ -296,6 +296,13 @@ function SettingsDrawer({ status, onClose, onSave }: {
   );
   const [enableChase, setEnableChase] = useState(status.enableChase ?? false);
   const [showChase, setShowChase] = useState(status.enableChase ?? false);
+  const CHASE_DEFAULT_LEVELS = [100, 200, 300, 500, 800, 1200, 1800, 2700, 4000, 6000, 9000, 13000, 19000, 28000, 40000, 58000, 84000, 120000, 175000, 250000, 360000, 520000, 750000, 1000000];
+  const serverChaseLevels = (status as unknown as { chaseAmountLevels?: number[] }).chaseAmountLevels ?? [];
+  const [chaseDoubleOnLoss, setChaseDoubleOnLoss] = useState<boolean>(!!(status as unknown as { chaseDoubleOnLoss?: boolean }).chaseDoubleOnLoss);
+  const [chaseLevels, setChaseLevels] = useState<string[]>(
+    Array.from({ length: 24 }, (_, i) => String(serverChaseLevels[i] ?? CHASE_DEFAULT_LEVELS[i] ?? 100))
+  );
+  const [showChaseLevels, setShowChaseLevels] = useState(false);
   const [saving, setSaving] = useState(false);
 
 
@@ -328,6 +335,8 @@ function SettingsDrawer({ status, onClose, onSave }: {
           .map(c => ({ num: Number(c.num), amount: Number(c.amount) }))
           .filter(c => c.num >= 0 && c.num <= 27 && c.amount > 0),
         enableChase,
+        chaseDoubleOnLoss,
+        chaseAmountLevels: chaseLevels.map(Number),
         gameMode,
         kuaisanBetOptions: kuaisanOpts,
         hashBetOptions: hashOpts,
@@ -676,6 +685,56 @@ function SettingsDrawer({ status, onClose, onSave }: {
                       <span>每期追注 {chaseNumbers.filter(c => c.amount !== "").reduce((s, c) => s + (Number(c.amount) || 0), 0)} 元</span>
                     </div>
                   )}
+
+                  {/* ── 追号倍投 ── */}
+                  <div className={`mt-3 rounded-xl border ${chaseDoubleOnLoss ? "border-orange-500/50 bg-orange-500/5" : "border-[#252a3d]"} overflow-hidden`}>
+                    {/* 倍投开关行 */}
+                    <div className="flex items-center justify-between px-3 py-2">
+                      <div>
+                        <p className={`text-xs font-semibold ${chaseDoubleOnLoss ? "text-orange-300" : "text-slate-400"}`}>不中倍投（24层）</p>
+                        <p className="text-[10px] text-slate-600 mt-0.5">不中→进下层金额，中了→回第一层</p>
+                      </div>
+                      <button
+                        onClick={() => setChaseDoubleOnLoss(v => !v)}
+                        className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${chaseDoubleOnLoss ? "bg-orange-500" : "bg-[#252a3d]"}`}
+                      >
+                        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${chaseDoubleOnLoss ? "left-5.5" : "left-0.5"}`} />
+                      </button>
+                    </div>
+
+                    {/* 24层金额配置（可折叠） */}
+                    {chaseDoubleOnLoss && (
+                      <div className="border-t border-[#252a3d] px-3 pt-2 pb-3">
+                        <button
+                          type="button"
+                          onClick={() => setShowChaseLevels(v => !v)}
+                          className="w-full flex items-center justify-between text-[11px] text-slate-500 hover:text-slate-300 transition mb-2"
+                        >
+                          <span>24层金额配置</span>
+                          <span className={`transition-transform ${showChaseLevels ? "rotate-180" : ""}`}>▼</span>
+                        </button>
+                        {showChaseLevels && (
+                          <div className="grid grid-cols-4 gap-x-2 gap-y-1.5">
+                            {chaseLevels.map((v, i) => (
+                              <div key={i}>
+                                <label className="block text-[10px] text-slate-600 mb-0.5">第{i + 1}层</label>
+                                <input
+                                  type="number" value={v} min="1"
+                                  onChange={e => setChaseLevels(prev => prev.map((x, idx) => idx === i ? e.target.value : x))}
+                                  className={`w-full rounded-lg px-2 py-1.5 text-white text-xs focus:outline-none border bg-[#1a1610] border-orange-500/30 focus:border-orange-400`}
+                                />
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {!showChaseLevels && (
+                          <p className="text-[10px] text-slate-600">
+                            第1层 {chaseLevels[0]} → 第24层 {chaseLevels[23]} 元
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

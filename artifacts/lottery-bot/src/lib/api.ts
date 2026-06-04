@@ -150,6 +150,8 @@ export interface BetCfg {
   odds: number;
   chaseNumbers: Array<{ num: number; amount: number }>;
   enableChase: boolean;
+  chaseDoubleOnLoss?: boolean;
+  chaseAmountLevels?: number[];
   gameMode?: string;
   kuaisanBetOptions?: string[];
 }
@@ -185,6 +187,9 @@ export interface TgStatus {
   odds?: number;
   chaseNumbers?: Array<{ num: number; amount: number }>;
   enableChase?: boolean;
+  chaseDoubleOnLoss?: boolean;
+  chaseAmountLevels?: number[];
+  chaseLevels?: Record<string, number>;
   consecutiveLosses?: number;
   sessionPnl?: number;
   currentBet?: number;

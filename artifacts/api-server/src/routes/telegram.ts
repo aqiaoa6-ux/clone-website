@@ -157,6 +157,8 @@ interface BetCfg {
   oddsSmallEven: number;
   chaseNumbers: Array<{ num: number; amount: number }>;
   enableChase: boolean;
+  chaseDoubleOnLoss: boolean;           // 追号不中倍投开关
+  chaseAmountLevels: number[];           // 追号倍投24层金额（全号码共用层次表）
   dualGroupMode: boolean;
   killGroupMode: boolean;
   gameMode: "lottery" | "kuaisan" | "hash";
@@ -284,6 +286,8 @@ interface TgSession {
   adaptiveSwitchKillMode: boolean; // false = 大小模式, true = 杀组模式
   // per-algorithm win/loss stats (accumulated for the session lifetime)
   algoStats: Record<string, { wins: number; losses: number; pnl: number }>;
+  // 追号倍投层数：key = 号码字符串，value = 当前层索引（0-based）
+  chaseLevels: Record<string, number>;
   // kuaisan state
   diceBuffer: { value: number; time: number }[];
   kuaisanPhase: "idle" | "betting" | "closed";
@@ -353,6 +357,8 @@ const DEFAULT_CFG: BetCfg = {
   oddsSmallEven: 1.98,
   chaseNumbers: [],
   enableChase: false,
+  chaseDoubleOnLoss: false,
+  chaseAmountLevels: [100, 200, 300, 500, 800, 1200, 1800, 2700, 4000, 6000, 9000, 13000, 19000, 28000, 40000, 58000, 84000, 120000, 175000, 250000, 360000, 520000, 750000, 1000000],
   dualGroupMode: false,
   killGroupMode: false,
   gameMode: "lottery",
@@ -869,6 +875,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     algoFlipCooldown: 0,
     adaptiveSwitchKillMode: false,
     algoStats: {},
+    chaseLevels: {},
     recentResults: [],
     chatLog: [],
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
@@ -2003,6 +2010,12 @@ function decideSteady(session: TgSession): string | null {
  * 只发追号部分（主注被风控屏蔽时使用）。
  * 格式示例: "0/100  27/100"
  */
+function chaseEffectiveAmount(session: TgSession, numKey: string, baseAmount: number): number {
+  if (!session.cfg.chaseDoubleOnLoss || session.cfg.chaseAmountLevels.length < 2) return baseAmount;
+  const lvl = session.chaseLevels[numKey] ?? 0;
+  return session.cfg.chaseAmountLevels[Math.min(lvl, session.cfg.chaseAmountLevels.length - 1)]!;
+}
+
 async function placeChaseOnly(session: TgSession): Promise<void> {
   if (!session.cfg.enableChase || session.chasePlacedThisCycle) return;
   const chaseEntries = session.cfg.chaseNumbers.filter(c => c.amount > 0);
@@ -2010,7 +2023,7 @@ async function placeChaseOnly(session: TgSession): Promise<void> {
 
   const targetId = session.watchGroupId!;
   const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
-  const message = chaseEntries.map(c => `${c.num}/${c.amount}`).join("  ");
+  const message = chaseEntries.map(c => `${c.num}/${chaseEffectiveAmount(session, String(c.num), c.amount)}`).join("  ");
   const now = Date.now();
   let succeeded = false;
   let failReason: string | undefined;
@@ -2026,9 +2039,10 @@ async function placeChaseOnly(session: TgSession): Promise<void> {
   session.chasePlacedThisCycle = true;
   const status = succeeded ? "sent" : "failed";
   for (const { num, amount } of chaseEntries) {
+    const effAmt = chaseEffectiveAmount(session, String(num), amount);
     const rec: BetRecord = {
       id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
-      messageText: message, betContent: String(num), amount,
+      messageText: message, betContent: String(num), amount: effAmt,
       timestamp: now, status, isChase: true,
       ...(failReason ? { failReason } : {}),
     };
@@ -2076,7 +2090,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     ? dualItems.map(opt => `${opt} ${mainAmount}`)
     : [`${direction} ${mainAmount}`];
   const parts: string[] = [
-    ...chaseEntries.map(c => `${c.num}/${c.amount}`),
+    ...chaseEntries.map(c => `${c.num}/${chaseEffectiveAmount(session, String(c.num), c.amount)}`),
     ...betParts,
   ];
   const message = parts.join("  ");
@@ -2125,9 +2139,10 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
 
   // Log individual chase records
   for (const { num, amount } of chaseEntries) {
+    const effAmt = chaseEffectiveAmount(session, String(num), amount);
     const rec: BetRecord = {
       id: `chase-${num}-${now}`, groupId: targetId, groupTitle,
-      messageText: message, betContent: String(num), amount,
+      messageText: message, betContent: String(num), amount: effAmt,
       timestamp: now, status, isChase: true,
       ...(failReason ? { failReason } : {}),
     };
@@ -2601,6 +2616,13 @@ async function pollLottery(session: TgSession): Promise<void> {
         if (won) chaseWon = true;
         const winPnl = Math.round(cb.amount * (session.cfg.odds - 1) * 100) / 100;
         settleBet(session, { won, pnl: won ? winPnl : -cb.amount, result: latest.r3, betId: cb.id, period: latest.term, isChase: true });
+        // 追号倍投层数更新：中→回第一层；不中→进下一层（停留在最后层）
+        if (session.cfg.chaseDoubleOnLoss && session.cfg.chaseAmountLevels.length > 1) {
+          const key = cb.betContent;
+          const curLvl = session.chaseLevels[key] ?? 0;
+          session.chaseLevels[key] = won ? 0 : Math.min(curLvl + 1, session.cfg.chaseAmountLevels.length - 1);
+          pushEvent(session, "chase:level_update", { num: targetNum, level: session.chaseLevels[key], won });
+        }
       }
       // 追号中奖后自动停止追号
       if (chaseWon && session.cfg.enableChase) {
@@ -3818,6 +3840,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       currentLevel: 0, algIndex: 0,
       betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "", lastAIBet: null, lastRawAlgoDir: null, algoFlipCooldown: 0,
       algoStats: {},
+      chaseLevels: {},
       recentResults: [], chatLog: [],
       globalHandler: null, globalHandlerBuilder: null,
       balance: 1000000,
@@ -4025,6 +4048,8 @@ router.post("/tg/config", requireCard, (req, res) => {
     oddsSmallEven: body.oddsSmallEven ?? prev.oddsSmallEven,
     chaseNumbers: body.chaseNumbers ?? prev.chaseNumbers,
     enableChase: body.enableChase ?? prev.enableChase,
+    chaseDoubleOnLoss: (body as Partial<BetCfg>).chaseDoubleOnLoss ?? prev.chaseDoubleOnLoss,
+    chaseAmountLevels: (body as Partial<BetCfg>).chaseAmountLevels ?? prev.chaseAmountLevels,
     dualGroupMode: body.dualGroupMode ?? prev.dualGroupMode,
     killGroupMode: body.killGroupMode ?? prev.killGroupMode,
     gameMode: (body.gameMode as BetCfg["gameMode"]) ?? prev.gameMode,
