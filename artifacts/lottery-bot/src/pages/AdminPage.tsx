@@ -201,9 +201,10 @@ export default function AdminPage() {
 
   // ── hashmon tab ──
   const [hashBets, setHashBets] = useState<GroupBetEntry[]>([]);
-  const [hashTotals, setHashTotals] = useState<{ kk: number; usdt: number; cny: number }>({ kk: 0, usdt: 0, cny: 0 });
   const [hashPeriod, setHashPeriod] = useState<string | null>(null);
   const hashSseRef = useRef<EventSource | null>(null);
+  const betBufferRef = useRef<GroupBetEntry[]>([]);
+  const resetPendingRef = useRef<{ bets: GroupBetEntry[]; period: string | null } | null>(null);
   // 加拿大监控 — 多群组管理
   type CanadaMonGroup = { groupId: string; groupTitle: string | undefined; active: boolean };
   const [canadaGroups, setCanadaGroups] = useState<CanadaMonGroup[]>([]);
@@ -344,6 +345,8 @@ export default function AdminPage() {
       if (hashSseRef.current) { hashSseRef.current.close(); hashSseRef.current = null; }
       return;
     }
+    betBufferRef.current = [];
+    resetPendingRef.current = null;
     const es = new EventSource("/api/admin/hash-group-bets/events", { withCredentials: true });
     hashSseRef.current = es;
     es.onmessage = (e) => {
@@ -351,23 +354,38 @@ export default function AdminPage() {
       try {
         const ev = JSON.parse(e.data as string) as Record<string, unknown>;
         if (ev.type === "init") {
+          betBufferRef.current = [];
+          resetPendingRef.current = null;
           setHashBets((ev.bets as GroupBetEntry[]) ?? []);
           setHashPeriod((ev.period as string | null) ?? null);
-          const t = (ev.totals as { kk: number; usdt: number; cny: number }) ?? { kk: 0, usdt: 0, cny: 0 };
-          setHashTotals(t);
         } else if (ev.type === "bets:reset") {
-          setHashBets([]);
-          setHashPeriod((ev.period as string | null) ?? null);
-          setHashTotals({ kk: 0, usdt: 0, cny: 0 });
+          // 新期 — 丢弃缓冲，在下次 flush 时统一重置
+          betBufferRef.current = [];
+          resetPendingRef.current = { bets: [], period: (ev.period as string | null) ?? null };
         } else if (ev.type === "bet:new") {
           const bet = ev.bet as GroupBetEntry;
-          setHashBets(prev => [bet, ...prev].slice(0, 500));
-          setHashTotals(prev => ({ ...prev, [bet.currency]: prev[bet.currency] + bet.amount }));
+          // 仅缓冲，统一批量 flush，不触发每条独立 re-render
+          betBufferRef.current.push(bet);
           if (bet.period) setHashPeriod(bet.period);
         }
       } catch { /* ignore */ }
     };
-    return () => { es.close(); hashSseRef.current = null; };
+    // 每 500ms flush 一次缓冲，将多群多条消息合并为一次 setState
+    const flushId = setInterval(() => {
+      const reset = resetPendingRef.current;
+      const buf = betBufferRef.current;
+      if (reset === null && buf.length === 0) return;
+      betBufferRef.current = [];
+      resetPendingRef.current = null;
+      if (reset !== null) {
+        // 新期重置 + 本轮所有新注（最新在前）
+        setHashBets([...buf].reverse().slice(0, 500));
+        setHashPeriod(reset.period);
+      } else {
+        setHashBets(prev => [...[...buf].reverse(), ...prev].slice(0, 500));
+      }
+    }, 500);
+    return () => { clearInterval(flushId); es.close(); hashSseRef.current = null; };
   }, [tab, secretVerified]);
 
   // Auto-poll kkpay every 5s while kkpay console is open
@@ -1818,28 +1836,23 @@ export default function AdminPage() {
                   {hashPeriod ? `期号 ${hashPeriod.slice(0, 8)}…` : "等待新期开始…"}
                 </span>
               </div>
-              <div className="grid grid-cols-3 gap-2">
-                {(["kk", "usdt", "cny"] as const).map(cur => {
-                  const colors: Record<string, string> = {
-                    kk: "border-yellow-500/40 bg-yellow-500/8",
-                    usdt: "border-emerald-500/40 bg-emerald-500/8",
-                    cny: "border-blue-500/40 bg-blue-500/8",
-                  };
-                  const textColors: Record<string, string> = {
-                    kk: "text-yellow-400",
-                    usdt: "text-emerald-400",
-                    cny: "text-blue-400",
-                  };
-                  return (
-                    <div key={cur} className={`rounded-xl border px-3 py-2.5 text-center ${colors[cur]}`}>
-                      <div className={`text-xs font-semibold uppercase tracking-wider mb-1 ${textColors[cur]}`}>{cur}</div>
-                      <div className="text-white font-bold text-base">
-                        {hashTotals[cur] > 0 ? hashTotals[cur].toLocaleString("zh-CN", { maximumFractionDigits: 2 }) : "—"}
+              {(() => {
+                const ct = hashBets.reduce((acc, b) => { acc[b.currency] += b.amount; return acc; }, { kk: 0, usdt: 0, cny: 0 });
+                const colors: Record<string, string> = { kk: "border-yellow-500/40 bg-yellow-500/8", usdt: "border-emerald-500/40 bg-emerald-500/8", cny: "border-blue-500/40 bg-blue-500/8" };
+                const textColors: Record<string, string> = { kk: "text-yellow-400", usdt: "text-emerald-400", cny: "text-blue-400" };
+                return (
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["kk", "usdt", "cny"] as const).map(cur => (
+                      <div key={cur} className={`rounded-xl border px-3 py-2.5 text-center ${colors[cur]}`}>
+                        <div className={`text-xs font-semibold uppercase tracking-wider mb-1 ${textColors[cur]}`}>{cur}</div>
+                        <div className="text-white font-bold text-base">
+                          {ct[cur] > 0 ? ct[cur].toLocaleString("zh-CN", { maximumFractionDigits: 2 }) : "—"}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* 方向统计 */}
