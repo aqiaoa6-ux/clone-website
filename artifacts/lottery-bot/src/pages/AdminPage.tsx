@@ -1961,15 +1961,15 @@ export default function AdminPage() {
               };
               const KK_RATE = 100_000;
               const CurLines = ({ totCur }: { totCur: { kk: number; usdt: number; cny: number } }) => (
-                <div className="space-y-0.5 mt-1">
+                <div className="space-y-1 mt-1.5">
                   {(["kk", "usdt", "cny"] as Cur[]).map(c => totCur[c] > 0 ? (
-                    <div key={c} className="flex items-center justify-between gap-1 text-[10px]">
+                    <div key={c} className="flex items-center justify-between gap-2 text-sm">
                       <span className={`${curLabel[c].cls} font-semibold`}>{curLabel[c].label}</span>
                       <span className="text-white font-mono">{fmt(totCur[c])}</span>
                     </div>
                   ) : null)}
                   {totCur.kk > 0 && (
-                    <div className="flex items-center justify-between gap-1 text-[10px] border-t border-yellow-500/10 pt-0.5 mt-0.5">
+                    <div className="flex items-center justify-between gap-2 text-xs border-t border-yellow-500/10 pt-1 mt-1">
                       <span className="text-yellow-500/60">⚡≈</span>
                       <span className="text-emerald-400 font-mono font-semibold">
                         {(totCur.kk / KK_RATE).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} U
@@ -1986,13 +1986,13 @@ export default function AdminPage() {
                   {/* 大 vs 小 总览（含币种细分） */}
                   <div className="grid grid-cols-2 gap-2">
                     <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2.5">
-                      <div className="text-[10px] text-red-400 font-semibold text-center">🔴 大（合计）</div>
-                      <div className="text-red-300 font-bold text-base text-center">{pct(bigTotal)}%</div>
+                      <div className="text-xs text-red-400 font-semibold text-center">🔴 大（合计）</div>
+                      <div className="text-red-300 font-bold text-2xl text-center">{pct(bigTotal)}%</div>
                       <CurLines totCur={bigCur} />
                     </div>
                     <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 px-3 py-2.5">
-                      <div className="text-[10px] text-sky-400 font-semibold text-center">🔵 小（合计）</div>
-                      <div className="text-sky-300 font-bold text-base text-center">{pct(smallTotal)}%</div>
+                      <div className="text-xs text-sky-400 font-semibold text-center">🔵 小（合计）</div>
+                      <div className="text-sky-300 font-bold text-2xl text-center">{pct(smallTotal)}%</div>
                       <CurLines totCur={smlCur} />
                     </div>
                   </div>
@@ -2007,10 +2007,10 @@ export default function AdminPage() {
                     {(["大单", "大双", "大", "小单", "小双", "小"] as Dir[]).map(d => {
                       const isBig = d.startsWith("大");
                       return (
-                        <div key={d} className={`rounded-lg border px-2 py-1.5 ${isBig ? "border-red-500/20 bg-red-500/5" : "border-sky-500/20 bg-sky-500/5"}`}>
-                          <div className={`text-[10px] font-semibold text-center mb-1 ${isBig ? "text-red-400" : "text-sky-400"}`}>{d}</div>
+                        <div key={d} className={`rounded-lg border px-2.5 py-2 ${isBig ? "border-red-500/20 bg-red-500/5" : "border-sky-500/20 bg-sky-500/5"}`}>
+                          <div className={`text-sm font-semibold text-center mb-1.5 ${isBig ? "text-red-400" : "text-sky-400"}`}>{d}</div>
                           {(["kk", "usdt", "cny"] as Cur[]).map(c => dt[d][c] > 0 ? (
-                            <div key={c} className="flex items-center justify-between text-[10px]">
+                            <div key={c} className="flex items-center justify-between text-xs">
                               <span className={`${curLabel[c].cls} font-semibold`}>{curLabel[c].label}</span>
                               <span className="text-white font-mono">{fmt(dt[d][c])}</span>
                             </div>
