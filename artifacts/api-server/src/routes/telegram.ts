@@ -3427,12 +3427,22 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
                   snap.dirs[b.direction][b.currency] += b.amount;
                 }
               }
-              // 只在有注单时才记录（避免重复空记录）
-              const hasAny = Object.values(snap.dirs).some(d => d.kk + d.usdt + d.cny > 0);
-              if (hasAny || snap.term) {
-                periodHistory.unshift(snap);
-                if (periodHistory.length > 30) periodHistory.pop();
+              // 优先合并到风盘已自动插入的同期记录，没有再新增
+              const existing = snap.term !== null
+                ? periodHistory.find(r => r.term === snap.term)
+                : undefined;
+              if (existing) {
+                existing.dirs = snap.dirs;          // 用真实注单覆盖空 dirs
+                existing.closedAt = snap.closedAt;
+              } else {
+                const hasAny = Object.values(snap.dirs).some(d => d.kk + d.usdt + d.cny > 0);
+                if (hasAny || snap.term) {
+                  periodHistory.unshift(snap);
+                  periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
+                  if (periodHistory.length > 30) periodHistory.pop();
+                }
               }
+              pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
               canadaBets.length = 0;
               canadaBetPeriod = null;
               canadaLastBetAt = 0;
