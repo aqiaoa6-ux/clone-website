@@ -211,7 +211,20 @@ export default function AdminPage() {
     closedAt: number;
     dirs: Record<string, { kk: number; usdt: number; cny: number }>;
   };
-  const [hashHistory, setHashHistory] = useState<PeriodRecord[]>([]);
+  const SS_KEY = "hashHistory_v1";
+  const [hashHistory, setHashHistoryRaw] = useState<PeriodRecord[]>(() => {
+    try {
+      const s = sessionStorage.getItem(SS_KEY);
+      return s ? (JSON.parse(s) as PeriodRecord[]) : [];
+    } catch { return []; }
+  });
+  const setHashHistory = (updater: PeriodRecord[] | ((prev: PeriodRecord[]) => PeriodRecord[])) => {
+    setHashHistoryRaw(prev => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      try { sessionStorage.setItem(SS_KEY, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
   const mergeHistory = (prev: PeriodRecord[], incoming: PeriodRecord[]): PeriodRecord[] => {
     if (!incoming.length) return prev;
     const map = new Map(prev.map(r => [r.term, r]));
