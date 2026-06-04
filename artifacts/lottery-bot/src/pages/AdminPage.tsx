@@ -370,7 +370,7 @@ export default function AdminPage() {
         }
       } catch { /* ignore */ }
     };
-    // 每 200ms flush 一次缓冲，多群消息合并为一次 setState
+    // 每 1s flush 一次缓冲，多群消息合并为一次 setState，避免频繁跳动
     const flushId = setInterval(() => {
       const reset = resetPendingRef.current;
       const buf = betBufferRef.current;
@@ -394,7 +394,7 @@ export default function AdminPage() {
         setHashPeriod(reset.period);
         // 保留 resetPending，下次 flush 若 buf 有内容则清旧注
       }
-    }, 200);
+    }, 1000);
     return () => { clearInterval(flushId); es.close(); hashSseRef.current = null; };
   }, [tab, secretVerified]);
 
