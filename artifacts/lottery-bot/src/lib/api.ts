@@ -306,6 +306,7 @@ export interface GroupBetEntry {
   direction: string;
   raw: string;
   period: string | null;
+  termContext: number | null;
 }
 
 export interface LotteryData {

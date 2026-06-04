@@ -25,6 +25,7 @@ interface GroupBetEntry {
   direction: string;
   raw: string;
   period: string | null;
+  termContext: number | null; // 该注单属于哪一期（从"开始下注"期号推断）
 }
 const canadaBets: GroupBetEntry[] = [];
 // 仅用于展示页面 header，不参与清空逻辑
@@ -44,8 +45,8 @@ type PeriodRecord = {
 };
 const DIR_KEYS = ["大单", "大双", "大", "小单", "小双", "小"] as const;
 const periodHistory: PeriodRecord[] = [];
-// 待快照期号：整圈轮询完才执行，确保所有群注单都已采集
-let pendingCanadaSnapshotTerm: number | null = null;
+// 待快照期号集合：整圈轮询完才执行，支持追赶时多期同存
+const pendingCanadaSnapshots = new Set<number>();
 
 // 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
 const CANADA_WINDOW_MS = 5 * 60 * 1000;
@@ -120,6 +121,7 @@ function parseCanadaBotConfirm(text: string, senderName: string): GroupBetEntry[
         direction,
         raw: text.slice(0, 200),
         period,
+        termContext: null,
       });
     }
   }
@@ -3392,7 +3394,7 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
       const text = msg.message ?? "";
       if (!text) continue;
 
-      // ── 开始下注消息 → 仅记录新期号，等整圈后再快照 ──
+      // ── 开始下注消息 → 把上期加入待快照集合，更新当前期号 ──
       const isBetStart =
         /期号/.test(text) &&
         (text.includes("开始下注") || text.includes("开始投注") ||
@@ -3400,22 +3402,17 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
       if (isBetStart) {
         const termMatch = /期号[：:]\s*(\d+)/.exec(text);
         const newTerm = termMatch ? parseInt(termMatch[1]!, 10) : null;
-        // 如果还没有待快照期号，把当前期号标记为待快照（整圈结束后执行）
-        if (pendingCanadaSnapshotTerm === null && canadaCurrentBetTerm !== null) {
-          pendingCanadaSnapshotTerm = canadaCurrentBetTerm;
-        }
+        if (canadaCurrentBetTerm !== null) pendingCanadaSnapshots.add(canadaCurrentBetTerm);
         if (newTerm !== null) canadaCurrentBetTerm = newTerm;
         didStop = true;
         continue;
       }
 
-      // ── 停止下注消息 → 仅标记待快照期号，等整圈后再快照 ──
+      // ── 停止下注消息 → 把本期加入待快照集合 ──
       if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
         const stopTermMatch = /期号[：:]\s*(\d+)/.exec(text);
         const stopTerm = stopTermMatch ? parseInt(stopTermMatch[1]!, 10) : currentLotteryTerm;
-        if (pendingCanadaSnapshotTerm === null) {
-          pendingCanadaSnapshotTerm = stopTerm;
-        }
+        if (stopTerm) pendingCanadaSnapshots.add(stopTerm);
         didStop = true;
         continue;
       }
@@ -3426,6 +3423,7 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
         : "";
       const entries = parseCanadaBotConfirm(text, senderName);
       for (const entry of entries) {
+        entry.termContext = canadaCurrentBetTerm; // 标记归属期号
         if (entry.period) canadaBetPeriod = entry.period;
         canadaBets.unshift(entry);
         if (canadaBets.length > 500) canadaBets.pop();
@@ -3454,35 +3452,50 @@ function scheduleCanadaLoop(session: TgSession): void {
       await pollOneCanadaGroup(session, gid);
       await new Promise<void>(r => setTimeout(r, 600)); // 群间间隔
     }
-    // ── 整圈轮询完毕 → 执行待快照（所有群注单都已采集）──
-    if (pendingCanadaSnapshotTerm !== null) {
-      const snapTerm = pendingCanadaSnapshotTerm;
-      pendingCanadaSnapshotTerm = null;
-      if (canadaBets.length > 0) {
-        const snap: PeriodRecord = {
-          term: snapTerm,
-          result: null,
-          closedAt: Date.now(),
-          dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
-        };
-        for (const b of canadaBets) {
-          if (b.direction in snap.dirs) snap.dirs[b.direction][b.currency] += b.amount;
+    // ── 整圈轮询完毕 → 按期号逐一快照（termContext 过滤，不混期）──
+    if (pendingCanadaSnapshots.size > 0) {
+      const terms = [...pendingCanadaSnapshots].sort((a, b) => a - b);
+      pendingCanadaSnapshots.clear();
+      let historyChanged = false;
+      const snappedTerms = new Set<number>();
+      for (const snapTerm of terms) {
+        const betsForTerm = canadaBets.filter(b => b.termContext === snapTerm);
+        if (betsForTerm.length > 0) {
+          const snap: PeriodRecord = {
+            term: snapTerm,
+            result: null,
+            closedAt: Date.now(),
+            dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
+          };
+          for (const b of betsForTerm) {
+            if (b.direction in snap.dirs) snap.dirs[b.direction][b.currency] += b.amount;
+          }
+          const existing = periodHistory.find(r => r.term === snapTerm);
+          if (existing) {
+            existing.dirs = snap.dirs;
+            existing.closedAt = snap.closedAt;
+          } else {
+            periodHistory.unshift(snap);
+            periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
+            if (periodHistory.length > 30) periodHistory.pop();
+          }
+          historyChanged = true;
         }
-        const existing = periodHistory.find(r => r.term === snapTerm);
-        if (existing) {
-          existing.dirs = snap.dirs;
-          existing.closedAt = snap.closedAt;
-        } else {
-          periodHistory.unshift(snap);
-          periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
-          if (periodHistory.length > 30) periodHistory.pop();
-        }
+        snappedTerms.add(snapTerm);
+      }
+      if (historyChanged) {
         pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
       }
-      canadaBets.length = 0;
-      canadaBetPeriod = null;
-      canadaLastBetAt = 0;
-      pushAdminEvent("bets:reset", { bets: [], period: null, term: currentLotteryTerm });
+      // 仅移除已快照期号的注单，保留当前期的注单
+      const before = canadaBets.length;
+      const kept = canadaBets.filter(b => b.termContext === null || !snappedTerms.has(b.termContext));
+      if (kept.length !== before) {
+        canadaBets.length = 0;
+        for (const b of kept) canadaBets.push(b);
+      }
+      canadaBetPeriod = canadaBets[0]?.period ?? null;
+      canadaLastBetAt = kept.length > 0 ? canadaLastBetAt : 0;
+      pushAdminEvent("bets:reset", { bets: canadaBets, period: canadaBetPeriod, term: currentLotteryTerm });
     }
     session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 2000);
   };
