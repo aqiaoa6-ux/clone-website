@@ -205,6 +205,7 @@ export default function AdminPage() {
   const hashSseRef = useRef<EventSource | null>(null);
   const betBufferRef = useRef<GroupBetEntry[]>([]);
   const resetPendingRef = useRef<{ bets: GroupBetEntry[]; period: string | null } | null>(null);
+  const latestPeriodRef = useRef<string | null>(null);
   // 加拿大监控 — 多群组管理
   type CanadaMonGroup = { groupId: string; groupTitle: string | undefined; active: boolean };
   const [canadaGroups, setCanadaGroups] = useState<CanadaMonGroup[]>([]);
@@ -354,30 +355,37 @@ export default function AdminPage() {
       try {
         const ev = JSON.parse(e.data as string) as Record<string, unknown>;
         if (ev.type === "init") {
+          // SSE 重连时以服务端状态为准（5分钟滑动窗口，始终有数据）
           betBufferRef.current = [];
           resetPendingRef.current = null;
           setHashBets((ev.bets as GroupBetEntry[]) ?? []);
           setHashPeriod((ev.period as string | null) ?? null);
+        } else if (ev.type === "bets:batch") {
+          // 一轮 poll 所有新注打包，入缓冲等待 1s flush
+          const bets = (ev.bets as GroupBetEntry[]) ?? [];
+          if (ev.period) latestPeriodRef.current = ev.period as string;
+          for (const b of bets) betBufferRef.current.push(b);
+        } else if (ev.type === "bets:cleanup") {
+          // 服务端每 60s 清理 5 分钟前的注单，同步前端
+          betBufferRef.current = [];
+          resetPendingRef.current = null;
+          setHashPeriod((ev.period as string | null) ?? null);
+          // 触发一次完整同步（从 REST 接口拉最新）
+          void fetch("/api/admin/hash-group-bets", { credentials: "include" })
+            .then(r => r.ok ? r.json() : null)
+            .then((d: { bets?: GroupBetEntry[]; period?: string | null } | null) => {
+              if (d?.bets) { setHashBets(d.bets); setHashPeriod(d.period ?? null); }
+            }).catch(() => { /* ignore */ });
+        } else if (ev.type === "bet:new") {
+          // 兼容旧协议
+          betBufferRef.current.push(ev.bet as GroupBetEntry);
         } else if (ev.type === "bets:reset") {
-          // 服务端 5s debounce 后统一切换，携带新期已收到的注单
+          // 保留：管理员手动清空时使用
           betBufferRef.current = [];
           resetPendingRef.current = {
             bets: (ev.bets as GroupBetEntry[]) ?? [],
             period: (ev.period as string | null) ?? null,
           };
-        } else if (ev.type === "bet:new") {
-          // 兼容旧事件（保留）
-          betBufferRef.current.push(ev.bet as GroupBetEntry);
-        } else if (ev.type === "bets:batch") {
-          // 一轮 poll 所有新注打包到达，直接入缓冲，不触发 setState
-          const bets = (ev.bets as GroupBetEntry[]) ?? [];
-          const period = (ev.period as string | null) ?? null;
-          if (ev.periodReset) {
-            // 新期：先清空缓冲，记录重置信号
-            betBufferRef.current = [];
-            resetPendingRef.current = { bets: [], period };
-          }
-          for (const b of bets) betBufferRef.current.push(b);
         }
       } catch { /* ignore */ }
     };
@@ -391,19 +399,23 @@ export default function AdminPage() {
       if (buf.length > 0) {
         const newBets = [...buf].reverse(); // 最新在前
         if (reset !== null) {
-          // 新期 + 新注一起到达：只显示新注
+          // 手动清空 + 新注：只显示新注
           resetPendingRef.current = null;
-          setHashBets(newBets.slice(0, 500));
+          setHashBets([...reset.bets, ...newBets].slice(0, 500));
           setHashPeriod(reset.period);
         } else {
-          // 同期新注：追加到列表头
+          // 正常新注：追加到列表头；period 从 latestPeriodRef 更新（无 setState 开销）
+          if (latestPeriodRef.current) {
+            setHashPeriod(latestPeriodRef.current);
+            latestPeriodRef.current = null;
+          }
           setHashBets(prev => [...newBets, ...prev].slice(0, 500));
         }
       } else if (reset !== null) {
-        // 收到新期信号但还没有新注：更新期号显示，保留旧注避免空窗
-        // 不清空 — 等有新注再替换（下次 flush 触发）
+        // 手动清空但还没新注：先展示 reset 携带的基础注单，等待新注
+        resetPendingRef.current = null;
+        setHashBets(reset.bets.slice(0, 500));
         setHashPeriod(reset.period);
-        // 保留 resetPending，下次 flush 若 buf 有内容则清旧注
       }
     }, 1000);
     return () => { clearInterval(flushId); es.close(); hashSseRef.current = null; };

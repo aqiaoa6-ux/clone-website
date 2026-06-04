@@ -27,11 +27,25 @@ interface GroupBetEntry {
   period: string | null;
 }
 const canadaBets: GroupBetEntry[] = [];
+// 仅用于展示页面 header，不参与清空逻辑
 let canadaBetPeriod: string | null = null;
-// 多群 debounce：首次发现新期号后等 5s 再切换，防止各群上报时间差导致反复清空
-let canadaPendingPeriod: string | null = null;
-let canadaPeriodTimer: ReturnType<typeof setTimeout> | null = null;
 const adminSseClients = new Set<Response>();
+
+// 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
+const CANADA_WINDOW_MS = 5 * 60 * 1000;
+setInterval(() => {
+  const cutoff = Date.now() - CANADA_WINDOW_MS;
+  const before = canadaBets.length;
+  const kept = canadaBets.filter(b => b.ts >= cutoff);
+  if (kept.length !== before) {
+    canadaBets.length = 0;
+    for (const b of kept) canadaBets.push(b);
+    // 更新 period 为最新一条
+    canadaBetPeriod = canadaBets[0]?.period ?? null;
+    // 通知前端刷新（不是 reset，只是告知数量缩减）
+    pushAdminEvent("bets:cleanup", { period: canadaBetPeriod, count: canadaBets.length });
+  }
+}, 60_000);
 
 function pushAdminEvent(type: string, payload: Record<string, unknown>): void {
   if (adminSseClients.size === 0) return;
@@ -3346,41 +3360,18 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
               : "";
             const entries = parseCanadaBotConfirm(text, senderName);
             for (const entry of entries) {
-              // 期号检测: 遇到新期号时启动 5s debounce，不立刻清空
-              // 5s 内所有群都会上报新期，timer 到期后统一切换一次
-              if (
-                entry.period &&
-                entry.period !== canadaBetPeriod &&
-                entry.period !== canadaPendingPeriod
-              ) {
-                canadaPendingPeriod = entry.period;
-                if (canadaPeriodTimer) clearTimeout(canadaPeriodTimer);
-                canadaPeriodTimer = setTimeout(() => {
-                  if (canadaPendingPeriod && canadaPendingPeriod !== canadaBetPeriod) {
-                    const newPeriod = canadaPendingPeriod;
-                    // 保留新期注单，清除旧期注单，一次性切换
-                    const kept = canadaBets.filter(b => b.period === newPeriod);
-                    canadaBets.length = 0;
-                    for (const b of kept) canadaBets.push(b);
-                    canadaBetPeriod = newPeriod;
-                    pushAdminEvent("bets:reset", { period: canadaBetPeriod, bets: kept });
-                  }
-                  canadaPendingPeriod = null;
-                  canadaPeriodTimer = null;
-                }, 5000);
-              }
-              // 注单直接追加（不论期号），期切换时再统一过滤
+              // 各群 period hash 格式不统一，不做跨群比对；只用最新一条的 period 做 header 展示
+              if (entry.period) canadaBetPeriod = entry.period;
               canadaBets.unshift(entry);
               if (canadaBets.length > 500) canadaBets.pop();
               newEntries.push(entry);
             }
           }
-          // 一轮 poll 所有新注合并成一个 SSE 事件
+          // 一轮 poll 所有新注合并成一个 SSE 事件，永不发 bets:reset
           if (newEntries.length > 0) {
             pushAdminEvent("bets:batch", {
               bets: newEntries,
-              period: canadaBetPeriod ?? canadaPendingPeriod,
-              periodReset: false,
+              period: canadaBetPeriod,
             });
           }
         } catch { /* network hiccup */ }
