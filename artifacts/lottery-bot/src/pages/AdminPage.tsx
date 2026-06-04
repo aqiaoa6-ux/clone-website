@@ -205,6 +205,13 @@ export default function AdminPage() {
   const [hashTerm, setHashTerm] = useState<number | null>(null);
   const [hashLastBetAt, setHashLastBetAt] = useState<number>(0);
   const [nowTs, setNowTs] = useState(() => Date.now());
+  type PeriodRecord = {
+    term: number | null;
+    result: string | null;
+    closedAt: number;
+    dirs: Record<string, { kk: number; usdt: number; cny: number }>;
+  };
+  const [hashHistory, setHashHistory] = useState<PeriodRecord[]>([]);
   const hashSseRef = useRef<EventSource | null>(null);
   const betBufferRef = useRef<GroupBetEntry[]>([]);
   const resetPendingRef = useRef<{ bets: GroupBetEntry[]; period: string | null } | null>(null);
@@ -373,6 +380,7 @@ export default function AdminPage() {
           setHashPeriod((ev.period as string | null) ?? null);
           if (ev.term) setHashTerm(ev.term as number);
           if (ev.lastBetAt) setHashLastBetAt(ev.lastBetAt as number);
+          if (ev.history) setHashHistory(ev.history as PeriodRecord[]);
         } else if (ev.type === "bets:batch") {
           const bets = (ev.bets as GroupBetEntry[]) ?? [];
           if (ev.period) latestPeriodRef.current = ev.period as string;
@@ -388,6 +396,8 @@ export default function AdminPage() {
             .then((d: { bets?: GroupBetEntry[]; period?: string | null } | null) => {
               if (d?.bets) { setHashBets(d.bets); setHashPeriod(d.period ?? null); }
             }).catch(() => { /* ignore */ });
+        } else if (ev.type === "history:update") {
+          if (ev.history) setHashHistory(ev.history as PeriodRecord[]);
         } else if (ev.type === "bet:new") {
           betBufferRef.current.push(ev.bet as GroupBetEntry);
         } else if (ev.type === "bets:reset") {
@@ -2030,6 +2040,73 @@ export default function AdminPage() {
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* 开奖历史 */}
+            {hashHistory.length > 0 && (() => {
+              const KK_RATE = 100_000;
+              const CNY_RATE = 6.7;
+              const toU = (d: { kk: number; usdt: number; cny: number }) =>
+                d.kk / KK_RATE + d.usdt + d.cny / CNY_RATE;
+              const fU = (u: number) => u > 0
+                ? u.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                : "—";
+              const resultColor = (r: string | null) => {
+                if (!r) return "text-slate-500";
+                if (r.startsWith("大")) return "text-red-400";
+                return "text-sky-400";
+              };
+              const dirCols = ["大单", "大双", "大", "小单", "小双", "小"] as const;
+              return (
+                <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-[#252a3d] flex items-center gap-2">
+                    <span className="text-white font-semibold text-sm">📋 开奖记录</span>
+                    <span className="text-slate-500 text-xs">最近 {hashHistory.length} 期</span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-[#252a3d] text-slate-500">
+                          <th className="px-3 py-2 text-left font-medium whitespace-nowrap">期号</th>
+                          <th className="px-3 py-2 text-center font-medium whitespace-nowrap">结果</th>
+                          {dirCols.map(d => (
+                            <th key={d} className={`px-3 py-2 text-right font-medium whitespace-nowrap ${d.startsWith("大") ? "text-red-500/60" : "text-sky-500/60"}`}>{d} ≈U</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hashHistory.map((rec, i) => {
+                          const totalU = dirCols.reduce((s, d) => s + toU(rec.dirs[d] ?? { kk: 0, usdt: 0, cny: 0 }), 0);
+                          return (
+                            <tr key={i} className="border-b border-[#1a1f31] hover:bg-[#1a1f31]/50 transition-colors">
+                              <td className="px-3 py-2 text-slate-400 font-mono whitespace-nowrap">
+                                {rec.term ?? "—"}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                {rec.result
+                                  ? <span className={`font-bold text-sm ${resultColor(rec.result)}`}>{rec.result}</span>
+                                  : <span className="text-slate-600 animate-pulse">开奖中…</span>
+                                }
+                              </td>
+                              {dirCols.map(d => {
+                                const u = toU(rec.dirs[d] ?? { kk: 0, usdt: 0, cny: 0 });
+                                const isResult = rec.result === d;
+                                const isLosing = rec.result && !isResult;
+                                return (
+                                  <td key={d} className={`px-3 py-2 text-right font-mono whitespace-nowrap ${isResult ? "text-emerald-300 font-bold" : isLosing ? "text-slate-600" : "text-slate-400"}`}>
+                                    {isResult && u > 0 && <span className="mr-1 text-emerald-500">🏆</span>}
+                                    {fU(u)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               );

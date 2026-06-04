@@ -34,6 +34,16 @@ let currentLotteryTerm: number | null = null;
 let canadaLastBetAt = 0;
 const adminSseClients = new Set<Response>();
 
+// ─── 开奖历史（最近 30 期）──────────────────────────────────────────────────
+type PeriodRecord = {
+  term: number | null;
+  result: string | null;   // e.g. "大单" / "小双"，等 fengpan 回来才填
+  closedAt: number;        // 停止下注时间戳
+  dirs: Record<string, { kk: number; usdt: number; cny: number }>;
+};
+const DIR_KEYS = ["大单", "大双", "大", "小单", "小双", "小"] as const;
+const periodHistory: PeriodRecord[] = [];
+
 // 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
 const CANADA_WINDOW_MS = 5 * 60 * 1000;
 setInterval(() => {
@@ -407,6 +417,16 @@ async function warmLotteryCache(): Promise<void> {
     // 记录当前投注期号：items[0].r3 存在=已开奖，下一期才是当前期；否则 items[0] 本身是当前期
     if (items.length > 0 && items[0]!.term) {
       currentLotteryTerm = items[0]!.r3 ? items[0]!.term + 1 : items[0]!.term;
+    }
+    // 为已结束期号补填开奖结果
+    for (const item of items) {
+      if (!item.r3 || !item.term) continue;
+      const rec = periodHistory.find(r => r.term === item.term && r.result === null);
+      if (rec) {
+        rec.result = item.r3;
+        pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
+        break; // 一次只更新最近一条
+      }
     }
   } catch { /* ignore */ }
 }
@@ -3377,9 +3397,27 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
               continue;
             }
 
-            // ── 停止下注消息 → 清空本期数据 ──
+            // ── 停止下注消息 → 快照本期数据 + 清空 ──
             // 格式：🚫 期号: 3440827 停止下注
             if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
+              // 快照本期方向统计（在清空之前）
+              const snap: PeriodRecord = {
+                term: currentLotteryTerm,
+                result: null,
+                closedAt: Date.now(),
+                dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
+              };
+              for (const b of canadaBets) {
+                if (b.direction in snap.dirs) {
+                  snap.dirs[b.direction][b.currency] += b.amount;
+                }
+              }
+              // 只在有注单时才记录（避免重复空记录）
+              const hasAny = Object.values(snap.dirs).some(d => d.kk + d.usdt + d.cny > 0);
+              if (hasAny || snap.term) {
+                periodHistory.unshift(snap);
+                if (periodHistory.length > 30) periodHistory.pop();
+              }
               canadaBets.length = 0;
               canadaBetPeriod = null;
               canadaLastBetAt = 0;
@@ -4661,7 +4699,7 @@ router.get("/admin/hash-group-bets/events", requireAdminSecret, (req, res) => {
   res.write(": connected\n\n");
   const totals = { kk: 0, usdt: 0, cny: 0 };
   for (const b of canadaBets) totals[b.currency] += b.amount;
-  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, term: currentLotteryTerm, lastBetAt: canadaLastBetAt, bets: canadaBets, totals })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, term: currentLotteryTerm, lastBetAt: canadaLastBetAt, bets: canadaBets, totals, history: periodHistory.slice(0, 30) })}\n\n`);
   adminSseClients.add(res);
   const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
   req.on("close", () => { clearInterval(hb); adminSseClients.delete(res); });
@@ -4671,6 +4709,10 @@ router.get("/admin/hash-group-bets", requireAdminSecret, (_req, res) => {
   const totals = { kk: 0, usdt: 0, cny: 0 };
   for (const b of canadaBets) totals[b.currency] += b.amount;
   res.json({ period: canadaBetPeriod, bets: canadaBets, totals });
+});
+
+router.get("/admin/hash-period-history", requireAdminSecret, (_req, res) => {
+  res.json({ history: periodHistory.slice(0, 30) });
 });
 
 // ─── 加拿大监控群组配置 ─────────────────────────────────────────────────────
