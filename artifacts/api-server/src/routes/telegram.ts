@@ -29,6 +29,9 @@ interface GroupBetEntry {
 const canadaBets: GroupBetEntry[] = [];
 // 仅用于展示页面 header，不参与清空逻辑
 let canadaBetPeriod: string | null = null;
+// 彩票平台数字期号（从 fengpan API 同步）+ 最近有注单的时间戳
+let currentLotteryTerm: number | null = null;
+let canadaLastBetAt = 0;
 const adminSseClients = new Set<Response>();
 
 // 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
@@ -401,6 +404,8 @@ async function warmLotteryCache(): Promise<void> {
     const items = data?.message?.all?.keno28?.data ?? [];
     const labels = items.map(d => d.r3).filter((x): x is string => !!x).reverse();
     if (labels.length) lotteryHistoryCache = labels.slice(-50);
+    // 记录最新彩票期号（数字）
+    if (items.length > 0 && items[0]!.term) currentLotteryTerm = items[0]!.term;
   } catch { /* ignore */ }
 }
 // 启动时立即预热，之后每 30 秒刷新
@@ -3369,9 +3374,12 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
           }
           // 一轮 poll 所有新注合并成一个 SSE 事件，永不发 bets:reset
           if (newEntries.length > 0) {
+            canadaLastBetAt = Date.now();
             pushAdminEvent("bets:batch", {
               bets: newEntries,
               period: canadaBetPeriod,
+              term: currentLotteryTerm,
+              lastBetAt: canadaLastBetAt,
             });
           }
         } catch { /* network hiccup */ }
@@ -4618,7 +4626,7 @@ router.get("/admin/hash-group-bets/events", requireAdminSecret, (req, res) => {
   res.write(": connected\n\n");
   const totals = { kk: 0, usdt: 0, cny: 0 };
   for (const b of canadaBets) totals[b.currency] += b.amount;
-  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, bets: canadaBets, totals })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, term: currentLotteryTerm, lastBetAt: canadaLastBetAt, bets: canadaBets, totals })}\n\n`);
   adminSseClients.add(res);
   const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
   req.on("close", () => { clearInterval(hb); adminSseClients.delete(res); });

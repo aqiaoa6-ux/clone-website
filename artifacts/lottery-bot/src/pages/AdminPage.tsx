@@ -202,10 +202,15 @@ export default function AdminPage() {
   // ── hashmon tab ──
   const [hashBets, setHashBets] = useState<GroupBetEntry[]>([]);
   const [hashPeriod, setHashPeriod] = useState<string | null>(null);
+  const [hashTerm, setHashTerm] = useState<number | null>(null);
+  const [hashLastBetAt, setHashLastBetAt] = useState<number>(0);
+  const [nowTs, setNowTs] = useState(() => Date.now());
   const hashSseRef = useRef<EventSource | null>(null);
   const betBufferRef = useRef<GroupBetEntry[]>([]);
   const resetPendingRef = useRef<{ bets: GroupBetEntry[]; period: string | null } | null>(null);
   const latestPeriodRef = useRef<string | null>(null);
+  const latestTermRef = useRef<number | null>(null);
+  const latestLastBetAtRef = useRef<number>(0);
   // 加拿大监控 — 多群组管理
   type CanadaMonGroup = { groupId: string; groupTitle: string | undefined; active: boolean };
   const [canadaGroups, setCanadaGroups] = useState<CanadaMonGroup[]>([]);
@@ -340,6 +345,13 @@ export default function AdminPage() {
     if (tab === "hashmon") void loadCanadaGroups();
   }, [tab]);
 
+  // 1s 心跳：驱动"X秒前"新鲜度显示
+  useEffect(() => {
+    if (tab !== "hashmon") return;
+    const id = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [tab]);
+
   // Hash monitor SSE — connect when tab is active, disconnect otherwise
   useEffect(() => {
     if (tab !== "hashmon" || !secretVerified) {
@@ -355,32 +367,30 @@ export default function AdminPage() {
       try {
         const ev = JSON.parse(e.data as string) as Record<string, unknown>;
         if (ev.type === "init") {
-          // SSE 重连时以服务端状态为准（5分钟滑动窗口，始终有数据）
           betBufferRef.current = [];
           resetPendingRef.current = null;
           setHashBets((ev.bets as GroupBetEntry[]) ?? []);
           setHashPeriod((ev.period as string | null) ?? null);
+          if (ev.term) setHashTerm(ev.term as number);
+          if (ev.lastBetAt) setHashLastBetAt(ev.lastBetAt as number);
         } else if (ev.type === "bets:batch") {
-          // 一轮 poll 所有新注打包，入缓冲等待 1s flush
           const bets = (ev.bets as GroupBetEntry[]) ?? [];
           if (ev.period) latestPeriodRef.current = ev.period as string;
+          if (ev.term) latestTermRef.current = ev.term as number;
+          if (ev.lastBetAt) latestLastBetAtRef.current = ev.lastBetAt as number;
           for (const b of bets) betBufferRef.current.push(b);
         } else if (ev.type === "bets:cleanup") {
-          // 服务端每 60s 清理 5 分钟前的注单，同步前端
           betBufferRef.current = [];
           resetPendingRef.current = null;
           setHashPeriod((ev.period as string | null) ?? null);
-          // 触发一次完整同步（从 REST 接口拉最新）
           void fetch("/api/admin/hash-group-bets", { credentials: "include" })
             .then(r => r.ok ? r.json() : null)
             .then((d: { bets?: GroupBetEntry[]; period?: string | null } | null) => {
               if (d?.bets) { setHashBets(d.bets); setHashPeriod(d.period ?? null); }
             }).catch(() => { /* ignore */ });
         } else if (ev.type === "bet:new") {
-          // 兼容旧协议
           betBufferRef.current.push(ev.bet as GroupBetEntry);
         } else if (ev.type === "bets:reset") {
-          // 保留：管理员手动清空时使用
           betBufferRef.current = [];
           resetPendingRef.current = {
             bets: (ev.bets as GroupBetEntry[]) ?? [],
@@ -389,30 +399,28 @@ export default function AdminPage() {
         }
       } catch { /* ignore */ }
     };
-    // 每 1s flush 一次缓冲，多群消息合并为一次 setState，避免频繁跳动
+    // 每 1s flush 一次缓冲，多群消息合并为一次 setState
     const flushId = setInterval(() => {
       const reset = resetPendingRef.current;
       const buf = betBufferRef.current;
       if (reset === null && buf.length === 0) return;
       betBufferRef.current = [];
 
+      // 批量更新 period / term / lastBetAt
+      if (latestPeriodRef.current) { setHashPeriod(latestPeriodRef.current); latestPeriodRef.current = null; }
+      if (latestTermRef.current) { setHashTerm(latestTermRef.current); latestTermRef.current = null; }
+      if (latestLastBetAtRef.current > 0) { setHashLastBetAt(latestLastBetAtRef.current); latestLastBetAtRef.current = 0; }
+
       if (buf.length > 0) {
-        const newBets = [...buf].reverse(); // 最新在前
+        const newBets = [...buf].reverse();
         if (reset !== null) {
-          // 手动清空 + 新注：只显示新注
           resetPendingRef.current = null;
           setHashBets([...reset.bets, ...newBets].slice(0, 500));
           setHashPeriod(reset.period);
         } else {
-          // 正常新注：追加到列表头；period 从 latestPeriodRef 更新（无 setState 开销）
-          if (latestPeriodRef.current) {
-            setHashPeriod(latestPeriodRef.current);
-            latestPeriodRef.current = null;
-          }
           setHashBets(prev => [...newBets, ...prev].slice(0, 500));
         }
       } else if (reset !== null) {
-        // 手动清空但还没新注：先展示 reset 携带的基础注单，等待新注
         resetPendingRef.current = null;
         setHashBets(reset.bets.slice(0, 500));
         setHashPeriod(reset.period);
@@ -1864,10 +1872,30 @@ export default function AdminPage() {
             {/* 期号 + 合计 */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-white font-semibold text-sm">🍁 加拿大下注实时监控</span>
-                <span className="text-xs text-slate-500 font-mono">
-                  {hashPeriod ? `期号 ${hashPeriod.slice(0, 8)}…` : "等待新期开始…"}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-semibold text-sm">🍁 加拿大下注实时监控</span>
+                  {/* 实时连接指示灯 */}
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                  </span>
+                </div>
+                <div className="flex flex-col items-end gap-0.5">
+                  {/* 数字期号 */}
+                  <span className="text-xs text-white font-mono font-bold">
+                    {hashTerm ? `${hashTerm} 期` : hashPeriod ? `${hashPeriod.slice(0, 8)}…` : "等待数据…"}
+                  </span>
+                  {/* 最近更新时间 */}
+                  <span className={`text-[10px] font-mono ${hashLastBetAt > 0 && nowTs - hashLastBetAt < 10_000 ? "text-emerald-400" : "text-slate-600"}`}>
+                    {hashLastBetAt > 0
+                      ? (() => {
+                          const s = Math.floor((nowTs - hashLastBetAt) / 1000);
+                          if (s < 60) return `${s}秒前`;
+                          return `${Math.floor(s / 60)}分${s % 60}秒前`;
+                        })()
+                      : "暂无数据"}
+                  </span>
+                </div>
               </div>
               {(() => {
                 const KK_RATE = 100_000; // KK 100,000 = 1 USDT
