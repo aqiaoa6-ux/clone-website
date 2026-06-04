@@ -30,6 +30,7 @@ export const api = {
   },
 
   admin: {
+    hashGroupBets: () => api.get<{ period: string | null; bets: GroupBetEntry[]; totals: { kk: number; usdt: number; cny: number } }>("/admin/hash-group-bets"),
     authStatus: () => api.get<{ hasSecret: boolean; verified: boolean }>("/admin/auth/status"),
     authVerify: (password: string) => api.post<{ ok: boolean; firstTime?: boolean }>("/admin/auth/verify", { password }),
     authChange: (oldPassword: string, newPassword: string) => api.post<{ ok: boolean }>("/admin/auth/change", { oldPassword, newPassword }),
@@ -290,6 +291,18 @@ export interface AdminTgSession {
 }
 
 
+
+export interface GroupBetEntry {
+  id: string;
+  ts: number;
+  senderId: string;
+  senderName: string;
+  currency: "kk" | "usdt" | "cny";
+  amount: number;
+  direction: string;
+  raw: string;
+  period: string | null;
+}
 
 export interface LotteryData {
   message?: {

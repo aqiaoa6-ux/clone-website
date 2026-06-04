@@ -14,6 +14,66 @@ import { eq, and, gt, gte, lt, desc } from "drizzle-orm";
 
 const router = Router();
 
+// ─── Hash group bet monitor (global, shared across all sessions) ──────────────
+interface GroupBetEntry {
+  id: string;
+  ts: number;
+  senderId: string;
+  senderName: string;
+  currency: "kk" | "usdt" | "cny";
+  amount: number;
+  direction: string;
+  raw: string;
+  period: string | null;
+}
+const hashGroupBets: GroupBetEntry[] = [];
+let hashGroupBetPeriod: string | null = null;
+const adminSseClients = new Set<Response>();
+
+function pushAdminEvent(type: string, payload: Record<string, unknown>): void {
+  if (adminSseClients.size === 0) return;
+  const data = JSON.stringify({ type, ...payload });
+  for (const res of adminSseClients) {
+    try { res.write(`data: ${data}\n\n`); } catch { adminSseClients.delete(res); }
+  }
+}
+
+const GCURRENCY_MAP: Record<string, "kk" | "usdt" | "cny"> = {
+  kk: "kk", usdt: "usdt", cny: "cny", 人民币: "cny", rmb: "cny",
+};
+
+function parseGroupBetFromText(
+  text: string,
+  senderId: string,
+  senderName: string,
+  period: string | null,
+): GroupBetEntry | null {
+  const t = text.trim();
+  // Must start with a currency keyword
+  const currMatch = t.match(/^(kk|usdt|cny|人民币|rmb)/i);
+  if (!currMatch) return null;
+  const currency = GCURRENCY_MAP[currMatch[1]!.toLowerCase()];
+  if (!currency) return null;
+  const rest = t.slice(currMatch[0].length).trim();
+  // Find amount and direction anywhere in the rest
+  const amtMatch = rest.match(/\d+(?:\.\d+)?/);
+  const dirMatch = rest.match(/大单|大双|小单|小双|大|小/);
+  if (!amtMatch || !dirMatch) return null;
+  const amount = parseFloat(amtMatch[0]);
+  if (!isFinite(amount) || amount <= 0) return null;
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    ts: Date.now(),
+    senderId,
+    senderName,
+    currency,
+    amount,
+    direction: dirMatch[0],
+    raw: t.slice(0, 120),
+    period,
+  };
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type BetStrategy = "normal" | "martingale" | "anti-martingale";
@@ -2984,6 +3044,12 @@ async function processHashResultMsg(session: TgSession, text: string): Promise<v
     const period = openMatch[1]!;
     if (session.hashPeriod === period && session.hashPhase === "betting") return;
     session.hashPeriod = period;
+    // 新期开始 → 重置群组下注统计
+    if (period !== hashGroupBetPeriod) {
+      hashGroupBets.length = 0;
+      hashGroupBetPeriod = period;
+      pushAdminEvent("bets:reset", { period });
+    }
     session.hashPhase = "betting";
     pushEvent(session, "hash:phase", { phase: "betting", period });
     logger.info({ period }, "[hash-result] 新期开始通知（仅更新相位）");
@@ -3212,6 +3278,25 @@ function startHashListener(session: TgSession): void {
           session.hashLastMsgId = msg.id;
           const text = msg.message ?? "";
           await processHashMessage(session, text, msg.id);
+          // ── 下注群成员投注解析 ──
+          if (text && !msg.out) {
+            const senderId = String(msg.senderId ?? "");
+            const u = msg.sender as Api.User | null;
+            const senderName = u
+              ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || senderId)
+              : senderId;
+            const bet = parseGroupBetFromText(text, senderId, senderName, session.hashPeriod);
+            if (bet) {
+              if (session.hashPeriod && session.hashPeriod !== hashGroupBetPeriod) {
+                hashGroupBets.length = 0;
+                hashGroupBetPeriod = session.hashPeriod;
+                pushAdminEvent("bets:reset", { period: hashGroupBetPeriod });
+              }
+              hashGroupBets.unshift(bet);
+              if (hashGroupBets.length > 500) hashGroupBets.pop();
+              pushAdminEvent("bet:new", { bet });
+            }
+          }
         }
       } catch { /* network hiccup */ }
     })();
@@ -4383,5 +4468,29 @@ export function stopUserAutoBet(userId: number): void {
     logger.info({ userId }, "[auth] logout — autoBet stopped");
   }
 }
+
+// ─── Admin hash group bet monitor endpoints ───────────────────────────────────
+
+router.get("/admin/hash-group-bets/events", requireAdminSecret, (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write(": connected\n\n");
+  // Send current state immediately
+  const totals = { kk: 0, usdt: 0, cny: 0 };
+  for (const b of hashGroupBets) totals[b.currency] += b.amount;
+  res.write(`data: ${JSON.stringify({ type: "init", period: hashGroupBetPeriod, bets: hashGroupBets, totals })}\n\n`);
+  adminSseClients.add(res);
+  const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
+  req.on("close", () => { clearInterval(hb); adminSseClients.delete(res); });
+});
+
+router.get("/admin/hash-group-bets", requireAdminSecret, (_req, res) => {
+  const totals = { kk: 0, usdt: 0, cny: 0 };
+  for (const b of hashGroupBets) totals[b.currency] += b.amount;
+  res.json({ period: hashGroupBetPeriod, bets: hashGroupBets, totals });
+});
 
 export default router;

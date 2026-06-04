@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser } from "../lib/api";
+import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 const TYPE_LABELS: Record<string, { label: string; color: string }> = {
@@ -37,7 +37,7 @@ const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { ho
 export default function AdminPage() {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
-  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog" | "shop">("cards");
+  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog" | "shop" | "hashmon">("cards");
 
   // ── card tab ──
   const [cards, setCards] = useState<AdminCard[]>([]);
@@ -199,6 +199,12 @@ export default function AdminPage() {
     } catch { /* ignore */ } finally { setSavingShop(false); }
   };
 
+  // ── hashmon tab ──
+  const [hashBets, setHashBets] = useState<GroupBetEntry[]>([]);
+  const [hashTotals, setHashTotals] = useState<{ kk: number; usdt: number; cny: number }>({ kk: 0, usdt: 0, cny: 0 });
+  const [hashPeriod, setHashPeriod] = useState<string | null>(null);
+  const hashSseRef = useRef<EventSource | null>(null);
+
   // ── pwd log tab ──
   type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_sent" | "pwd_success"; text: string; context?: string };
   const [pwdLog, setPwdLog] = useState<PwdLogEvent[]>([]);
@@ -287,6 +293,38 @@ export default function AdminPage() {
     if (tab === "pwdlog") void loadPwdLog(pwdLogDate);
     if (tab === "shop") void loadShop();
   }, [tab]);
+
+  // Hash monitor SSE — connect when tab is active, disconnect otherwise
+  useEffect(() => {
+    if (tab !== "hashmon" || !secretVerified) {
+      if (hashSseRef.current) { hashSseRef.current.close(); hashSseRef.current = null; }
+      return;
+    }
+    const es = new EventSource("/api/admin/hash-group-bets/events", { withCredentials: true });
+    hashSseRef.current = es;
+    es.onmessage = (e) => {
+      if (!e.data) return;
+      try {
+        const ev = JSON.parse(e.data as string) as Record<string, unknown>;
+        if (ev.type === "init") {
+          setHashBets((ev.bets as GroupBetEntry[]) ?? []);
+          setHashPeriod((ev.period as string | null) ?? null);
+          const t = (ev.totals as { kk: number; usdt: number; cny: number }) ?? { kk: 0, usdt: 0, cny: 0 };
+          setHashTotals(t);
+        } else if (ev.type === "bets:reset") {
+          setHashBets([]);
+          setHashPeriod((ev.period as string | null) ?? null);
+          setHashTotals({ kk: 0, usdt: 0, cny: 0 });
+        } else if (ev.type === "bet:new") {
+          const bet = ev.bet as GroupBetEntry;
+          setHashBets(prev => [bet, ...prev].slice(0, 500));
+          setHashTotals(prev => ({ ...prev, [bet.currency]: prev[bet.currency] + bet.amount }));
+          if (bet.period) setHashPeriod(bet.period);
+        }
+      } catch { /* ignore */ }
+    };
+    return () => { es.close(); hashSseRef.current = null; };
+  }, [tab, secretVerified]);
 
   // Auto-poll kkpay every 5s while kkpay console is open
   useEffect(() => {
@@ -488,10 +526,10 @@ export default function AdminPage() {
           </div>
         </div>
         <div className="max-w-3xl mx-auto px-4 flex gap-1 pb-2 flex-wrap">
-          {(["cards", "monitor", "users", "pwdlog", "shop"] as const).map(t => (
+          {(["cards", "monitor", "users", "pwdlog", "shop", "hashmon"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-4 py-1.5 rounded-lg transition font-medium ${tab === t ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : "🛒 商店"}
+              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : "📊 哈希监控"}
             </button>
           ))}
         </div>
@@ -1649,6 +1687,84 @@ export default function AdminPage() {
             )}
           </>
         )}
+        {/* ── 哈希监控 ── */}
+        {tab === "hashmon" && (
+          <div className="space-y-3">
+            {/* 期号 + 合计 */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-white font-semibold text-sm">哈希群组下注实时监控</span>
+                <span className="text-xs text-slate-500 font-mono">
+                  {hashPeriod ? `第 ${hashPeriod} 期` : "等待新期开始…"}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {(["kk", "usdt", "cny"] as const).map(cur => {
+                  const colors: Record<string, string> = {
+                    kk: "border-yellow-500/40 bg-yellow-500/8",
+                    usdt: "border-emerald-500/40 bg-emerald-500/8",
+                    cny: "border-blue-500/40 bg-blue-500/8",
+                  };
+                  const textColors: Record<string, string> = {
+                    kk: "text-yellow-400",
+                    usdt: "text-emerald-400",
+                    cny: "text-blue-400",
+                  };
+                  return (
+                    <div key={cur} className={`rounded-xl border px-3 py-2.5 text-center ${colors[cur]}`}>
+                      <div className={`text-xs font-semibold uppercase tracking-wider mb-1 ${textColors[cur]}`}>{cur}</div>
+                      <div className="text-white font-bold text-base">
+                        {hashTotals[cur] > 0 ? hashTotals[cur].toLocaleString("zh-CN", { maximumFractionDigits: 2 }) : "—"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 下注列表 */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-[#252a3d] flex items-center justify-between">
+                <span className="text-white font-semibold text-sm">下注明细</span>
+                <span className="text-xs text-slate-500">{hashBets.length} 条</span>
+              </div>
+              {hashBets.length === 0 ? (
+                <div className="px-4 py-8 text-center text-slate-600 text-sm">
+                  暂无下注记录，等待群组消息…
+                </div>
+              ) : (
+                <div className="divide-y divide-[#1e2235]">
+                  {hashBets.map(b => {
+                    const curColor: Record<string, string> = {
+                      kk: "text-yellow-400 bg-yellow-500/10 border-yellow-500/30",
+                      usdt: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+                      cny: "text-blue-400 bg-blue-500/10 border-blue-500/30",
+                    };
+                    const dirColor = b.direction.startsWith("大") ? "text-red-400" : "text-sky-400";
+                    return (
+                      <div key={b.id} className="px-4 py-2.5 flex items-center gap-3 hover:bg-white/[0.02]">
+                        <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${curColor[b.currency]} flex-shrink-0`}>
+                          {b.currency.toUpperCase()}
+                        </span>
+                        <span className={`text-sm font-semibold w-16 text-right flex-shrink-0 ${dirColor}`}>
+                          {b.direction}
+                        </span>
+                        <span className="text-white font-mono text-sm flex-shrink-0 w-20 text-right">
+                          {b.amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+                        </span>
+                        <span className="text-slate-400 text-xs truncate flex-1 min-w-0">{b.senderName || b.senderId}</span>
+                        <span className="text-slate-600 text-[10px] flex-shrink-0 tabular-nums">
+                          {new Date(b.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
       </div>
       <BottomNav />
     </div>
