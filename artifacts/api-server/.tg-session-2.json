@@ -110,6 +110,18 @@
   "kuaisanResults": [],
   "hashResults": [
     {
+      "value": 16,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
+      "value": 16,
+      "big": true,
+      "odd": false,
+      "label": "大双"
+    },
+    {
       "value": 18,
       "big": true,
       "odd": false,
