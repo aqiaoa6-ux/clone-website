@@ -790,12 +790,31 @@ function isFatalAuthError(e: unknown): boolean {
          msg.includes("USER_DEACTIVATED");
 }
 
-/** 清除 session 内存状态 + 删除 session 文件，让用户重新登录 */
+/** 清除 session 内存状态 + 清除 sessionString，保留用户配置（监控群组/watchGroup/余额等），让用户重新登录 */
 function destroySession(session: TgSession, reason: string): void {
   stopAllTimers(session);
   tgSessions.delete(session.userId);
   try { session.client.disconnect(); } catch { /* ok */ }
-  try { fs.unlinkSync(sessionFile(session.userId)); } catch { /* ok */ }
+  // 保留用户配置（canadaMonitorGroupIds / watchGroupId / cfg / balance 等），仅清除 TG 认证信息
+  try {
+    const stub: PersistedData = {
+      sessionString: "",           // 清空 auth key，强制重新登录
+      phone: session.phone ?? "",
+      balance: session.balance,
+      todayPnl: session.todayPnl,
+      todayResetAt: session.todayResetAt,
+      sessionPnl: session.sessionPnl,
+      kkpayUsername: session.kkpayUsername,
+      balanceSource: session.balanceSource,
+      watchGroupId: session.watchGroupId,
+      cfg: session.cfg,
+      kuaisanResults: [],
+      hashResults: [],
+    };
+    if (session.canadaMonitorGroupIds.length > 0)
+      (stub as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
+    fs.writeFileSync(sessionFile(session.userId), JSON.stringify(stub, null, 2), "utf-8");
+  } catch { /* ok */ }
   logger.warn({ userId: session.userId, reason }, "[tg] fatal auth error — session destroyed, user must re-login");
   pushEvent(session, "session:fatal", { reason });
 }
@@ -3944,6 +3963,8 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     const me = (result as Api.auth.Authorization).user as Api.User;
     session.me = me;
     session.groups = await fetchGroups(session.client);
+    if (session.watchGroupId) startGroupListener(session);
+    for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     saveSession(session);
@@ -3970,6 +3991,8 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     const me = (await session.client.getMe()) as Api.User;
     session.me = me;
     session.groups = await fetchGroups(session.client);
+    if (session.watchGroupId) startGroupListener(session);
+    for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     saveSession(session);
