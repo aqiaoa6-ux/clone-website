@@ -3355,12 +3355,24 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
           if (!msgs.length) return;
           const sorted = [...msgs].sort((a, b) => a.id - b.id);
           const newEntries: GroupBetEntry[] = [];
+          let didStop = false;
           for (const msg of sorted) {
             const curLast = session.canadaMonitorLastMsgIds[groupId] ?? 0;
             if (msg.id <= curLast) continue;
             session.canadaMonitorLastMsgIds[groupId] = msg.id;
             const text = msg.message ?? "";
             if (!text) continue;
+
+            // ── 停止下注消息 → 清空本期数据 ──
+            // 格式：🚫 期号: 3440827 停止下注
+            if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
+              canadaBets.length = 0;
+              canadaBetPeriod = null;
+              canadaLastBetAt = 0;
+              didStop = true;
+              continue;
+            }
+
             const u = msg.sender as Api.User | null;
             const senderName = u
               ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || "")
@@ -3374,8 +3386,15 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
               newEntries.push(entry);
             }
           }
-          // 一轮 poll 所有新注合并成一个 SSE 事件，永不发 bets:reset
-          if (newEntries.length > 0) {
+          // 停止下注：推 bets:reset（清空前端）
+          if (didStop) {
+            pushAdminEvent("bets:reset", {
+              bets: [],
+              period: null,
+              term: currentLotteryTerm,
+            });
+          // 一轮 poll 所有新注合并成一个 SSE 事件
+          } else if (newEntries.length > 0) {
             canadaLastBetAt = Date.now();
             pushAdminEvent("bets:batch", {
               bets: newEntries,

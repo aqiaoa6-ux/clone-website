@@ -392,6 +392,10 @@ export default function AdminPage() {
           betBufferRef.current.push(ev.bet as GroupBetEntry);
         } else if (ev.type === "bets:reset") {
           betBufferRef.current = [];
+          latestTermRef.current = null;
+          latestLastBetAtRef.current = 0;
+          setHashLastBetAt(0);
+          if (ev.term) setHashTerm(ev.term as number);
           resetPendingRef.current = {
             bets: (ev.bets as GroupBetEntry[]) ?? [],
             period: (ev.period as string | null) ?? null,
