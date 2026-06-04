@@ -3363,6 +3363,20 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
             const text = msg.message ?? "";
             if (!text) continue;
 
+            // ── 开始下注消息 → 清空上期残留数据，准备接收新期注单 ──
+            // 格式：👉期号: 3440828  封盘时间: …  开奖时间: …
+            const isBetStart =
+              /期号/.test(text) &&
+              (text.includes("开始下注") || text.includes("开始投注") ||
+               text.includes("封盘时间") || text.includes("开奖时间"));
+            if (isBetStart) {
+              canadaBets.length = 0;
+              canadaBetPeriod = null;
+              canadaLastBetAt = 0;
+              didStop = true; // 借用 didStop 推 bets:reset 清空前端
+              continue;
+            }
+
             // ── 停止下注消息 → 清空本期数据 ──
             // 格式：🚫 期号: 3440827 停止下注
             if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
@@ -3405,7 +3419,7 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
           }
         } catch { /* network hiccup */ }
       })();
-    }, 3000);
+    }, 1000);
   })();
 }
 
