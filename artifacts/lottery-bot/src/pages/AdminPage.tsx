@@ -2116,7 +2116,7 @@ export default function AdminPage() {
                                 const isResult = rec.result === d;
                                 const isLosing = rec.result && !isResult;
                                 return (
-                                  <td key={d} className={`px-3 py-2 text-right font-mono whitespace-nowrap ${isResult ? "text-emerald-300 font-bold" : isLosing ? "text-slate-600" : "text-slate-400"}`}>
+                                  <td key={d} className={`px-3 py-2 text-right font-mono whitespace-nowrap ${isResult ? "text-emerald-300 font-bold" : isLosing ? "text-red-400" : "text-slate-400"}`}>
                                     {isResult && u > 0 && <span className="mr-1 text-emerald-500">🏆</span>}
                                     {fU(u)}
                                   </td>
