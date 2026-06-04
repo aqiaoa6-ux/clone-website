@@ -359,8 +359,12 @@ export default function AdminPage() {
           setHashBets((ev.bets as GroupBetEntry[]) ?? []);
           setHashPeriod((ev.period as string | null) ?? null);
         } else if (ev.type === "bets:reset") {
+          // 服务端 5s debounce 后统一切换，携带新期已收到的注单
           betBufferRef.current = [];
-          resetPendingRef.current = { bets: [], period: (ev.period as string | null) ?? null };
+          resetPendingRef.current = {
+            bets: (ev.bets as GroupBetEntry[]) ?? [],
+            period: (ev.period as string | null) ?? null,
+          };
         } else if (ev.type === "bet:new") {
           // 兼容旧事件（保留）
           betBufferRef.current.push(ev.bet as GroupBetEntry);
