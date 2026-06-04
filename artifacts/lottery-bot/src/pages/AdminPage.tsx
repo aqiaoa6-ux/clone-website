@@ -2173,8 +2173,11 @@ export default function AdminPage() {
                               </td>
                               {dirCols.map(d => {
                                 const u = toU(rec.dirs[d] ?? { kk: 0, usdt: 0, cny: 0 });
-                                const isResult = rec.result === d;
-                                const isLosing = rec.result && !isResult;
+                                // "大"覆盖大单/大双，"小"覆盖小单/小双
+                                const isResult = rec.result === d
+                                  || (d === "大" && rec.result != null && rec.result.startsWith("大"))
+                                  || (d === "小" && rec.result != null && rec.result.startsWith("小"));
+                                const isLosing = !!rec.result && !isResult;
                                 return (
                                   <td key={d} className={`px-3 py-2 text-right font-mono whitespace-nowrap ${isResult ? "text-emerald-300 font-bold" : isLosing ? "text-red-400" : "text-slate-400"}`}>
                                     {isResult && u > 0 && <span className="mr-1 text-emerald-500">🏆</span>}
