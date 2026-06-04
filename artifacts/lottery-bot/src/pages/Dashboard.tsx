@@ -24,14 +24,13 @@ const ALGO_LABELS: Record<string, string> = {
   ks_smart:         "快三-均值回归",
   ai_trend:         "通用-算法1",
   steady_ai:        "通用-算法2",
-  adaptive_switch:  "通用-算法3",
   hash_follow:      "哈希-算法1",
   hash_reverse:     "哈希-算法2",
   hash_smart:       "哈希-算法3",
   hash_kill:        "哈希-算法4 🎯 杀组专用",
   hash_kill_plus:   "哈希-算法5 🔥 杀组(升级版)",
-  canada_kill:      "加拿大-算法1 🍁 近热杀组",
-  canada_kill_plus: "加拿大-算法2 🔥 近热杀组(无保护)",
+  canada_kill:      "加拿大-算法1（旧版）🍁 近热杀组",
+  canada_kill_plus: "加拿大-算法2（旧版）🔥 近热杀组(无保护)",
 };
 
 const ALGO_DESC: Record<string, string> = {
@@ -41,14 +40,13 @@ const ALGO_DESC: Record<string, string> = {
   ks_smart:         "均值回归 = 近5期某方向≥4次时押反，其余跟3期多数",
   ai_trend:         "通用1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
   steady_ai:        "通用2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
-  adaptive_switch:  "通用3 = 自适应切换（龙市顺龙，震荡反向，自动切换）",
   hash_follow:      "哈希1 = 区块链龙形（顺龙1-5期，超6期反转，震荡跟尾）",
   hash_reverse:     "哈希2 = 双链均衡（三窗口加权回归，边界聚集时顺势突破）",
   hash_smart:       "哈希3 = MD5波段（短期动量×中期偏差×交替密度三维合力）",
   hash_kill:        "哈希4 🎯 = 七维杀组（带保护）散点循环/连败时自动跳过1期，稳健模式",
   hash_kill_plus:   "哈希5 🔥 = 七维杀组（升级版）无暂停，每期必下，适合搭配马丁快速追回",
-  canada_kill:      "加拿大1 🍁 = 六维近热杀组（带散点保护）杀近期最热组+押三组，连出时顺势保护，散点时跳过1期",
-  canada_kill_plus: "加拿大2 🔥 = 六维近热杀组（升级版）无暂停每期必下，适合搭配马丁快速追回",
+  canada_kill:      "加拿大1（旧版）🍁 = 六维近热杀组（带散点保护）杀近期最热组+押三组，连出时顺势保护，散点时跳过1期",
+  canada_kill_plus: "加拿大2（旧版）🔥 = 六维近热杀组（升级版）无暂停每期必下，适合搭配马丁快速追回",
 };
 
 const BET_OPT_LABELS: Record<string, string> = {
