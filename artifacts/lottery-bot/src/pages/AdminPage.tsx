@@ -1844,32 +1844,54 @@ export default function AdminPage() {
 
             {/* 方向统计 */}
             {hashBets.length > 0 && (() => {
-              const dirs = ["大单", "大双", "大", "小单", "小双", "小"] as const;
-              type Dir = typeof dirs[number];
-              const totals: Record<Dir, number> = { "大单": 0, "大双": 0, "大": 0, "小单": 0, "小双": 0, "小": 0 };
+              type Dir = "大单" | "大双" | "大" | "小单" | "小双" | "小";
+              type Cur = "kk" | "usdt" | "cny";
+              const zero = () => ({ kk: 0, usdt: 0, cny: 0 });
+              const dt: Record<Dir, { kk: number; usdt: number; cny: number }> = {
+                "大单": zero(), "大双": zero(), "大": zero(),
+                "小单": zero(), "小双": zero(), "小": zero(),
+              };
               for (const b of hashBets) {
                 const d = b.direction as Dir;
-                if (d in totals) totals[d] += b.amount;
+                if (d in dt) dt[d][b.currency] += b.amount;
               }
-              const bigTotal = totals["大单"] + totals["大双"] + totals["大"];
-              const smallTotal = totals["小单"] + totals["小双"] + totals["小"];
+              const sumDir = (d: Dir) => dt[d].kk + dt[d].usdt + dt[d].cny;
+              const bigTotal = sumDir("大单") + sumDir("大双") + sumDir("大");
+              const smallTotal = sumDir("小单") + sumDir("小双") + sumDir("小");
               const grandTotal = bigTotal + smallTotal;
-              const fmt = (n: number) => n > 0 ? n.toLocaleString("zh-CN", { maximumFractionDigits: 0 }) : "0";
               const pct = (n: number) => grandTotal > 0 ? Math.round(n / grandTotal * 100) : 0;
+              const fmt = (n: number) => n > 0 ? n.toLocaleString("zh-CN", { maximumFractionDigits: 0 }) : "";
+              const curLabel: Record<Cur, { label: string; cls: string }> = {
+                kk:   { label: "KK",   cls: "text-yellow-400" },
+                usdt: { label: "USDT", cls: "text-emerald-400" },
+                cny:  { label: "CNY",  cls: "text-blue-400" },
+              };
+              const CurLines = ({ totCur }: { totCur: { kk: number; usdt: number; cny: number } }) => (
+                <div className="space-y-0.5 mt-1">
+                  {(["kk", "usdt", "cny"] as Cur[]).map(c => totCur[c] > 0 ? (
+                    <div key={c} className="flex items-center justify-between gap-1 text-[10px]">
+                      <span className={`${curLabel[c].cls} font-semibold`}>{curLabel[c].label}</span>
+                      <span className="text-white font-mono">{fmt(totCur[c])}</span>
+                    </div>
+                  ) : null)}
+                </div>
+              );
+              const bigCur = { kk: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].kk, 0), usdt: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].usdt, 0), cny: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].cny, 0) };
+              const smlCur = { kk: ["小单","小双","小" as Dir].reduce((s,d) => s + dt[d as Dir].kk, 0), usdt: ["小单","小双","小" as Dir].reduce((s,d) => s + dt[d as Dir].usdt, 0), cny: ["小单","小双","小" as Dir].reduce((s,d) => s + dt[d as Dir].cny, 0) };
               return (
                 <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4 space-y-3">
                   <span className="text-white font-semibold text-sm">方向统计</span>
-                  {/* 大 vs 小 总览 */}
+                  {/* 大 vs 小 总览（含币种细分） */}
                   <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2.5 text-center">
-                      <div className="text-[10px] text-red-400 font-semibold mb-1">🔴 大（合计）</div>
-                      <div className="text-red-300 font-bold text-base">{fmt(bigTotal)}</div>
-                      <div className="text-red-500/60 text-[10px] mt-0.5">{pct(bigTotal)}%</div>
+                    <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-2.5">
+                      <div className="text-[10px] text-red-400 font-semibold text-center">🔴 大（合计）</div>
+                      <div className="text-red-300 font-bold text-base text-center">{pct(bigTotal)}%</div>
+                      <CurLines totCur={bigCur} />
                     </div>
-                    <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 px-3 py-2.5 text-center">
-                      <div className="text-[10px] text-sky-400 font-semibold mb-1">🔵 小（合计）</div>
-                      <div className="text-sky-300 font-bold text-base">{fmt(smallTotal)}</div>
-                      <div className="text-sky-500/60 text-[10px] mt-0.5">{pct(smallTotal)}%</div>
+                    <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 px-3 py-2.5">
+                      <div className="text-[10px] text-sky-400 font-semibold text-center">🔵 小（合计）</div>
+                      <div className="text-sky-300 font-bold text-base text-center">{pct(smallTotal)}%</div>
+                      <CurLines totCur={smlCur} />
                     </div>
                   </div>
                   {/* 进度条 */}
@@ -1878,14 +1900,20 @@ export default function AdminPage() {
                       <div className="h-full rounded-full bg-red-500/70 transition-all duration-300" style={{ width: `${pct(bigTotal)}%` }} />
                     </div>
                   )}
-                  {/* 细分 */}
+                  {/* 细分：每格按币种列出 */}
                   <div className="grid grid-cols-3 gap-1.5">
-                    {(["大单", "大双", "大", "小单", "小双", "小"] as const).map(d => {
+                    {(["大单", "大双", "大", "小单", "小双", "小"] as Dir[]).map(d => {
                       const isBig = d.startsWith("大");
                       return (
-                        <div key={d} className={`rounded-lg border px-2 py-1.5 text-center ${isBig ? "border-red-500/20 bg-red-500/5" : "border-sky-500/20 bg-sky-500/5"}`}>
-                          <div className={`text-[10px] font-semibold mb-0.5 ${isBig ? "text-red-400" : "text-sky-400"}`}>{d}</div>
-                          <div className={`font-bold text-sm ${isBig ? "text-red-300" : "text-sky-300"}`}>{fmt(totals[d])}</div>
+                        <div key={d} className={`rounded-lg border px-2 py-1.5 ${isBig ? "border-red-500/20 bg-red-500/5" : "border-sky-500/20 bg-sky-500/5"}`}>
+                          <div className={`text-[10px] font-semibold text-center mb-1 ${isBig ? "text-red-400" : "text-sky-400"}`}>{d}</div>
+                          {(["kk", "usdt", "cny"] as Cur[]).map(c => dt[d][c] > 0 ? (
+                            <div key={c} className="flex items-center justify-between text-[10px]">
+                              <span className={`${curLabel[c].cls} font-semibold`}>{curLabel[c].label}</span>
+                              <span className="text-white font-mono">{fmt(dt[d][c])}</span>
+                            </div>
+                          ) : null)}
+                          {sumDir(d) === 0 && <div className="text-slate-700 text-[10px] text-center">—</div>}
                         </div>
                       );
                     })}
