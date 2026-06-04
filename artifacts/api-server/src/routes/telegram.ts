@@ -44,6 +44,8 @@ type PeriodRecord = {
 };
 const DIR_KEYS = ["大单", "大双", "大", "小单", "小双", "小"] as const;
 const periodHistory: PeriodRecord[] = [];
+// 待快照期号：整圈轮询完才执行，确保所有群注单都已采集
+let pendingCanadaSnapshotTerm: number | null = null;
 
 // 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
 const CANADA_WINDOW_MS = 5 * 60 * 1000;
@@ -3390,83 +3392,30 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
       const text = msg.message ?? "";
       if (!text) continue;
 
-      // ── 开始下注消息 → 先快照上期数据再清空 ──
+      // ── 开始下注消息 → 仅记录新期号，等整圈后再快照 ──
       const isBetStart =
         /期号/.test(text) &&
         (text.includes("开始下注") || text.includes("开始投注") ||
          text.includes("封盘时间") || text.includes("开奖时间"));
       if (isBetStart) {
-        // 解析即将开始的新期号
         const termMatch = /期号[：:]\s*(\d+)/.exec(text);
         const newTerm = termMatch ? parseInt(termMatch[1]!, 10) : null;
-        // 先把当前正在下注期号的注单写进历史（用 canadaCurrentBetTerm，不是新期号-1）
-        const snapTerm = canadaCurrentBetTerm;
-        if (canadaBets.length > 0 && snapTerm !== null) {
-          const snap: PeriodRecord = {
-            term: snapTerm,
-            result: null,
-            closedAt: Date.now(),
-            dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
-          };
-          for (const b of canadaBets) {
-            if (b.direction in snap.dirs) {
-              snap.dirs[b.direction][b.currency] += b.amount;
-            }
-          }
-          const existing = periodHistory.find(r => r.term === snapTerm);
-          if (existing) {
-            existing.dirs = snap.dirs;
-            existing.closedAt = snap.closedAt;
-          } else {
-            periodHistory.unshift(snap);
-            periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
-            if (periodHistory.length > 30) periodHistory.pop();
-          }
-          pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
+        // 如果还没有待快照期号，把当前期号标记为待快照（整圈结束后执行）
+        if (pendingCanadaSnapshotTerm === null && canadaCurrentBetTerm !== null) {
+          pendingCanadaSnapshotTerm = canadaCurrentBetTerm;
         }
-        // 更新当前期号，清空注单
         if (newTerm !== null) canadaCurrentBetTerm = newTerm;
-        canadaBets.length = 0;
-        canadaBetPeriod = null;
-        canadaLastBetAt = 0;
         didStop = true;
         continue;
       }
 
-      // ── 停止下注消息 → 快照本期数据 + 清空 ──
+      // ── 停止下注消息 → 仅标记待快照期号，等整圈后再快照 ──
       if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
         const stopTermMatch = /期号[：:]\s*(\d+)/.exec(text);
         const stopTerm = stopTermMatch ? parseInt(stopTermMatch[1]!, 10) : currentLotteryTerm;
-        const snap: PeriodRecord = {
-          term: stopTerm,
-          result: null,
-          closedAt: Date.now(),
-          dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
-        };
-        for (const b of canadaBets) {
-          if (b.direction in snap.dirs) {
-            snap.dirs[b.direction][b.currency] += b.amount;
-          }
+        if (pendingCanadaSnapshotTerm === null) {
+          pendingCanadaSnapshotTerm = stopTerm;
         }
-        // 优先合并到风盘已自动插入的同期记录，没有再新增
-        const existing = snap.term !== null
-          ? periodHistory.find(r => r.term === snap.term)
-          : undefined;
-        if (existing) {
-          existing.dirs = snap.dirs;
-          existing.closedAt = snap.closedAt;
-        } else {
-          const hasAny = Object.values(snap.dirs).some(d => d.kk + d.usdt + d.cny > 0);
-          if (hasAny || snap.term) {
-            periodHistory.unshift(snap);
-            periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
-            if (periodHistory.length > 30) periodHistory.pop();
-          }
-        }
-        pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
-        canadaBets.length = 0;
-        canadaBetPeriod = null;
-        canadaLastBetAt = 0;
         didStop = true;
         continue;
       }
@@ -3483,9 +3432,7 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
         newEntries.push(entry);
       }
     }
-    if (didStop) {
-      pushAdminEvent("bets:reset", { bets: [], period: null, term: currentLotteryTerm });
-    } else if (newEntries.length > 0) {
+    if (!didStop && newEntries.length > 0) {
       canadaLastBetAt = Date.now();
       pushAdminEvent("bets:batch", {
         bets: newEntries, period: canadaBetPeriod,
@@ -3506,6 +3453,36 @@ function scheduleCanadaLoop(session: TgSession): void {
       if (!session.canadaMonitorPollers[gid]) continue; // removed mid-loop
       await pollOneCanadaGroup(session, gid);
       await new Promise<void>(r => setTimeout(r, 600)); // 群间间隔
+    }
+    // ── 整圈轮询完毕 → 执行待快照（所有群注单都已采集）──
+    if (pendingCanadaSnapshotTerm !== null) {
+      const snapTerm = pendingCanadaSnapshotTerm;
+      pendingCanadaSnapshotTerm = null;
+      if (canadaBets.length > 0) {
+        const snap: PeriodRecord = {
+          term: snapTerm,
+          result: null,
+          closedAt: Date.now(),
+          dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
+        };
+        for (const b of canadaBets) {
+          if (b.direction in snap.dirs) snap.dirs[b.direction][b.currency] += b.amount;
+        }
+        const existing = periodHistory.find(r => r.term === snapTerm);
+        if (existing) {
+          existing.dirs = snap.dirs;
+          existing.closedAt = snap.closedAt;
+        } else {
+          periodHistory.unshift(snap);
+          periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
+          if (periodHistory.length > 30) periodHistory.pop();
+        }
+        pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
+      }
+      canadaBets.length = 0;
+      canadaBetPeriod = null;
+      canadaLastBetAt = 0;
+      pushAdminEvent("bets:reset", { bets: [], period: null, term: currentLotteryTerm });
     }
     session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 2000);
   };
