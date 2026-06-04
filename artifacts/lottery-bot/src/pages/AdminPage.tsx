@@ -204,38 +204,48 @@ export default function AdminPage() {
   const [hashTotals, setHashTotals] = useState<{ kk: number; usdt: number; cny: number }>({ kk: 0, usdt: 0, cny: 0 });
   const [hashPeriod, setHashPeriod] = useState<string | null>(null);
   const hashSseRef = useRef<EventSource | null>(null);
-  // hash monitor group picker
-  const [hashMonGroup, setHashMonGroup] = useState<{ groupId: string | null; groupTitle: string | null; active: boolean }>({ groupId: null, groupTitle: null, active: false });
-  const [hashMonGroups, setHashMonGroups] = useState<{ id: string; title: string; type: string }[]>([]);
-  const [hashMonPickerOpen, setHashMonPickerOpen] = useState(false);
-  const [hashMonSaving, setHashMonSaving] = useState(false);
-  const [hashMonSearch, setHashMonSearch] = useState("");
+  // 加拿大监控 — 多群组管理
+  type CanadaMonGroup = { groupId: string; groupTitle: string | undefined; active: boolean };
+  const [canadaGroups, setCanadaGroups] = useState<CanadaMonGroup[]>([]);
+  const [canadaPickerOpen, setCanadaPickerOpen] = useState(false);
+  const [canadaPickerList, setCanadaPickerList] = useState<{ id: string; title: string; type: string }[]>([]);
+  const [canadaPickerSearch, setCanadaPickerSearch] = useState("");
+  const [canadaPickerSaving, setCanadaPickerSaving] = useState<string | null>(null);
 
-  const loadHashMonGroup = async () => {
+  const loadCanadaGroups = async () => {
     try {
-      const r = await api.admin.hashMonitorGroup();
-      setHashMonGroup({ groupId: r.groupId, groupTitle: r.groupTitle, active: r.active });
+      const r = await api.admin.canadaMonitorGroups();
+      setCanadaGroups(r.groups);
     } catch { /* ignore */ }
   };
 
-  const openHashMonPicker = async () => {
-    setHashMonPickerOpen(true);
-    setHashMonSearch("");
+  const openCanadaPicker = async () => {
+    setCanadaPickerOpen(true);
+    setCanadaPickerSearch("");
     try {
       const r = await api.admin.tgGroups();
       const all: { id: string; title: string; type: string }[] = [];
       for (const s of r.sessions) all.push(...s.groups);
-      setHashMonGroups(all);
+      setCanadaPickerList(all);
     } catch { /* ignore */ }
   };
 
-  const selectHashMonGroup = async (groupId: string | null) => {
-    setHashMonSaving(true);
+  const addCanadaGroup = async (groupId: string) => {
+    setCanadaPickerSaving(groupId);
     try {
-      const r = await api.admin.setHashMonitorGroup(groupId);
-      setHashMonGroup({ groupId: r.groupId, groupTitle: r.groupTitle ?? null, active: !!r.groupId });
-      setHashMonPickerOpen(false);
-    } catch { /* ignore */ } finally { setHashMonSaving(false); }
+      const r = await api.admin.addCanadaMonitorGroup(groupId);
+      setCanadaGroups(prev => {
+        if (prev.some(g => g.groupId === r.groupId)) return prev;
+        return [...prev, { groupId: r.groupId, groupTitle: r.groupTitle, active: true }];
+      });
+    } catch { /* ignore */ } finally { setCanadaPickerSaving(null); }
+  };
+
+  const removeCanadaGroup = async (groupId: string) => {
+    try {
+      await api.admin.removeCanadaMonitorGroup(groupId);
+      setCanadaGroups(prev => prev.filter(g => g.groupId !== groupId));
+    } catch { /* ignore */ }
   };
 
   // ── pwd log tab ──
@@ -325,7 +335,7 @@ export default function AdminPage() {
     if (tab === "users") void loadUsers();
     if (tab === "pwdlog") void loadPwdLog(pwdLogDate);
     if (tab === "shop") void loadShop();
-    if (tab === "hashmon") void loadHashMonGroup();
+    if (tab === "hashmon") void loadCanadaGroups();
   }, [tab]);
 
   // Hash monitor SSE — connect when tab is active, disconnect otherwise
@@ -563,7 +573,7 @@ export default function AdminPage() {
           {(["cards", "monitor", "users", "pwdlog", "shop", "hashmon"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-4 py-1.5 rounded-lg transition font-medium ${tab === t ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : "📊 哈希监控"}
+              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : "🍁 加拿大监控"}
             </button>
           ))}
         </div>
@@ -1721,73 +1731,79 @@ export default function AdminPage() {
             )}
           </>
         )}
-        {/* ── 哈希监控 ── */}
+        {/* ── 加拿大监控 ── */}
         {tab === "hashmon" && (
           <div className="space-y-3">
-            {/* 监控群组选择器 */}
+            {/* 监控群组列表 */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
-              <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center justify-between mb-3">
                 <span className="text-white font-semibold text-sm">监控群组</span>
-                {hashMonGroup.groupId && (
-                  <button
-                    onClick={() => void selectHashMonGroup(null)}
-                    className="text-[10px] text-red-400/70 hover:text-red-400 transition-colors"
-                  >清除</button>
-                )}
-              </div>
-              {hashMonGroup.groupId ? (
-                <div className="flex items-center gap-2">
-                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${hashMonGroup.active ? "bg-emerald-400" : "bg-slate-500"}`} />
-                  <span className="text-white text-sm font-medium truncate flex-1">{hashMonGroup.groupTitle ?? hashMonGroup.groupId}</span>
-                  <button
-                    onClick={() => void openHashMonPicker()}
-                    className="text-xs text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0"
-                  >换群</button>
-                </div>
-              ) : (
                 <button
-                  onClick={() => void openHashMonPicker()}
+                  onClick={() => void openCanadaPicker()}
+                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+                >+ 添加群组</button>
+              </div>
+              {canadaGroups.length === 0 ? (
+                <button
+                  onClick={() => void openCanadaPicker()}
                   className="w-full py-2.5 rounded-xl border border-dashed border-[#353a55] text-slate-400 text-sm hover:border-blue-500/50 hover:text-blue-400 transition-colors"
                 >
-                  + 选择要监控的群组
+                  + 选择要监控的加拿大群组
                 </button>
+              ) : (
+                <div className="space-y-1.5">
+                  {canadaGroups.map(g => (
+                    <div key={g.groupId} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#0d1117] border border-[#252a3d]">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${g.active ? "bg-emerald-400" : "bg-slate-500"}`} />
+                      <span className="text-white text-sm truncate flex-1">{g.groupTitle ?? g.groupId}</span>
+                      <button
+                        onClick={() => void removeCanadaGroup(g.groupId)}
+                        className="text-[10px] text-red-400/70 hover:text-red-400 transition-colors flex-shrink-0"
+                      >移除</button>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
             {/* 群组选择弹层 */}
-            {hashMonPickerOpen && (
-              <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60" onClick={() => setHashMonPickerOpen(false)}>
+            {canadaPickerOpen && (
+              <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60" onClick={() => setCanadaPickerOpen(false)}>
                 <div className="bg-[#161929] border border-[#252a3d] rounded-t-2xl w-full max-w-lg p-4 pb-8" onClick={e => e.stopPropagation()}>
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-white font-semibold text-sm">选择监控群组</span>
-                    <button onClick={() => setHashMonPickerOpen(false)} className="text-slate-400 text-lg leading-none">×</button>
+                    <span className="text-white font-semibold text-sm">添加加拿大监控群组</span>
+                    <button onClick={() => setCanadaPickerOpen(false)} className="text-slate-400 text-lg leading-none">×</button>
                   </div>
                   <input
                     className="w-full bg-[#0d1117] border border-[#252a3d] rounded-xl px-3 py-2 text-sm text-white placeholder-slate-600 mb-3 outline-none"
                     placeholder="搜索群名…"
-                    value={hashMonSearch}
-                    onChange={e => setHashMonSearch(e.target.value)}
+                    value={canadaPickerSearch}
+                    onChange={e => setCanadaPickerSearch(e.target.value)}
                   />
                   <div className="overflow-y-auto max-h-64 space-y-1">
-                    {hashMonGroups.length === 0 && (
+                    {canadaPickerList.length === 0 && (
                       <div className="text-center text-slate-600 text-sm py-6">
                         暂无群组，请先连接 TG 账号并同步群列表
                       </div>
                     )}
-                    {hashMonGroups
-                      .filter(g => !hashMonSearch || g.title.toLowerCase().includes(hashMonSearch.toLowerCase()))
-                      .map(g => (
-                        <button
-                          key={g.id}
-                          disabled={hashMonSaving}
-                          onClick={() => void selectHashMonGroup(g.id)}
-                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-white/5 transition-colors ${hashMonGroup.groupId === g.id ? "bg-blue-500/10 border border-blue-500/30" : "border border-transparent"}`}
-                        >
-                          <span className="text-slate-500 text-xs">{g.type === "channel" ? "📢" : "👥"}</span>
-                          <span className="text-white text-sm truncate flex-1">{g.title}</span>
-                          {hashMonGroup.groupId === g.id && <span className="text-blue-400 text-xs flex-shrink-0">当前</span>}
-                        </button>
-                      ))
+                    {canadaPickerList
+                      .filter(g => !canadaPickerSearch || g.title.toLowerCase().includes(canadaPickerSearch.toLowerCase()))
+                      .map(g => {
+                        const alreadyAdded = canadaGroups.some(m => m.groupId === g.id || m.groupId === `-100${g.id}`);
+                        return (
+                          <button
+                            key={g.id}
+                            disabled={canadaPickerSaving === g.id || alreadyAdded}
+                            onClick={() => void addCanadaGroup(g.id)}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-white/5 transition-colors ${alreadyAdded ? "opacity-40 cursor-not-allowed border border-transparent" : "border border-transparent"}`}
+                          >
+                            <span className="text-slate-500 text-xs">{g.type === "channel" ? "📢" : "👥"}</span>
+                            <span className="text-white text-sm truncate flex-1">{g.title}</span>
+                            {alreadyAdded && <span className="text-emerald-400 text-xs flex-shrink-0">已添加</span>}
+                            {canadaPickerSaving === g.id && <span className="text-blue-400 text-xs flex-shrink-0">添加中…</span>}
+                          </button>
+                        );
+                      })
                     }
                   </div>
                 </div>
@@ -1797,9 +1813,9 @@ export default function AdminPage() {
             {/* 期号 + 合计 */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-white font-semibold text-sm">哈希群组下注实时监控</span>
+                <span className="text-white font-semibold text-sm">🍁 加拿大下注实时监控</span>
                 <span className="text-xs text-slate-500 font-mono">
-                  {hashPeriod ? `第 ${hashPeriod} 期` : "等待新期开始…"}
+                  {hashPeriod ? `期号 ${hashPeriod.slice(0, 8)}…` : "等待新期开始…"}
                 </span>
               </div>
               <div className="grid grid-cols-3 gap-2">

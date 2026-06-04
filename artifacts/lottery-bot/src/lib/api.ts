@@ -31,8 +31,9 @@ export const api = {
 
   admin: {
     hashGroupBets: () => api.get<{ period: string | null; bets: GroupBetEntry[]; totals: { kk: number; usdt: number; cny: number } }>("/admin/hash-group-bets"),
-    hashMonitorGroup: () => api.get<{ groupId: string | null; groupTitle: string | null; userId: number | null; active: boolean }>("/admin/hash-monitor-group"),
-    setHashMonitorGroup: (groupId: string | null) => api.post<{ ok: boolean; groupId: string | null; groupTitle?: string | null }>("/admin/hash-monitor-group", { groupId }),
+    canadaMonitorGroups: () => api.get<{ groups: { groupId: string; groupTitle: string | undefined; userId: number; active: boolean }[] }>("/admin/canada-monitor-groups"),
+    addCanadaMonitorGroup: (groupId: string) => api.post<{ ok: boolean; groupId: string; groupTitle: string; userId: number }>("/admin/canada-monitor-groups/add", { groupId }),
+    removeCanadaMonitorGroup: (groupId: string) => api.post<{ ok: boolean }>("/admin/canada-monitor-groups/remove", { groupId }),
     tgGroups: () => api.get<{ sessions: { userId: number; username: string; groups: { id: string; title: string; type: string }[] }[] }>("/admin/tg-groups"),
     authStatus: () => api.get<{ hasSecret: boolean; verified: boolean }>("/admin/auth/status"),
     authVerify: (password: string) => api.post<{ ok: boolean; firstTime?: boolean }>("/admin/auth/verify", { password }),

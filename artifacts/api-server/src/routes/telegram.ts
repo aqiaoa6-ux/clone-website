@@ -26,8 +26,8 @@ interface GroupBetEntry {
   raw: string;
   period: string | null;
 }
-const hashGroupBets: GroupBetEntry[] = [];
-let hashGroupBetPeriod: string | null = null;
+const canadaBets: GroupBetEntry[] = [];
+let canadaBetPeriod: string | null = null;
 const adminSseClients = new Set<Response>();
 
 function pushAdminEvent(type: string, payload: Record<string, unknown>): void {
@@ -38,40 +38,51 @@ function pushAdminEvent(type: string, payload: Record<string, unknown>): void {
   }
 }
 
-const GCURRENCY_MAP: Record<string, "kk" | "usdt" | "cny"> = {
-  kk: "kk", usdt: "usdt", cny: "cny", 人民币: "cny", rmb: "cny",
-};
+// ─── 加拿大 kkpay 机器人确认消息解析 ──────────────────────────────────────────
+// 格式示例：
+//   Pa1n【1846644665】
+//   🎲 期号:
+//   ae4f9ff529695558b4e2baac9d078bd7
+//   🟠大 -100 CNY - ✅ 投注成功
+//   ________________
+//   💰 余额: 1010.36 CNY
+function parseCanadaBotConfirm(text: string, senderName: string): GroupBetEntry[] {
+  if (!text.includes("投注成功") || !text.includes("期号")) return [];
 
-function parseGroupBetFromText(
-  text: string,
-  senderId: string,
-  senderName: string,
-  period: string | null,
-): GroupBetEntry | null {
-  const t = text.trim();
-  // Must start with a currency keyword
-  const currMatch = t.match(/^(kk|usdt|cny|人民币|rmb)/i);
-  if (!currMatch) return null;
-  const currency = GCURRENCY_MAP[currMatch[1]!.toLowerCase()];
-  if (!currency) return null;
-  const rest = t.slice(currMatch[0].length).trim();
-  // Find amount and direction anywhere in the rest
-  const amtMatch = rest.match(/\d+(?:\.\d+)?/);
-  const dirMatch = rest.match(/大单|大双|小单|小双|大|小/);
-  if (!amtMatch || !dirMatch) return null;
-  const amount = parseFloat(amtMatch[0]);
-  if (!isFinite(amount) || amount <= 0) return null;
-  return {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    ts: Date.now(),
-    senderId,
-    senderName,
-    currency,
-    amount,
-    direction: dirMatch[0],
-    raw: t.slice(0, 120),
-    period,
-  };
+  // 提取下注人昵称和 TG ID
+  const nameMatch = text.match(/^(.+?)【(\d+)】/);
+  const betterName = nameMatch?.[1]?.trim() || senderName;
+  const betterId = nameMatch?.[2] ?? "";
+
+  // 提取期号（哈希值）
+  const periodMatch = text.match(/期号[：:]\s*\n?([a-fA-F0-9]{8,})/);
+  const period = periodMatch?.[1]?.trim() ?? null;
+
+  // 解析下注行: "[emoji?][方向/数字] -[金额] [KKCOIN|USDT|CNY] - ✅ 投注成功"
+  const betLine = /(大单|大双|小单|小双|大|小|单|双|\d{1,2})\s+-(\d+(?:\.\d+)?)\s+(KKCOIN|USDT|CNY)\s+-\s*✅\s*投注成功/gi;
+  const entries: GroupBetEntry[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = betLine.exec(text)) !== null) {
+    const direction = m[1]!;
+    const amount = parseFloat(m[2]!);
+    const currRaw = m[3]!.toUpperCase();
+    const currency: "kk" | "usdt" | "cny" =
+      currRaw === "KKCOIN" ? "kk" : currRaw === "USDT" ? "usdt" : "cny";
+    if (isFinite(amount) && amount > 0) {
+      entries.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        ts: Date.now(),
+        senderId: betterId,
+        senderName: betterName,
+        currency,
+        amount,
+        direction,
+        raw: text.slice(0, 200),
+        period,
+      });
+    }
+  }
+  return entries;
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -249,10 +260,10 @@ interface TgSession {
   hashResultPollTimer?: ReturnType<typeof setInterval>;
   hashResultLastMsgId: number;
   hashBetDelayTimer?: ReturnType<typeof setTimeout>;
-  // independent hash bet monitor (admin panel)
-  hashMonitorGroupId?: string;
-  hashMonitorPollTimer?: ReturnType<typeof setInterval>;
-  hashMonitorLastMsgId: number;
+  // 加拿大独立监控（admin 面板，支持多群）
+  canadaMonitorGroupIds: string[];
+  canadaMonitorPollers: Record<string, ReturnType<typeof setInterval>>;
+  canadaMonitorLastMsgIds: Record<string, number>;
 }
 
 interface PersistedData {
@@ -265,7 +276,7 @@ interface PersistedData {
   kkpayUsername: string;
   balanceSource: "manual" | "kkpay";
   watchGroupId?: string;
-  hashMonitorGroupId?: string;
+  canadaMonitorGroupIds?: string[];
   cfg?: Partial<BetCfg>;
   kuaisanResults?: KuaisanResult[];
   hashResults?: HashResult[];
@@ -571,7 +582,7 @@ function saveSession(session: TgSession): void {
         phone: session.me.phone,
       } : undefined,
     };
-    if (session.hashMonitorGroupId !== undefined) (data as unknown as Record<string, unknown>).hashMonitorGroupId = session.hashMonitorGroupId;
+    if (session.canadaMonitorGroupIds.length > 0) (data as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
     // 同步到数据库（异步，失败不影响主流程）
     const sessionStr = data.sessionString;
@@ -790,7 +801,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
     hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
-    hashMonitorGroupId: data.hashMonitorGroupId, hashMonitorLastMsgId: 0,
+    canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaMonitorLastMsgIds: {},
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -806,7 +817,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
 
   if (connected) {
     if (session.watchGroupId) startGroupListener(session);
-    if (session.hashMonitorGroupId) startHashMonitorPoller(session);
+    for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     logger.info({ userId }, "[tg] session restored (online)");
@@ -3101,12 +3112,6 @@ async function processHashResultMsg(session: TgSession, text: string): Promise<v
     const period = openMatch[1]!;
     if (session.hashPeriod === period && session.hashPhase === "betting") return;
     session.hashPeriod = period;
-    // 新期开始 → 重置群组下注统计
-    if (period !== hashGroupBetPeriod) {
-      hashGroupBets.length = 0;
-      hashGroupBetPeriod = period;
-      pushAdminEvent("bets:reset", { period });
-    }
     session.hashPhase = "betting";
     pushEvent(session, "hash:phase", { phase: "betting", period });
     logger.info({ period }, "[hash-result] 新期开始通知（仅更新相位）");
@@ -3281,59 +3286,67 @@ function stopHashListener(session: TgSession): void {
   stopHashResultPoller(session);
 }
 
-// ─── Hash Monitor Poller (admin panel独立监控群) ───────────────────────────────
-function stopHashMonitorPoller(session: TgSession): void {
-  if (session.hashMonitorPollTimer) {
-    clearInterval(session.hashMonitorPollTimer);
-    session.hashMonitorPollTimer = undefined;
+// ─── 加拿大监控 Poller（admin 面板，多群独立轮询）────────────────────────────
+function stopCanadaMonitorPoller(session: TgSession, groupId?: string): void {
+  const ids = groupId ? [groupId] : Object.keys(session.canadaMonitorPollers);
+  for (const gid of ids) {
+    const t = session.canadaMonitorPollers[gid];
+    if (t) { clearInterval(t); delete session.canadaMonitorPollers[gid]; }
   }
 }
 
-function startHashMonitorPoller(session: TgSession): void {
-  stopHashMonitorPoller(session);
-  if (!session.hashMonitorGroupId) return;
-  const targetId = session.hashMonitorGroupId;
+function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
+  stopCanadaMonitorPoller(session, groupId);
+  const targetId = groupId;
   void (async () => {
     try {
       const baseline = await session.client.getMessages(targetId, { limit: 1 }) as Api.Message[];
-      if (baseline.length > 0) session.hashMonitorLastMsgId = baseline[0]!.id;
-      logger.info({ targetId, baselineMsgId: session.hashMonitorLastMsgId }, "[hash-mon] poller started");
+      if (baseline.length > 0) {
+        session.canadaMonitorLastMsgIds[groupId] = baseline[0]!.id;
+        logger.info({ targetId, baseline: baseline[0]!.id }, "[canada-mon] poller started");
+      }
     } catch { /* ignore */ }
 
     if (tgSessions.get(session.userId) !== session) return;
 
-    session.hashMonitorPollTimer = setInterval(() => {
+    session.canadaMonitorPollers[groupId] = setInterval(() => {
       if (tgSessions.get(session.userId) !== session) {
-        clearInterval(session.hashMonitorPollTimer); session.hashMonitorPollTimer = undefined; return;
+        stopCanadaMonitorPoller(session, groupId); return;
       }
       void (async () => {
         try {
+          const lastId = session.canadaMonitorLastMsgIds[groupId] ?? 0;
           const msgs = await session.client.getMessages(targetId, {
             limit: 20,
-            ...(session.hashMonitorLastMsgId > 0 ? { minId: session.hashMonitorLastMsgId } : {}),
+            ...(lastId > 0 ? { minId: lastId } : {}),
           }) as Api.Message[];
           if (!msgs.length) return;
           const sorted = [...msgs].sort((a, b) => a.id - b.id);
           for (const msg of sorted) {
-            if (msg.id <= session.hashMonitorLastMsgId) continue;
-            session.hashMonitorLastMsgId = msg.id;
+            const curLast = session.canadaMonitorLastMsgIds[groupId] ?? 0;
+            if (msg.id <= curLast) continue;
+            session.canadaMonitorLastMsgIds[groupId] = msg.id;
             const text = msg.message ?? "";
-            if (!text || msg.out) continue;
-            const senderId = String(msg.senderId ?? "");
+            if (!text) continue;
             const u = msg.sender as Api.User | null;
             const senderName = u
-              ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || senderId)
-              : senderId;
-            const bet = parseGroupBetFromText(text, senderId, senderName, hashGroupBetPeriod);
-            if (bet) {
-              hashGroupBets.unshift(bet);
-              if (hashGroupBets.length > 500) hashGroupBets.pop();
-              pushAdminEvent("bet:new", { bet });
+              ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || "")
+              : "";
+            const entries = parseCanadaBotConfirm(text, senderName);
+            for (const entry of entries) {
+              if (entry.period && entry.period !== canadaBetPeriod) {
+                canadaBets.length = 0;
+                canadaBetPeriod = entry.period;
+                pushAdminEvent("bets:reset", { period: canadaBetPeriod });
+              }
+              canadaBets.unshift(entry);
+              if (canadaBets.length > 500) canadaBets.pop();
+              pushAdminEvent("bet:new", { bet: entry });
             }
           }
         } catch { /* network hiccup */ }
       })();
-    }, 2500);
+    }, 2000);
   })();
 }
 
@@ -3391,25 +3404,6 @@ function startHashListener(session: TgSession): void {
           session.hashLastMsgId = msg.id;
           const text = msg.message ?? "";
           await processHashMessage(session, text, msg.id);
-          // ── 下注群成员投注解析 ──
-          if (text && !msg.out) {
-            const senderId = String(msg.senderId ?? "");
-            const u = msg.sender as Api.User | null;
-            const senderName = u
-              ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || senderId)
-              : senderId;
-            const bet = parseGroupBetFromText(text, senderId, senderName, session.hashPeriod);
-            if (bet) {
-              if (session.hashPeriod && session.hashPeriod !== hashGroupBetPeriod) {
-                hashGroupBets.length = 0;
-                hashGroupBetPeriod = session.hashPeriod;
-                pushAdminEvent("bets:reset", { period: hashGroupBetPeriod });
-              }
-              hashGroupBets.unshift(bet);
-              if (hashGroupBets.length > 500) hashGroupBets.pop();
-              pushAdminEvent("bet:new", { bet });
-            }
-          }
         }
       } catch { /* network hiccup */ }
     })();
@@ -3665,7 +3659,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
       hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
-      hashMonitorLastMsgId: 0,
+      canadaMonitorGroupIds: [], canadaMonitorPollers: {}, canadaMonitorLastMsgIds: {},
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
@@ -4592,10 +4586,9 @@ router.get("/admin/hash-group-bets/events", requireAdminSecret, (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   res.write(": connected\n\n");
-  // Send current state immediately
   const totals = { kk: 0, usdt: 0, cny: 0 };
-  for (const b of hashGroupBets) totals[b.currency] += b.amount;
-  res.write(`data: ${JSON.stringify({ type: "init", period: hashGroupBetPeriod, bets: hashGroupBets, totals })}\n\n`);
+  for (const b of canadaBets) totals[b.currency] += b.amount;
+  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, bets: canadaBets, totals })}\n\n`);
   adminSseClients.add(res);
   const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
   req.on("close", () => { clearInterval(hb); adminSseClients.delete(res); });
@@ -4603,52 +4596,63 @@ router.get("/admin/hash-group-bets/events", requireAdminSecret, (req, res) => {
 
 router.get("/admin/hash-group-bets", requireAdminSecret, (_req, res) => {
   const totals = { kk: 0, usdt: 0, cny: 0 };
-  for (const b of hashGroupBets) totals[b.currency] += b.amount;
-  res.json({ period: hashGroupBetPeriod, bets: hashGroupBets, totals });
+  for (const b of canadaBets) totals[b.currency] += b.amount;
+  res.json({ period: canadaBetPeriod, bets: canadaBets, totals });
 });
 
-// ─── Hash Monitor Group config ────────────────────────────────────────────────
-router.get("/admin/hash-monitor-group", requireAdminSecret, (_req, res) => {
+// ─── 加拿大监控群组配置 ─────────────────────────────────────────────────────
+// 辅助: 找到监控某个 groupId 的 session（先找已有的，再找第一个可用的）
+function findSessionForGroup(groupId: string): TgSession | undefined {
+  for (const s of tgSessions.values()) {
+    if (s.canadaMonitorGroupIds.includes(groupId) && s.me) return s;
+  }
+  for (const s of tgSessions.values()) { if (s.me) return s; }
+  return undefined;
+}
+
+// GET /admin/canada-monitor-groups — 列出当前所有监控群
+router.get("/admin/canada-monitor-groups", requireAdminSecret, (_req, res) => {
+  const groups: Array<{ groupId: string; groupTitle: string | undefined; userId: number; active: boolean }> = [];
   for (const session of tgSessions.values()) {
-    if (session.hashMonitorGroupId) {
-      const title = session.groups.find(g =>
-        g.id === session.hashMonitorGroupId || `-100${g.id}` === session.hashMonitorGroupId
-      )?.title;
-      res.json({
-        groupId: session.hashMonitorGroupId,
-        groupTitle: title ?? session.hashMonitorGroupId,
-        userId: session.userId,
-        active: !!session.hashMonitorPollTimer,
-      });
-      return;
+    for (const gid of session.canadaMonitorGroupIds) {
+      const title = session.groups.find(g => g.id === gid || `-100${g.id}` === gid)?.title;
+      groups.push({ groupId: gid, groupTitle: title, userId: session.userId, active: !!session.canadaMonitorPollers[gid] });
     }
   }
-  res.json({ groupId: null, groupTitle: null, userId: null, active: false });
+  res.json({ groups });
 });
 
-router.post("/admin/hash-monitor-group", requireAdminSecret, (req, res) => {
-  const { groupId } = req.body as { groupId?: string | null };
-  // Clear all existing monitor pollers
-  for (const session of tgSessions.values()) {
-    stopHashMonitorPoller(session);
-    session.hashMonitorGroupId = undefined;
-    saveSession(session);
-  }
-  if (!groupId) { res.json({ ok: true, groupId: null }); return; }
-  // Find the first connected session to use for monitoring
-  let target: TgSession | undefined;
-  for (const session of tgSessions.values()) {
-    if (session.me) { target = session; break; }
-  }
+// POST /admin/canada-monitor-groups/add — 添加监控群
+router.post("/admin/canada-monitor-groups/add", requireAdminSecret, (req, res) => {
+  const { groupId } = req.body as { groupId?: string };
+  if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
+  const target = findSessionForGroup(groupId);
   if (!target) { res.status(400).json({ error: "没有已连接的 TG 账号" }); return; }
-  target.hashMonitorGroupId = groupId;
-  saveSession(target);
-  startHashMonitorPoller(target);
+  if (!target.canadaMonitorGroupIds.includes(groupId)) {
+    target.canadaMonitorGroupIds.push(groupId);
+    saveSession(target);
+  }
+  startCanadaMonitorPoller(target, groupId);
   const title = target.groups.find(g => g.id === groupId || `-100${g.id}` === groupId)?.title;
   res.json({ ok: true, groupId, groupTitle: title ?? groupId, userId: target.userId });
 });
 
-// GET /admin/tg-groups — list all groups from all connected TG sessions (for picker)
+// POST /admin/canada-monitor-groups/remove — 移除监控群
+router.post("/admin/canada-monitor-groups/remove", requireAdminSecret, (req, res) => {
+  const { groupId } = req.body as { groupId?: string };
+  if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
+  for (const session of tgSessions.values()) {
+    const idx = session.canadaMonitorGroupIds.indexOf(groupId);
+    if (idx >= 0) {
+      stopCanadaMonitorPoller(session, groupId);
+      session.canadaMonitorGroupIds.splice(idx, 1);
+      saveSession(session);
+    }
+  }
+  res.json({ ok: true });
+});
+
+// GET /admin/tg-groups — 列出所有已连接账号的群组列表（用于选群）
 router.get("/admin/tg-groups", requireAdminSecret, (_req, res) => {
   const result: Array<{ userId: number; username: string; groups: { id: string; title: string; type: string }[] }> = [];
   for (const [uid, session] of tgSessions.entries()) {
