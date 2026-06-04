@@ -187,7 +187,7 @@ function TgLoginCard({ onDone }: { onDone: () => void }) {
 
 // ─── Group Setup ──────────────────────────────────────────────────────────────
 
-function GroupSetupCard({ groups, onDone }: { groups: TgGroup[]; onDone: () => void }) {
+function GroupSetupCard({ groups, onDone, onRelogin }: { groups: TgGroup[]; onDone: () => void; onRelogin: () => void }) {
   const [link, setLink] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -253,6 +253,15 @@ function GroupSetupCard({ groups, onDone }: { groups: TgGroup[]; onDone: () => v
           </div>
         </>
       )}
+
+      <div className="mt-4 pt-3 border-t border-[#1e2235]">
+        <button
+          onClick={() => { void api.tg.disconnect().catch(() => {}); onRelogin(); }}
+          className="w-full text-slate-500 hover:text-rose-400 text-xs transition py-1"
+        >
+          切换 / 重新连接 Telegram 账号
+        </button>
+      </div>
     </div>
   );
 }
@@ -1063,7 +1072,7 @@ export default function Dashboard() {
 
         {/* Group Setup */}
         {tgStep === "group" && (
-          <GroupSetupCard groups={groups} onDone={() => void fetchStatus()} />
+          <GroupSetupCard groups={groups} onDone={() => void fetchStatus()} onRelogin={() => setTgStep("login")} />
         )}
 
         {/* Main content when ready */}
