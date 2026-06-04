@@ -3389,12 +3389,37 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
       const text = msg.message ?? "";
       if (!text) continue;
 
-      // ── 开始下注消息 → 清空上期残留数据 ──
+      // ── 开始下注消息 → 先快照上期数据再清空 ──
       const isBetStart =
         /期号/.test(text) &&
         (text.includes("开始下注") || text.includes("开始投注") ||
          text.includes("封盘时间") || text.includes("开奖时间"));
       if (isBetStart) {
+        // 先把上期注单写进历史（如果还没写）
+        if (canadaBets.length > 0 && currentLotteryTerm !== null) {
+          const prevTerm = currentLotteryTerm - 1;
+          const snap: PeriodRecord = {
+            term: prevTerm,
+            result: null,
+            closedAt: Date.now(),
+            dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
+          };
+          for (const b of canadaBets) {
+            if (b.direction in snap.dirs) {
+              snap.dirs[b.direction][b.currency] += b.amount;
+            }
+          }
+          const existing = periodHistory.find(r => r.term === prevTerm);
+          if (existing) {
+            existing.dirs = snap.dirs;
+            existing.closedAt = snap.closedAt;
+          } else {
+            periodHistory.unshift(snap);
+            periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
+            if (periodHistory.length > 30) periodHistory.pop();
+          }
+          pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
+        }
         canadaBets.length = 0;
         canadaBetPeriod = null;
         canadaLastBetAt = 0;
