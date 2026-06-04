@@ -300,7 +300,8 @@ interface TgSession {
   hashBetDelayTimer?: ReturnType<typeof setTimeout>;
   // 加拿大独立监控（admin 面板，支持多群）
   canadaMonitorGroupIds: string[];
-  canadaMonitorPollers: Record<string, ReturnType<typeof setInterval>>;
+  canadaMonitorPollers: Record<string, boolean>;   // groupId → active flag
+  canadaSharedPoller?: ReturnType<typeof setTimeout>; // 单一串行 loop
   canadaMonitorLastMsgIds: Record<string, number>;
 }
 
@@ -868,7 +869,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
     hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
-    canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaMonitorLastMsgIds: {},
+    canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {},
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -3355,134 +3356,143 @@ function stopHashListener(session: TgSession): void {
 
 // ─── 加拿大监控 Poller（admin 面板，多群独立轮询）────────────────────────────
 function stopCanadaMonitorPoller(session: TgSession, groupId?: string): void {
-  const ids = groupId ? [groupId] : Object.keys(session.canadaMonitorPollers);
-  for (const gid of ids) {
-    const t = session.canadaMonitorPollers[gid];
-    if (t) { clearInterval(t); delete session.canadaMonitorPollers[gid]; }
+  if (groupId) {
+    delete session.canadaMonitorPollers[groupId];
+  } else {
+    for (const gid of Object.keys(session.canadaMonitorPollers)) {
+      delete session.canadaMonitorPollers[gid];
+    }
+  }
+  // 如果没有活跃群组，停止共享 loop
+  if (Object.keys(session.canadaMonitorPollers).length === 0 && session.canadaSharedPoller) {
+    clearTimeout(session.canadaSharedPoller);
+    session.canadaSharedPoller = undefined;
   }
 }
 
+// 对单个群组拉取并处理新消息；返回 true 表示触发了「停止下注」
+async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<void> {
+  try {
+    const lastId = session.canadaMonitorLastMsgIds[groupId] ?? 0;
+    const msgs = await session.client.getMessages(groupId, {
+      limit: 20,
+      ...(lastId > 0 ? { minId: lastId } : {}),
+    }) as Api.Message[];
+    if (!msgs.length) return;
+    const sorted = [...msgs].sort((a, b) => a.id - b.id);
+    const newEntries: GroupBetEntry[] = [];
+    let didStop = false;
+    for (const msg of sorted) {
+      const curLast = session.canadaMonitorLastMsgIds[groupId] ?? 0;
+      if (msg.id <= curLast) continue;
+      session.canadaMonitorLastMsgIds[groupId] = msg.id;
+      const text = msg.message ?? "";
+      if (!text) continue;
+
+      // ── 开始下注消息 → 清空上期残留数据 ──
+      const isBetStart =
+        /期号/.test(text) &&
+        (text.includes("开始下注") || text.includes("开始投注") ||
+         text.includes("封盘时间") || text.includes("开奖时间"));
+      if (isBetStart) {
+        canadaBets.length = 0;
+        canadaBetPeriod = null;
+        canadaLastBetAt = 0;
+        didStop = true;
+        continue;
+      }
+
+      // ── 停止下注消息 → 快照本期数据 + 清空 ──
+      if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
+        const snap: PeriodRecord = {
+          term: currentLotteryTerm,
+          result: null,
+          closedAt: Date.now(),
+          dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
+        };
+        for (const b of canadaBets) {
+          if (b.direction in snap.dirs) {
+            snap.dirs[b.direction][b.currency] += b.amount;
+          }
+        }
+        // 优先合并到风盘已自动插入的同期记录，没有再新增
+        const existing = snap.term !== null
+          ? periodHistory.find(r => r.term === snap.term)
+          : undefined;
+        if (existing) {
+          existing.dirs = snap.dirs;
+          existing.closedAt = snap.closedAt;
+        } else {
+          const hasAny = Object.values(snap.dirs).some(d => d.kk + d.usdt + d.cny > 0);
+          if (hasAny || snap.term) {
+            periodHistory.unshift(snap);
+            periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
+            if (periodHistory.length > 30) periodHistory.pop();
+          }
+        }
+        pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
+        canadaBets.length = 0;
+        canadaBetPeriod = null;
+        canadaLastBetAt = 0;
+        didStop = true;
+        continue;
+      }
+
+      const u = msg.sender as Api.User | null;
+      const senderName = u
+        ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || "")
+        : "";
+      const entries = parseCanadaBotConfirm(text, senderName);
+      for (const entry of entries) {
+        if (entry.period) canadaBetPeriod = entry.period;
+        canadaBets.unshift(entry);
+        if (canadaBets.length > 500) canadaBets.pop();
+        newEntries.push(entry);
+      }
+    }
+    if (didStop) {
+      pushAdminEvent("bets:reset", { bets: [], period: null, term: currentLotteryTerm });
+    } else if (newEntries.length > 0) {
+      canadaLastBetAt = Date.now();
+      pushAdminEvent("bets:batch", {
+        bets: newEntries, period: canadaBetPeriod,
+        term: currentLotteryTerm, lastBetAt: canadaLastBetAt,
+      });
+    }
+  } catch { /* network hiccup / flood wait handled by GramJS */ }
+}
+
+// 单一串行共享 loop：依次轮询每个活跃群组，群间等待 600ms，每轮结束等 2s
+function scheduleCanadaLoop(session: TgSession): void {
+  if (session.canadaSharedPoller) return; // already scheduled
+  const loop = async () => {
+    if (tgSessions.get(session.userId) !== session) return;
+    const activeGroups = Object.keys(session.canadaMonitorPollers).filter(g => session.canadaMonitorPollers[g]);
+    if (activeGroups.length === 0) { session.canadaSharedPoller = undefined; return; }
+    for (const gid of activeGroups) {
+      if (!session.canadaMonitorPollers[gid]) continue; // removed mid-loop
+      await pollOneCanadaGroup(session, gid);
+      await new Promise<void>(r => setTimeout(r, 600)); // 群间间隔
+    }
+    session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 2000);
+  };
+  session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 0);
+}
+
 function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
-  stopCanadaMonitorPoller(session, groupId);
-  const targetId = groupId;
+  // 先拉基准消息 ID，避免重播历史
   void (async () => {
     try {
-      const baseline = await session.client.getMessages(targetId, { limit: 1 }) as Api.Message[];
-      if (baseline.length > 0) {
-        session.canadaMonitorLastMsgIds[groupId] = baseline[0]!.id;
-        logger.info({ targetId, baseline: baseline[0]!.id }, "[canada-mon] poller started");
+      if (!session.canadaMonitorLastMsgIds[groupId]) {
+        const baseline = await session.client.getMessages(groupId, { limit: 1 }) as Api.Message[];
+        if (baseline.length > 0) {
+          session.canadaMonitorLastMsgIds[groupId] = baseline[0]!.id;
+          logger.info({ groupId, baseline: baseline[0]!.id }, "[canada-mon] group registered");
+        }
       }
     } catch { /* ignore */ }
-
-    if (tgSessions.get(session.userId) !== session) return;
-
-    session.canadaMonitorPollers[groupId] = setInterval(() => {
-      if (tgSessions.get(session.userId) !== session) {
-        stopCanadaMonitorPoller(session, groupId); return;
-      }
-      void (async () => {
-        try {
-          const lastId = session.canadaMonitorLastMsgIds[groupId] ?? 0;
-          const msgs = await session.client.getMessages(targetId, {
-            limit: 20,
-            ...(lastId > 0 ? { minId: lastId } : {}),
-          }) as Api.Message[];
-          if (!msgs.length) return;
-          const sorted = [...msgs].sort((a, b) => a.id - b.id);
-          const newEntries: GroupBetEntry[] = [];
-          let didStop = false;
-          for (const msg of sorted) {
-            const curLast = session.canadaMonitorLastMsgIds[groupId] ?? 0;
-            if (msg.id <= curLast) continue;
-            session.canadaMonitorLastMsgIds[groupId] = msg.id;
-            const text = msg.message ?? "";
-            if (!text) continue;
-
-            // ── 开始下注消息 → 清空上期残留数据，准备接收新期注单 ──
-            // 格式：👉期号: 3440828  封盘时间: …  开奖时间: …
-            const isBetStart =
-              /期号/.test(text) &&
-              (text.includes("开始下注") || text.includes("开始投注") ||
-               text.includes("封盘时间") || text.includes("开奖时间"));
-            if (isBetStart) {
-              canadaBets.length = 0;
-              canadaBetPeriod = null;
-              canadaLastBetAt = 0;
-              didStop = true; // 借用 didStop 推 bets:reset 清空前端
-              continue;
-            }
-
-            // ── 停止下注消息 → 快照本期数据 + 清空 ──
-            // 格式：🚫 期号: 3440827 停止下注
-            if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
-              // 快照本期方向统计（在清空之前）
-              const snap: PeriodRecord = {
-                term: currentLotteryTerm,
-                result: null,
-                closedAt: Date.now(),
-                dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
-              };
-              for (const b of canadaBets) {
-                if (b.direction in snap.dirs) {
-                  snap.dirs[b.direction][b.currency] += b.amount;
-                }
-              }
-              // 优先合并到风盘已自动插入的同期记录，没有再新增
-              const existing = snap.term !== null
-                ? periodHistory.find(r => r.term === snap.term)
-                : undefined;
-              if (existing) {
-                existing.dirs = snap.dirs;          // 用真实注单覆盖空 dirs
-                existing.closedAt = snap.closedAt;
-              } else {
-                const hasAny = Object.values(snap.dirs).some(d => d.kk + d.usdt + d.cny > 0);
-                if (hasAny || snap.term) {
-                  periodHistory.unshift(snap);
-                  periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
-                  if (periodHistory.length > 30) periodHistory.pop();
-                }
-              }
-              pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
-              canadaBets.length = 0;
-              canadaBetPeriod = null;
-              canadaLastBetAt = 0;
-              didStop = true;
-              continue;
-            }
-
-            const u = msg.sender as Api.User | null;
-            const senderName = u
-              ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || "")
-              : "";
-            const entries = parseCanadaBotConfirm(text, senderName);
-            for (const entry of entries) {
-              // 各群 period hash 格式不统一，不做跨群比对；只用最新一条的 period 做 header 展示
-              if (entry.period) canadaBetPeriod = entry.period;
-              canadaBets.unshift(entry);
-              if (canadaBets.length > 500) canadaBets.pop();
-              newEntries.push(entry);
-            }
-          }
-          // 停止下注：推 bets:reset（清空前端）
-          if (didStop) {
-            pushAdminEvent("bets:reset", {
-              bets: [],
-              period: null,
-              term: currentLotteryTerm,
-            });
-          // 一轮 poll 所有新注合并成一个 SSE 事件
-          } else if (newEntries.length > 0) {
-            canadaLastBetAt = Date.now();
-            pushAdminEvent("bets:batch", {
-              bets: newEntries,
-              period: canadaBetPeriod,
-              term: currentLotteryTerm,
-              lastBetAt: canadaLastBetAt,
-            });
-          }
-        } catch { /* network hiccup */ }
-      })();
-    }, 1000);
+    session.canadaMonitorPollers[groupId] = true;
+    scheduleCanadaLoop(session);
   })();
 }
 
@@ -3795,7 +3805,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
       hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
-      canadaMonitorGroupIds: [], canadaMonitorPollers: {}, canadaMonitorLastMsgIds: {},
+      canadaMonitorGroupIds: [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {},
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
