@@ -780,6 +780,26 @@ function startGlobalListener(session: TgSession): void {
   session.client.addEventHandler(session.globalHandler, session.globalHandlerBuilder);
 }
 
+/** Telegram 致命错误：不可重试，需要重新登录 */
+function isFatalAuthError(e: unknown): boolean {
+  if (!e) return false;
+  const msg = (e instanceof Error ? e.message : String(e)).toUpperCase();
+  return msg.includes("AUTH_KEY_DUPLICATED") ||
+         msg.includes("AUTH_KEY_UNREGISTERED") ||
+         msg.includes("SESSION_REVOKED") ||
+         msg.includes("USER_DEACTIVATED");
+}
+
+/** 清除 session 内存状态 + 删除 session 文件，让用户重新登录 */
+function destroySession(session: TgSession, reason: string): void {
+  stopAllTimers(session);
+  tgSessions.delete(session.userId);
+  try { session.client.disconnect(); } catch { /* ok */ }
+  try { fs.unlinkSync(sessionFile(session.userId)); } catch { /* ok */ }
+  logger.warn({ userId: session.userId, reason }, "[tg] fatal auth error — session destroyed, user must re-login");
+  pushEvent(session, "session:fatal", { reason });
+}
+
 function startWatchdog(session: TgSession): void {
   stopAllTimers(session);
 
@@ -793,7 +813,8 @@ function startWatchdog(session: TgSession): void {
     void (async () => {
       try {
         await session.client.getMe();
-      } catch {
+      } catch (e1) {
+        if (isFatalAuthError(e1)) { destroySession(session, String(e1)); return; }
         try {
           await session.client.connect();
           if (session.watchGroupId) startGroupListener(session);
@@ -801,7 +822,10 @@ function startWatchdog(session: TgSession): void {
           await startKkpayListener(session);
           saveSession(session);
           pushEvent(session, "session:reconnected", { at: Date.now() });
-        } catch { /* retry next cycle */ }
+        } catch (e2) {
+          if (isFatalAuthError(e2)) { destroySession(session, String(e2)); return; }
+          /* retry next cycle */
+        }
       }
     })();
   }, 15 * 1000);
@@ -832,7 +856,13 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     await client.connect();
     me = (await client.getMe()) as Api.User;
     if (me?.id) connected = true;
-  } catch {
+  } catch (e) {
+    if (isFatalAuthError(e)) {
+      logger.warn({ userId }, "[tg] restore — fatal auth error, deleting session file");
+      try { fs.unlinkSync(file); } catch { /* ok */ }
+      try { await client.disconnect(); } catch { /* ok */ }
+      return;
+    }
     logger.warn({ userId }, "[tg] restore connect failed — creating offline session");
   }
 
