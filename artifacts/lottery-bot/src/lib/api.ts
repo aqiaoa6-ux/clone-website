@@ -150,6 +150,7 @@ export interface BetCfg {
   odds: number;
   chaseNumbers: Array<{ num: number; amount: number }>;
   enableChase: boolean;
+  chaseOnly?: boolean;
   chaseDoubleOnLoss?: boolean;
   chaseAmountLevels?: number[];
   gameMode?: string;

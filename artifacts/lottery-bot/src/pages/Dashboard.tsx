@@ -297,6 +297,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [showChase, setShowChase] = useState(status.enableChase ?? false);
   const CHASE_DEFAULT_LEVELS = [100, 200, 300, 500, 800, 1200, 1800, 2700, 4000, 6000, 9000, 13000, 19000, 28000, 40000, 58000, 84000, 120000, 175000, 250000, 360000, 520000, 750000, 1000000];
   const serverChaseLevels = (status as unknown as { chaseAmountLevels?: number[] }).chaseAmountLevels ?? [];
+  const [chaseOnly, setChaseOnly] = useState<boolean>(!!(status as unknown as { chaseOnly?: boolean }).chaseOnly);
   const [chaseDoubleOnLoss, setChaseDoubleOnLoss] = useState<boolean>(!!(status as unknown as { chaseDoubleOnLoss?: boolean }).chaseDoubleOnLoss);
   const [chaseLevels, setChaseLevels] = useState<string[]>(
     Array.from({ length: 24 }, (_, i) => String(serverChaseLevels[i] ?? CHASE_DEFAULT_LEVELS[i] ?? 100))
@@ -334,6 +335,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
           .map(c => ({ num: Number(c.num), amount: Number(c.amount) }))
           .filter(c => c.num >= 0 && c.num <= 27 && c.amount > 0),
         enableChase,
+        chaseOnly,
         chaseDoubleOnLoss,
         chaseAmountLevels: chaseLevels.map(Number),
         gameMode,
@@ -635,6 +637,20 @@ function SettingsDrawer({ status, onClose, onSave }: {
                     className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${enableChase ? "bg-amber-500" : "bg-[#252a3d]"}`}
                   >
                     <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${enableChase ? "left-5.5" : "left-0.5"}`} />
+                  </button>
+                </div>
+
+                {/* 仅追号模式开关 */}
+                <div className={`flex items-center justify-between px-4 py-2 border-t ${chaseOnly ? "border-amber-500/20 bg-amber-900/10" : "border-[#1e2235]"}`}>
+                  <div>
+                    <p className={`text-xs font-semibold ${chaseOnly ? "text-amber-300" : "text-slate-400"}`}>仅追号模式</p>
+                    <p className="text-[10px] text-slate-600 mt-0.5">开启后只发追号注，不发主注方向</p>
+                  </div>
+                  <button
+                    onClick={() => setChaseOnly(v => !v)}
+                    className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${chaseOnly ? "bg-amber-500" : "bg-[#252a3d]"}`}
+                  >
+                    <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${chaseOnly ? "left-5.5" : "left-0.5"}`} />
                   </button>
                 </div>
 
