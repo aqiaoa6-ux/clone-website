@@ -1960,24 +1960,29 @@ export default function AdminPage() {
                 cny:  { label: "CNY",  cls: "text-blue-400" },
               };
               const KK_RATE = 100_000;
-              const CurLines = ({ totCur }: { totCur: { kk: number; usdt: number; cny: number } }) => (
-                <div className="space-y-1 mt-1.5">
-                  {(["kk", "usdt", "cny"] as Cur[]).map(c => totCur[c] > 0 ? (
-                    <div key={c} className="flex items-center justify-between gap-2 text-sm">
-                      <span className={`${curLabel[c].cls} font-semibold`}>{curLabel[c].label}</span>
-                      <span className="text-white font-mono">{fmt(totCur[c])}</span>
-                    </div>
-                  ) : null)}
-                  {totCur.kk > 0 && (
-                    <div className="flex items-center justify-between gap-2 text-xs border-t border-yellow-500/10 pt-1 mt-1">
-                      <span className="text-yellow-500/60">⚡≈</span>
-                      <span className="text-emerald-400 font-mono font-semibold">
-                        {(totCur.kk / KK_RATE).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 4 })} U
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
+              const CNY_RATE = 6.7;
+              const toUsdt = (c: { kk: number; usdt: number; cny: number }) =>
+                c.kk / KK_RATE + c.usdt + c.cny / CNY_RATE;
+              const fmtU = (u: number) => u.toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+              const CurLines = ({ totCur }: { totCur: { kk: number; usdt: number; cny: number } }) => {
+                const uTotal = toUsdt(totCur);
+                return (
+                  <div className="space-y-1 mt-1.5">
+                    {(["kk", "usdt", "cny"] as Cur[]).map(c => totCur[c] > 0 ? (
+                      <div key={c} className="flex items-center justify-between gap-2 text-sm">
+                        <span className={`${curLabel[c].cls} font-semibold`}>{curLabel[c].label}</span>
+                        <span className="text-white font-mono">{fmt(totCur[c])}</span>
+                      </div>
+                    ) : null)}
+                    {uTotal > 0 && (
+                      <div className="flex items-center justify-between gap-2 text-sm border-t border-emerald-500/20 pt-1 mt-1">
+                        <span className="text-emerald-400/70 font-semibold">≈ U</span>
+                        <span className="text-emerald-300 font-mono font-bold">{fmtU(uTotal)}</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              };
               const bigCur = { kk: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].kk, 0), usdt: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].usdt, 0), cny: ["大单","大双","大" as Dir].reduce((s,d) => s + dt[d as Dir].cny, 0) };
               const smlCur = { kk: ["小单","小双","小" as Dir].reduce((s,d) => s + dt[d as Dir].kk, 0), usdt: ["小单","小双","小" as Dir].reduce((s,d) => s + dt[d as Dir].usdt, 0), cny: ["小单","小双","小" as Dir].reduce((s,d) => s + dt[d as Dir].cny, 0) };
               return (
@@ -2015,6 +2020,12 @@ export default function AdminPage() {
                               <span className="text-white font-mono">{fmt(dt[d][c])}</span>
                             </div>
                           ) : null)}
+                          {toUsdt(dt[d]) > 0 && (
+                            <div className="flex items-center justify-between text-xs border-t border-emerald-500/20 pt-1 mt-1">
+                              <span className="text-emerald-400/70 font-semibold">≈ U</span>
+                              <span className="text-emerald-300 font-mono font-bold">{fmtU(toUsdt(dt[d]))}</span>
+                            </div>
+                          )}
                           {sumDir(d) === 0 && <div className="text-slate-700 text-[10px] text-center">—</div>}
                         </div>
                       );
