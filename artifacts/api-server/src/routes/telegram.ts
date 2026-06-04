@@ -3395,9 +3395,12 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
         (text.includes("开始下注") || text.includes("开始投注") ||
          text.includes("封盘时间") || text.includes("开奖时间"));
       if (isBetStart) {
-        // 先把上期注单写进历史（如果还没写）
-        if (canadaBets.length > 0 && currentLotteryTerm !== null) {
-          const prevTerm = currentLotteryTerm - 1;
+        // 从消息中解析本期期号，上期 = 本期 - 1
+        const termMatch = /期号[：:]\s*(\d+)/.exec(text);
+        const thisTerm = termMatch ? parseInt(termMatch[1]!, 10) : null;
+        const prevTerm = thisTerm !== null ? thisTerm - 1 : null;
+        // 先把上期注单写进历史（如果还没写且有数据）
+        if (canadaBets.length > 0 && prevTerm !== null) {
           const snap: PeriodRecord = {
             term: prevTerm,
             result: null,
@@ -3429,8 +3432,10 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
 
       // ── 停止下注消息 → 快照本期数据 + 清空 ──
       if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
+        const stopTermMatch = /期号[：:]\s*(\d+)/.exec(text);
+        const stopTerm = stopTermMatch ? parseInt(stopTermMatch[1]!, 10) : currentLotteryTerm;
         const snap: PeriodRecord = {
-          term: currentLotteryTerm,
+          term: stopTerm,
           result: null,
           closedAt: Date.now(),
           dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
