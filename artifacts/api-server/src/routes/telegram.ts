@@ -404,8 +404,10 @@ async function warmLotteryCache(): Promise<void> {
     const items = data?.message?.all?.keno28?.data ?? [];
     const labels = items.map(d => d.r3).filter((x): x is string => !!x).reverse();
     if (labels.length) lotteryHistoryCache = labels.slice(-50);
-    // 记录最新彩票期号（数字）
-    if (items.length > 0 && items[0]!.term) currentLotteryTerm = items[0]!.term;
+    // 记录当前投注期号：items[0].r3 存在=已开奖，下一期才是当前期；否则 items[0] 本身是当前期
+    if (items.length > 0 && items[0]!.term) {
+      currentLotteryTerm = items[0]!.r3 ? items[0]!.term + 1 : items[0]!.term;
+    }
   } catch { /* ignore */ }
 }
 // 启动时立即预热，之后每 30 秒刷新
