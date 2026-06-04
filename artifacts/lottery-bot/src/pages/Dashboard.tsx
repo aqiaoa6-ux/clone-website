@@ -656,13 +656,19 @@ function SettingsDrawer({ status, onClose, onSave }: {
                       </div>
                       <span className="text-slate-600 text-xs flex-shrink-0">×</span>
                       <div className="flex-[1]">
-                        <input
-                          type="number" placeholder="金额"
-                          value={c.amount}
-                          onChange={e => setChaseField(i, "amount", e.target.value)}
-                          min="1"
-                          className={`w-full rounded-xl px-3 py-2 text-white text-sm focus:outline-none border ${enableChase ? "bg-[#1a1610] border-amber-500/30 focus:border-amber-400" : "bg-[#0f1220] border-[#252a3d] focus:border-blue-500"}`}
-                        />
+                        {chaseDoubleOnLoss ? (
+                          <div className="w-full rounded-xl px-3 py-2 text-orange-400 text-xs border border-orange-500/30 bg-orange-500/10 text-center">
+                            按倍投层次表
+                          </div>
+                        ) : (
+                          <input
+                            type="number" placeholder="金额"
+                            value={c.amount}
+                            onChange={e => setChaseField(i, "amount", e.target.value)}
+                            min="1"
+                            className={`w-full rounded-xl px-3 py-2 text-white text-sm focus:outline-none border ${enableChase ? "bg-[#1a1610] border-amber-500/30 focus:border-amber-400" : "bg-[#0f1220] border-[#252a3d] focus:border-blue-500"}`}
+                          />
+                        )}
                       </div>
                       <button
                         onClick={() => removeChase(i)}
@@ -678,10 +684,13 @@ function SettingsDrawer({ status, onClose, onSave }: {
                     + 添加追号
                   </button>
 
-                  {chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length > 0 && (
+                  {chaseNumbers.filter(c => c.num !== "").length > 0 && (
                     <div className={`flex items-center justify-between text-[11px] rounded-lg px-3 py-1.5 ${enableChase ? "bg-amber-500/10 text-amber-400" : "bg-[#131728] text-slate-500"}`}>
-                      <span>{chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length} 个号码</span>
-                      <span>每期追注 {chaseNumbers.filter(c => c.amount !== "").reduce((s, c) => s + (Number(c.amount) || 0), 0)} 元</span>
+                      <span>{chaseNumbers.filter(c => c.num !== "").length} 个号码</span>
+                      {chaseDoubleOnLoss
+                        ? <span>倍投模式 · 第1层 {chaseLevels[0] ?? 100} 元起</span>
+                        : <span>每期追注 {chaseNumbers.filter(c => c.amount !== "").reduce((s, c) => s + (Number(c.amount) || 0), 0)} 元</span>
+                      }
                     </div>
                   )}
 
