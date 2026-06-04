@@ -3330,6 +3330,8 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
           }) as Api.Message[];
           if (!msgs.length) return;
           const sorted = [...msgs].sort((a, b) => a.id - b.id);
+          const newEntries: GroupBetEntry[] = [];
+          let periodReset = false;
           for (const msg of sorted) {
             const curLast = session.canadaMonitorLastMsgIds[groupId] ?? 0;
             if (msg.id <= curLast) continue;
@@ -3343,18 +3345,27 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
             const entries = parseCanadaBotConfirm(text, senderName);
             for (const entry of entries) {
               if (entry.period && entry.period !== canadaBetPeriod) {
+                // 新期：清空全局缓存，标记需要重置前端
                 canadaBets.length = 0;
                 canadaBetPeriod = entry.period;
-                pushAdminEvent("bets:reset", { period: canadaBetPeriod });
+                periodReset = true;
               }
               canadaBets.unshift(entry);
               if (canadaBets.length > 500) canadaBets.pop();
-              pushAdminEvent("bet:new", { bet: entry });
+              newEntries.push(entry);
             }
+          }
+          // 一轮 poll 所有新注合并成一个 SSE 事件，不再每条单独推
+          if (newEntries.length > 0) {
+            pushAdminEvent("bets:batch", {
+              bets: newEntries,
+              period: canadaBetPeriod,
+              periodReset,
+            });
           }
         } catch { /* network hiccup */ }
       })();
-    }, 2000);
+    }, 3000);
   })();
 }
 

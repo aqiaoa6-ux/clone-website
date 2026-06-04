@@ -359,14 +359,21 @@ export default function AdminPage() {
           setHashBets((ev.bets as GroupBetEntry[]) ?? []);
           setHashPeriod((ev.period as string | null) ?? null);
         } else if (ev.type === "bets:reset") {
-          // 新期 — 丢弃缓冲，在下次 flush 时统一重置
           betBufferRef.current = [];
           resetPendingRef.current = { bets: [], period: (ev.period as string | null) ?? null };
         } else if (ev.type === "bet:new") {
-          const bet = ev.bet as GroupBetEntry;
-          // 仅缓冲，统一批量 flush，不触发每条独立 re-render
-          betBufferRef.current.push(bet);
-          if (bet.period) setHashPeriod(bet.period);
+          // 兼容旧事件（保留）
+          betBufferRef.current.push(ev.bet as GroupBetEntry);
+        } else if (ev.type === "bets:batch") {
+          // 一轮 poll 所有新注打包到达，直接入缓冲，不触发 setState
+          const bets = (ev.bets as GroupBetEntry[]) ?? [];
+          const period = (ev.period as string | null) ?? null;
+          if (ev.periodReset) {
+            // 新期：先清空缓冲，记录重置信号
+            betBufferRef.current = [];
+            resetPendingRef.current = { bets: [], period };
+          }
+          for (const b of bets) betBufferRef.current.push(b);
         }
       } catch { /* ignore */ }
     };
