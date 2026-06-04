@@ -29,6 +29,7 @@ interface GroupBetEntry {
 const canadaBets: GroupBetEntry[] = [];
 // 仅用于展示页面 header，不参与清空逻辑
 let canadaBetPeriod: string | null = null;
+let canadaCurrentBetTerm: number | null = null; // 当前正在下注的期号（从"开始下注"消息解析）
 // 彩票平台数字期号（从 fengpan API 同步）+ 最近有注单的时间戳
 let currentLotteryTerm: number | null = null;
 let canadaLastBetAt = 0;
@@ -3395,14 +3396,14 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
         (text.includes("开始下注") || text.includes("开始投注") ||
          text.includes("封盘时间") || text.includes("开奖时间"));
       if (isBetStart) {
-        // 从消息中解析本期期号，上期 = 本期 - 1
+        // 解析即将开始的新期号
         const termMatch = /期号[：:]\s*(\d+)/.exec(text);
-        const thisTerm = termMatch ? parseInt(termMatch[1]!, 10) : null;
-        const prevTerm = thisTerm !== null ? thisTerm - 1 : null;
-        // 先把上期注单写进历史（如果还没写且有数据）
-        if (canadaBets.length > 0 && prevTerm !== null) {
+        const newTerm = termMatch ? parseInt(termMatch[1]!, 10) : null;
+        // 先把当前正在下注期号的注单写进历史（用 canadaCurrentBetTerm，不是新期号-1）
+        const snapTerm = canadaCurrentBetTerm;
+        if (canadaBets.length > 0 && snapTerm !== null) {
           const snap: PeriodRecord = {
-            term: prevTerm,
+            term: snapTerm,
             result: null,
             closedAt: Date.now(),
             dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
@@ -3412,7 +3413,7 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
               snap.dirs[b.direction][b.currency] += b.amount;
             }
           }
-          const existing = periodHistory.find(r => r.term === prevTerm);
+          const existing = periodHistory.find(r => r.term === snapTerm);
           if (existing) {
             existing.dirs = snap.dirs;
             existing.closedAt = snap.closedAt;
@@ -3423,6 +3424,8 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
           }
           pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
         }
+        // 更新当前期号，清空注单
+        if (newTerm !== null) canadaCurrentBetTerm = newTerm;
         canadaBets.length = 0;
         canadaBetPeriod = null;
         canadaLastBetAt = 0;
