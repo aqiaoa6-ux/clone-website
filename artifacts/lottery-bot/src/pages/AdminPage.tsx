@@ -368,6 +368,12 @@ export default function AdminPage() {
     }
     betBufferRef.current = [];
     resetPendingRef.current = null;
+    // 先 REST 拉一次历史，防止 SSE init 竞态导致历史为空
+    void fetch("/api/admin/hash-period-history", { credentials: "include" })
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { history?: PeriodRecord[] } | null) => {
+        if (d?.history && d.history.length > 0) setHashHistory(d.history);
+      }).catch(() => { /* ignore */ });
     const es = new EventSource("/api/admin/hash-group-bets/events", { withCredentials: true });
     hashSseRef.current = es;
     es.onmessage = (e) => {
@@ -381,7 +387,7 @@ export default function AdminPage() {
           setHashPeriod((ev.period as string | null) ?? null);
           if (ev.term) setHashTerm(ev.term as number);
           if (ev.lastBetAt) setHashLastBetAt(ev.lastBetAt as number);
-          if (ev.history) setHashHistory(ev.history as PeriodRecord[]);
+          if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(ev.history as PeriodRecord[]);
         } else if (ev.type === "bets:batch") {
           const bets = (ev.bets as GroupBetEntry[]) ?? [];
           if (ev.period) latestPeriodRef.current = ev.period as string;
