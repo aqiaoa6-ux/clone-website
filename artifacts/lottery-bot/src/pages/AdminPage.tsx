@@ -222,6 +222,7 @@ export default function AdminPage() {
   type CanadaMonGroup = { groupId: string; groupTitle: string | undefined; active: boolean };
   const [canadaGroups, setCanadaGroups] = useState<CanadaMonGroup[]>([]);
   const [canadaPickerOpen, setCanadaPickerOpen] = useState(false);
+  const [groupsCollapsed, setGroupsCollapsed] = useState(true);
   const [canadaPickerList, setCanadaPickerList] = useState<{ id: string; title: string; type: string }[]>([]);
   const [canadaPickerSearch, setCanadaPickerSearch] = useState("");
   const [canadaPickerSaving, setCanadaPickerSaving] = useState<string | null>(null);
@@ -1809,32 +1810,43 @@ export default function AdminPage() {
           <div className="space-y-3">
             {/* 监控群组列表 */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
-              <div className="flex items-center justify-between mb-3">
-                <span className="text-white font-semibold text-sm">监控群组</span>
+              <div className="flex items-center justify-between">
                 <button
-                  onClick={() => void openCanadaPicker()}
-                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
-                >+ 添加群组</button>
-              </div>
-              {canadaGroups.length === 0 ? (
-                <button
-                  onClick={() => void openCanadaPicker()}
-                  className="w-full py-2.5 rounded-xl border border-dashed border-[#353a55] text-slate-400 text-sm hover:border-blue-500/50 hover:text-blue-400 transition-colors"
+                  onClick={() => setGroupsCollapsed(c => !c)}
+                  className="flex items-center gap-2 flex-1 text-left"
                 >
-                  + 选择要监控的加拿大群组
+                  <span className="text-white font-semibold text-sm">监控群组</span>
+                  <span className="text-slate-500 text-xs">({canadaGroups.length})</span>
+                  <span className="text-slate-500 text-xs ml-auto">{groupsCollapsed ? "▶" : "▼"}</span>
                 </button>
-              ) : (
-                <div className="space-y-1.5">
-                  {canadaGroups.map(g => (
-                    <div key={g.groupId} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#0d1117] border border-[#252a3d]">
-                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${g.active ? "bg-emerald-400" : "bg-slate-500"}`} />
-                      <span className="text-white text-sm truncate flex-1">{g.groupTitle ?? g.groupId}</span>
-                      <button
-                        onClick={() => void removeCanadaGroup(g.groupId)}
-                        className="text-[10px] text-red-400/70 hover:text-red-400 transition-colors flex-shrink-0"
-                      >移除</button>
+                <button
+                  onClick={() => void openCanadaPicker()}
+                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors ml-3"
+                >+ 添加</button>
+              </div>
+              {!groupsCollapsed && (
+                <div className="mt-3">
+                  {canadaGroups.length === 0 ? (
+                    <button
+                      onClick={() => void openCanadaPicker()}
+                      className="w-full py-2.5 rounded-xl border border-dashed border-[#353a55] text-slate-400 text-sm hover:border-blue-500/50 hover:text-blue-400 transition-colors"
+                    >
+                      + 选择要监控的加拿大群组
+                    </button>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {canadaGroups.map(g => (
+                        <div key={g.groupId} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#0d1117] border border-[#252a3d]">
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${g.active ? "bg-emerald-400" : "bg-slate-500"}`} />
+                          <span className="text-white text-sm truncate flex-1">{g.groupTitle ?? g.groupId}</span>
+                          <button
+                            onClick={() => void removeCanadaGroup(g.groupId)}
+                            className="text-[10px] text-red-400/70 hover:text-red-400 transition-colors flex-shrink-0"
+                          >移除</button>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
               )}
             </div>
@@ -2046,7 +2058,7 @@ export default function AdminPage() {
             })()}
 
             {/* 开奖历史 */}
-            {hashHistory.length > 0 && (() => {
+            {(() => {
               const KK_RATE = 100_000;
               const CNY_RATE = 6.7;
               const toU = (d: { kk: number; usdt: number; cny: number }) =>
@@ -2078,8 +2090,16 @@ export default function AdminPage() {
                         </tr>
                       </thead>
                       <tbody>
+                        {hashHistory.length === 0 && (
+                          <tr>
+                            <td colSpan={8} className="px-4 py-6 text-center text-slate-600 text-xs">
+                              等待下一期"停止下注"消息后自动记录…
+                            </td>
+                          </tr>
+                        )}
                         {hashHistory.map((rec, i) => {
                           const totalU = dirCols.reduce((s, d) => s + toU(rec.dirs[d] ?? { kk: 0, usdt: 0, cny: 0 }), 0);
+                          void totalU;
                           return (
                             <tr key={i} className="border-b border-[#1a1f31] hover:bg-[#1a1f31]/50 transition-colors">
                               <td className="px-3 py-2 text-slate-400 font-mono whitespace-nowrap">
