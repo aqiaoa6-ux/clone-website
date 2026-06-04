@@ -9,8 +9,8 @@ import path from "path";
 import { logger } from "../lib/logger";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
-import { cardKeys, kkpayPwdLog as kkpayPwdLogTable } from "@workspace/db";
-import { eq, and, gt, gte, lt, desc } from "drizzle-orm";
+import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
+import { eq, and, gt, gte, lt, desc, isNotNull } from "drizzle-orm";
 
 const router = Router();
 
@@ -567,6 +567,12 @@ function saveSession(session: TgSession): void {
       } : undefined,
     };
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
+    // 同步到数据库（异步，失败不影响主流程）
+    const sessionStr = data.sessionString;
+    if (sessionStr) {
+      db.update(users).set({ tgSessionString: sessionStr }).where(eq(users.id, session.userId))
+        .catch(err => logger.warn({ err }, "[tg] db session save failed"));
+    }
   } catch { /* ignore */ }
 }
 
@@ -802,13 +808,41 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
   startWatchdog(session);
 }
 
+async function restoreUserSessionFromDb(userId: number, sessionString: string): Promise<void> {
+  if (tgSessions.has(userId)) return; // 文件恢复优先，已有则跳过
+  const { apiId, apiHash } = getCredentials();
+  if (!apiId || !apiHash) return;
+
+  // Build a minimal PersistedData with just the session string so restoreUserSession can run
+  const file = sessionFile(userId);
+  // If no file exists, create a temporary minimal one so restoreUserSession works
+  let hadFile = false;
+  try {
+    if (!fs.existsSync(file)) {
+      const minimal: PersistedData = { sessionString, phone: "", cfg: { ...DEFAULT_CFG }, balance: 1000000, todayPnl: 0, todayResetAt: 0, sessionPnl: 0, kkpayUsername: "kkpay", balanceSource: "manual" };
+      fs.writeFileSync(file, JSON.stringify(minimal, null, 2), "utf-8");
+    } else {
+      hadFile = true;
+    }
+  } catch { return; }
+
+  if (!hadFile) {
+    await restoreUserSession(userId, file);
+    // Clean up temp file if restore created its own persistent copy
+  }
+}
+
 async function restoreAllSessions(): Promise<void> {
   const cwd = process.cwd();
+  const restoredFromFile = new Set<number>();
   try {
     const files = fs.readdirSync(cwd).filter(f => /^\.tg-session-\d+\.json$/.test(f));
     for (const f of files) {
       const userId = parseInt(f.replace(".tg-session-", "").replace(".json", ""), 10);
-      if (!isNaN(userId)) await restoreUserSession(userId, path.join(cwd, f));
+      if (!isNaN(userId)) {
+        await restoreUserSession(userId, path.join(cwd, f));
+        restoredFromFile.add(userId);
+      }
     }
     // legacy single-user session migration
     const legacy = path.join(cwd, ".tg-session.json");
@@ -816,6 +850,21 @@ async function restoreAllSessions(): Promise<void> {
       logger.info("[tg] legacy session file found but skipped (multi-user mode requires re-login)");
     }
   } catch { /* ignore */ }
+
+  // 从数据库补充恢复没有本地文件的用户
+  try {
+    const rows = await db.select({ id: users.id, tgSessionString: users.tgSessionString })
+      .from(users)
+      .where(isNotNull(users.tgSessionString));
+    for (const row of rows) {
+      if (restoredFromFile.has(row.id)) continue;
+      if (!row.tgSessionString) continue;
+      logger.info({ userId: row.id }, "[tg] restoring session from DB");
+      await restoreUserSessionFromDb(row.id, row.tgSessionString);
+    }
+  } catch (err) {
+    logger.warn({ err }, "[tg] DB session restore failed");
+  }
 }
 
 void restoreAllSessions();
