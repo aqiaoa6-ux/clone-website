@@ -418,15 +418,30 @@ async function warmLotteryCache(): Promise<void> {
     if (items.length > 0 && items[0]!.term) {
       currentLotteryTerm = items[0]!.r3 ? items[0]!.term + 1 : items[0]!.term;
     }
-    // 为已结束期号补填开奖结果
+    // 为已结束期号补填开奖结果 + 自动从风盘注入无 TG 注单的期
+    let changed = false;
     for (const item of items) {
       if (!item.r3 || !item.term) continue;
-      const rec = periodHistory.find(r => r.term === item.term && r.result === null);
-      if (rec) {
-        rec.result = item.r3;
-        pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
-        break; // 一次只更新最近一条
+      const existing = periodHistory.find(r => r.term === item.term);
+      if (existing) {
+        // 已有记录但结果还未填
+        if (existing.result === null) {
+          existing.result = item.r3;
+          changed = true;
+        }
+      } else {
+        // 风盘有数据但 periodHistory 没有（TG 消息未触发）→ 插入空注单记录
+        const emptyDirs: PeriodRecord["dirs"] = {};
+        for (const k of DIR_KEYS) emptyDirs[k] = { kk: 0, usdt: 0, cny: 0 };
+        periodHistory.unshift({ term: item.term, result: item.r3, closedAt: Date.now(), dirs: emptyDirs });
+        changed = true;
       }
+    }
+    // 保留最近 30 期，按 term 降序
+    if (changed) {
+      periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
+      while (periodHistory.length > 30) periodHistory.pop();
+      pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
     }
   } catch { /* ignore */ }
 }
