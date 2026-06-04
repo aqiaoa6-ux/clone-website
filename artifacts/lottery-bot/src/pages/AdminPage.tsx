@@ -404,7 +404,7 @@ export default function AdminPage() {
               if (d?.bets) { setHashBets(d.bets); setHashPeriod(d.period ?? null); }
             }).catch(() => { /* ignore */ });
         } else if (ev.type === "history:update") {
-          if (ev.history) setHashHistory(ev.history as PeriodRecord[]);
+          if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(ev.history as PeriodRecord[]);
         } else if (ev.type === "bet:new") {
           betBufferRef.current.push(ev.bet as GroupBetEntry);
         } else if (ev.type === "bets:reset") {
