@@ -3058,11 +3058,27 @@ function settleHashBets(session: TgSession, result: HashResult): void {
   session.recentResults.push(result.label);
   if (session.recentResults.length > 30) session.recentResults.shift();
   for (const bet of pending) {
-    const won = evaluateHashBet(bet.betContent, result);
     const odds = session.cfg.odds ?? 1.98;
-    const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
     bet.lotteryResult = `${result.value} ${result.label}`;
-    settleBet(session, { won, pnl, betId: bet.id, period: 0 });
+
+    if (bet.isChase) {
+      // 追号注：按号码匹配开奖数字
+      const targetNum = parseInt(bet.betContent, 10);
+      const won = !isNaN(targetNum) && targetNum === result.value;
+      const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
+      settleBet(session, { won, pnl, betId: bet.id, period: 0, isChase: true });
+      // 追号倍投层次更新：中→回第一层；不中→进下一层（最后层停留）
+      if (session.cfg.chaseDoubleOnLoss && session.cfg.chaseAmountLevels.length > 1) {
+        const key = bet.betContent;
+        const curLvl = session.chaseLevels[key] ?? 0;
+        session.chaseLevels[key] = won ? 0 : Math.min(curLvl + 1, session.cfg.chaseAmountLevels.length - 1);
+        pushEvent(session, "chase:level_update", { num: targetNum, level: session.chaseLevels[key], won });
+      }
+    } else {
+      const won = evaluateHashBet(bet.betContent, result);
+      const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
+      settleBet(session, { won, pnl, betId: bet.id, period: 0 });
+    }
   }
 }
 

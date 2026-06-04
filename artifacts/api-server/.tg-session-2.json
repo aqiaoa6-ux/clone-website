@@ -1,15 +1,15 @@
 {
   "sessionString": "1BQANOTEuMTA4LjU2LjE3MQG7rI1vZdKwwuX6Ar0NI/4aiIVMFmIQzxnn0EsYH4009tSHUTfPpE8jp0rNRWT+ywkVzY5HuWmsKA3MTfdLbVlDwTCpEsk/rF6nCyGvMd6w3CUhMYdxwWDpIhjlnDNrx9JPGpUYmFmFMw+vCxqVmsMGMWGPJTFaqaaCvuNoJwGGK9psykwTUFVOTE9Hj3owSR5bW8NH6xvW39tsvLBs40+UA3aGOrtNEKlbIB+P38P/z6qH/GSrYWqZO3Pa7XDhtL9LX+QVmC/PXM2DJBRArp2dk3AFA1m9jUJaqLuItUSXpe4Bg/k3fqPtoiI5Lxp+JXbVuiu6UQ4T1fxmKE8/iY2YJQ==",
   "phone": "855 96 786 6238",
-  "balance": -399.717,
-  "todayPnl": -402,
+  "balance": -406.717,
+  "todayPnl": -409,
   "todayResetAt": 1780531200000,
-  "sessionPnl": 0,
+  "sessionPnl": -7,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
   "watchGroupId": "-1002195303674",
   "cfg": {
-    "autoBet": false,
+    "autoBet": true,
     "betAmount": 100,
     "strategy": "normal",
     "betMultiplier": 2,
@@ -33,7 +33,6 @@
     "algorithms": [
       "canada_kill"
     ],
-    "algoFlipOnLoss": 2,
     "odds": 1.98,
     "oddsBigOdd": 4.32,
     "oddsBigEven": 3.71,
@@ -105,10 +104,29 @@
       "big",
       "small"
     ],
-    "hashBetOptions": []
+    "hashBetOptions": [],
+    "algoFlipOnLoss": 2
   },
   "kuaisanResults": [],
   "hashResults": [
+    {
+      "value": 10,
+      "big": false,
+      "odd": false,
+      "label": "小双"
+    },
+    {
+      "value": 15,
+      "big": true,
+      "odd": true,
+      "label": "大单"
+    },
+    {
+      "value": 6,
+      "big": false,
+      "odd": false,
+      "label": "小双"
+    },
     {
       "value": 18,
       "big": true,
@@ -135,12 +153,6 @@
     },
     {
       "value": 10,
-      "big": false,
-      "odd": false,
-      "label": "小双"
-    },
-    {
-      "value": 8,
       "big": false,
       "odd": false,
       "label": "小双"
