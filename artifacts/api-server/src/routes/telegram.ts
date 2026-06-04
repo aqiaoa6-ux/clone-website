@@ -249,6 +249,10 @@ interface TgSession {
   hashResultPollTimer?: ReturnType<typeof setInterval>;
   hashResultLastMsgId: number;
   hashBetDelayTimer?: ReturnType<typeof setTimeout>;
+  // independent hash bet monitor (admin panel)
+  hashMonitorGroupId?: string;
+  hashMonitorPollTimer?: ReturnType<typeof setInterval>;
+  hashMonitorLastMsgId: number;
 }
 
 interface PersistedData {
@@ -261,6 +265,7 @@ interface PersistedData {
   kkpayUsername: string;
   balanceSource: "manual" | "kkpay";
   watchGroupId?: string;
+  hashMonitorGroupId?: string;
   cfg?: Partial<BetCfg>;
   kuaisanResults?: KuaisanResult[];
   hashResults?: HashResult[];
@@ -566,6 +571,7 @@ function saveSession(session: TgSession): void {
         phone: session.me.phone,
       } : undefined,
     };
+    if (session.hashMonitorGroupId !== undefined) (data as unknown as Record<string, unknown>).hashMonitorGroupId = session.hashMonitorGroupId;
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
     // 同步到数据库（异步，失败不影响主流程）
     const sessionStr = data.sessionString;
@@ -784,6 +790,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
     hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
+    hashMonitorGroupId: data.hashMonitorGroupId, hashMonitorLastMsgId: 0,
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -799,6 +806,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
 
   if (connected) {
     if (session.watchGroupId) startGroupListener(session);
+    if (session.hashMonitorGroupId) startHashMonitorPoller(session);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     logger.info({ userId }, "[tg] session restored (online)");
@@ -3273,6 +3281,62 @@ function stopHashListener(session: TgSession): void {
   stopHashResultPoller(session);
 }
 
+// ─── Hash Monitor Poller (admin panel独立监控群) ───────────────────────────────
+function stopHashMonitorPoller(session: TgSession): void {
+  if (session.hashMonitorPollTimer) {
+    clearInterval(session.hashMonitorPollTimer);
+    session.hashMonitorPollTimer = undefined;
+  }
+}
+
+function startHashMonitorPoller(session: TgSession): void {
+  stopHashMonitorPoller(session);
+  if (!session.hashMonitorGroupId) return;
+  const targetId = session.hashMonitorGroupId;
+  void (async () => {
+    try {
+      const baseline = await session.client.getMessages(targetId, { limit: 1 }) as Api.Message[];
+      if (baseline.length > 0) session.hashMonitorLastMsgId = baseline[0]!.id;
+      logger.info({ targetId, baselineMsgId: session.hashMonitorLastMsgId }, "[hash-mon] poller started");
+    } catch { /* ignore */ }
+
+    if (tgSessions.get(session.userId) !== session) return;
+
+    session.hashMonitorPollTimer = setInterval(() => {
+      if (tgSessions.get(session.userId) !== session) {
+        clearInterval(session.hashMonitorPollTimer); session.hashMonitorPollTimer = undefined; return;
+      }
+      void (async () => {
+        try {
+          const msgs = await session.client.getMessages(targetId, {
+            limit: 20,
+            ...(session.hashMonitorLastMsgId > 0 ? { minId: session.hashMonitorLastMsgId } : {}),
+          }) as Api.Message[];
+          if (!msgs.length) return;
+          const sorted = [...msgs].sort((a, b) => a.id - b.id);
+          for (const msg of sorted) {
+            if (msg.id <= session.hashMonitorLastMsgId) continue;
+            session.hashMonitorLastMsgId = msg.id;
+            const text = msg.message ?? "";
+            if (!text || msg.out) continue;
+            const senderId = String(msg.senderId ?? "");
+            const u = msg.sender as Api.User | null;
+            const senderName = u
+              ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || senderId)
+              : senderId;
+            const bet = parseGroupBetFromText(text, senderId, senderName, hashGroupBetPeriod);
+            if (bet) {
+              hashGroupBets.unshift(bet);
+              if (hashGroupBets.length > 500) hashGroupBets.pop();
+              pushAdminEvent("bet:new", { bet });
+            }
+          }
+        } catch { /* network hiccup */ }
+      })();
+    }, 2500);
+  })();
+}
+
 function startHashListener(session: TgSession): void {
   if (!session.watchGroupId) return;
   stopHashListener(session);
@@ -3601,6 +3665,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
       hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
+      hashMonitorLastMsgId: 0,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
@@ -4540,6 +4605,61 @@ router.get("/admin/hash-group-bets", requireAdminSecret, (_req, res) => {
   const totals = { kk: 0, usdt: 0, cny: 0 };
   for (const b of hashGroupBets) totals[b.currency] += b.amount;
   res.json({ period: hashGroupBetPeriod, bets: hashGroupBets, totals });
+});
+
+// ─── Hash Monitor Group config ────────────────────────────────────────────────
+router.get("/admin/hash-monitor-group", requireAdminSecret, (_req, res) => {
+  for (const session of tgSessions.values()) {
+    if (session.hashMonitorGroupId) {
+      const title = session.groups.find(g =>
+        g.id === session.hashMonitorGroupId || `-100${g.id}` === session.hashMonitorGroupId
+      )?.title;
+      res.json({
+        groupId: session.hashMonitorGroupId,
+        groupTitle: title ?? session.hashMonitorGroupId,
+        userId: session.userId,
+        active: !!session.hashMonitorPollTimer,
+      });
+      return;
+    }
+  }
+  res.json({ groupId: null, groupTitle: null, userId: null, active: false });
+});
+
+router.post("/admin/hash-monitor-group", requireAdminSecret, (req, res) => {
+  const { groupId } = req.body as { groupId?: string | null };
+  // Clear all existing monitor pollers
+  for (const session of tgSessions.values()) {
+    stopHashMonitorPoller(session);
+    session.hashMonitorGroupId = undefined;
+    saveSession(session);
+  }
+  if (!groupId) { res.json({ ok: true, groupId: null }); return; }
+  // Find the first connected session to use for monitoring
+  let target: TgSession | undefined;
+  for (const session of tgSessions.values()) {
+    if (session.me) { target = session; break; }
+  }
+  if (!target) { res.status(400).json({ error: "没有已连接的 TG 账号" }); return; }
+  target.hashMonitorGroupId = groupId;
+  saveSession(target);
+  startHashMonitorPoller(target);
+  const title = target.groups.find(g => g.id === groupId || `-100${g.id}` === groupId)?.title;
+  res.json({ ok: true, groupId, groupTitle: title ?? groupId, userId: target.userId });
+});
+
+// GET /admin/tg-groups — list all groups from all connected TG sessions (for picker)
+router.get("/admin/tg-groups", requireAdminSecret, (_req, res) => {
+  const result: Array<{ userId: number; username: string; groups: { id: string; title: string; type: string }[] }> = [];
+  for (const [uid, session] of tgSessions.entries()) {
+    if (!session.me) continue;
+    result.push({
+      userId: uid,
+      username: session.me.username ?? session.me.firstName ?? String(uid),
+      groups: session.groups.map(g => ({ id: g.id, title: g.title, type: g.type })),
+    });
+  }
+  res.json({ sessions: result });
 });
 
 export default router;

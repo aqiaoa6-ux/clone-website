@@ -204,6 +204,39 @@ export default function AdminPage() {
   const [hashTotals, setHashTotals] = useState<{ kk: number; usdt: number; cny: number }>({ kk: 0, usdt: 0, cny: 0 });
   const [hashPeriod, setHashPeriod] = useState<string | null>(null);
   const hashSseRef = useRef<EventSource | null>(null);
+  // hash monitor group picker
+  const [hashMonGroup, setHashMonGroup] = useState<{ groupId: string | null; groupTitle: string | null; active: boolean }>({ groupId: null, groupTitle: null, active: false });
+  const [hashMonGroups, setHashMonGroups] = useState<{ id: string; title: string; type: string }[]>([]);
+  const [hashMonPickerOpen, setHashMonPickerOpen] = useState(false);
+  const [hashMonSaving, setHashMonSaving] = useState(false);
+  const [hashMonSearch, setHashMonSearch] = useState("");
+
+  const loadHashMonGroup = async () => {
+    try {
+      const r = await api.admin.hashMonitorGroup();
+      setHashMonGroup({ groupId: r.groupId, groupTitle: r.groupTitle, active: r.active });
+    } catch { /* ignore */ }
+  };
+
+  const openHashMonPicker = async () => {
+    setHashMonPickerOpen(true);
+    setHashMonSearch("");
+    try {
+      const r = await api.admin.tgGroups();
+      const all: { id: string; title: string; type: string }[] = [];
+      for (const s of r.sessions) all.push(...s.groups);
+      setHashMonGroups(all);
+    } catch { /* ignore */ }
+  };
+
+  const selectHashMonGroup = async (groupId: string | null) => {
+    setHashMonSaving(true);
+    try {
+      const r = await api.admin.setHashMonitorGroup(groupId);
+      setHashMonGroup({ groupId: r.groupId, groupTitle: r.groupTitle ?? null, active: !!r.groupId });
+      setHashMonPickerOpen(false);
+    } catch { /* ignore */ } finally { setHashMonSaving(false); }
+  };
 
   // ── pwd log tab ──
   type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_sent" | "pwd_success"; text: string; context?: string };
@@ -292,6 +325,7 @@ export default function AdminPage() {
     if (tab === "users") void loadUsers();
     if (tab === "pwdlog") void loadPwdLog(pwdLogDate);
     if (tab === "shop") void loadShop();
+    if (tab === "hashmon") void loadHashMonGroup();
   }, [tab]);
 
   // Hash monitor SSE — connect when tab is active, disconnect otherwise
@@ -1690,6 +1724,76 @@ export default function AdminPage() {
         {/* ── 哈希监控 ── */}
         {tab === "hashmon" && (
           <div className="space-y-3">
+            {/* 监控群组选择器 */}
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-white font-semibold text-sm">监控群组</span>
+                {hashMonGroup.groupId && (
+                  <button
+                    onClick={() => void selectHashMonGroup(null)}
+                    className="text-[10px] text-red-400/70 hover:text-red-400 transition-colors"
+                  >清除</button>
+                )}
+              </div>
+              {hashMonGroup.groupId ? (
+                <div className="flex items-center gap-2">
+                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${hashMonGroup.active ? "bg-emerald-400" : "bg-slate-500"}`} />
+                  <span className="text-white text-sm font-medium truncate flex-1">{hashMonGroup.groupTitle ?? hashMonGroup.groupId}</span>
+                  <button
+                    onClick={() => void openHashMonPicker()}
+                    className="text-xs text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0"
+                  >换群</button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => void openHashMonPicker()}
+                  className="w-full py-2.5 rounded-xl border border-dashed border-[#353a55] text-slate-400 text-sm hover:border-blue-500/50 hover:text-blue-400 transition-colors"
+                >
+                  + 选择要监控的群组
+                </button>
+              )}
+            </div>
+
+            {/* 群组选择弹层 */}
+            {hashMonPickerOpen && (
+              <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60" onClick={() => setHashMonPickerOpen(false)}>
+                <div className="bg-[#161929] border border-[#252a3d] rounded-t-2xl w-full max-w-lg p-4 pb-8" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-white font-semibold text-sm">选择监控群组</span>
+                    <button onClick={() => setHashMonPickerOpen(false)} className="text-slate-400 text-lg leading-none">×</button>
+                  </div>
+                  <input
+                    className="w-full bg-[#0d1117] border border-[#252a3d] rounded-xl px-3 py-2 text-sm text-white placeholder-slate-600 mb-3 outline-none"
+                    placeholder="搜索群名…"
+                    value={hashMonSearch}
+                    onChange={e => setHashMonSearch(e.target.value)}
+                  />
+                  <div className="overflow-y-auto max-h-64 space-y-1">
+                    {hashMonGroups.length === 0 && (
+                      <div className="text-center text-slate-600 text-sm py-6">
+                        暂无群组，请先连接 TG 账号并同步群列表
+                      </div>
+                    )}
+                    {hashMonGroups
+                      .filter(g => !hashMonSearch || g.title.toLowerCase().includes(hashMonSearch.toLowerCase()))
+                      .map(g => (
+                        <button
+                          key={g.id}
+                          disabled={hashMonSaving}
+                          onClick={() => void selectHashMonGroup(g.id)}
+                          className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-white/5 transition-colors ${hashMonGroup.groupId === g.id ? "bg-blue-500/10 border border-blue-500/30" : "border border-transparent"}`}
+                        >
+                          <span className="text-slate-500 text-xs">{g.type === "channel" ? "📢" : "👥"}</span>
+                          <span className="text-white text-sm truncate flex-1">{g.title}</span>
+                          {hashMonGroup.groupId === g.id && <span className="text-blue-400 text-xs flex-shrink-0">当前</span>}
+                        </button>
+                      ))
+                    }
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* 期号 + 合计 */}
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
               <div className="flex items-center justify-between mb-3">
