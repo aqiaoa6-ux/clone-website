@@ -331,9 +331,9 @@ function SettingsDrawer({ status, onClose, onSave }: {
         oddsSmallOdd: Number(oddsSmallOdd),
         oddsSmallEven: Number(oddsSmallEven),
         chaseNumbers: chaseNumbers
-          .filter(c => c.num !== "" && c.amount !== "")
-          .map(c => ({ num: Number(c.num), amount: Number(c.amount) }))
-          .filter(c => c.num >= 0 && c.num <= 27 && c.amount > 0),
+          .filter(c => c.num !== "" && (chaseDoubleOnLoss || c.amount !== ""))
+          .map(c => ({ num: Number(c.num), amount: chaseDoubleOnLoss ? 1 : Number(c.amount) }))
+          .filter(c => c.num >= 0 && c.num <= 27),
         enableChase,
         chaseOnly,
         chaseDoubleOnLoss,
@@ -615,9 +615,9 @@ function SettingsDrawer({ status, onClose, onSave }: {
               <div className="flex items-center gap-2">
                 <span className="text-base leading-none">🎯</span>
                 <span className="text-xs font-medium text-slate-400 group-hover:text-white transition">自动追号</span>
-                {enableChase && chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length > 0 && (
+                {enableChase && chaseNumbers.filter(c => c.num !== "").length > 0 && (
                   <span className="text-[10px] bg-amber-500/20 text-amber-400 rounded px-1.5 py-0.5">
-                    {chaseNumbers.filter(c => c.num !== "" && c.amount !== "").length} 个 · {chaseNumbers.filter(c => c.amount !== "").reduce((s, c) => s + (Number(c.amount) || 0), 0)} 元/期
+                    {chaseNumbers.filter(c => c.num !== "").length} 个{chaseDoubleOnLoss ? " · 倍投" : ` · ${chaseNumbers.filter(c => c.amount !== "").reduce((s, c) => s + (Number(c.amount) || 0), 0)} 元/期`}
                   </span>
                 )}
               </div>
