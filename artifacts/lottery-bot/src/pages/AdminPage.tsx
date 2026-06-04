@@ -370,21 +370,31 @@ export default function AdminPage() {
         }
       } catch { /* ignore */ }
     };
-    // 每 500ms flush 一次缓冲，将多群多条消息合并为一次 setState
+    // 每 200ms flush 一次缓冲，多群消息合并为一次 setState
     const flushId = setInterval(() => {
       const reset = resetPendingRef.current;
       const buf = betBufferRef.current;
       if (reset === null && buf.length === 0) return;
       betBufferRef.current = [];
-      resetPendingRef.current = null;
-      if (reset !== null) {
-        // 新期重置 + 本轮所有新注（最新在前）
-        setHashBets([...buf].reverse().slice(0, 500));
+
+      if (buf.length > 0) {
+        const newBets = [...buf].reverse(); // 最新在前
+        if (reset !== null) {
+          // 新期 + 新注一起到达：只显示新注
+          resetPendingRef.current = null;
+          setHashBets(newBets.slice(0, 500));
+          setHashPeriod(reset.period);
+        } else {
+          // 同期新注：追加到列表头
+          setHashBets(prev => [...newBets, ...prev].slice(0, 500));
+        }
+      } else if (reset !== null) {
+        // 收到新期信号但还没有新注：更新期号显示，保留旧注避免空窗
+        // 不清空 — 等有新注再替换（下次 flush 触发）
         setHashPeriod(reset.period);
-      } else {
-        setHashBets(prev => [...[...buf].reverse(), ...prev].slice(0, 500));
+        // 保留 resetPending，下次 flush 若 buf 有内容则清旧注
       }
-    }, 500);
+    }, 200);
     return () => { clearInterval(flushId); es.close(); hashSseRef.current = null; };
   }, [tab, secretVerified]);
 

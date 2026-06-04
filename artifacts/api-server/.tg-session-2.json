@@ -7,7 +7,7 @@
   "sessionPnl": 0,
   "kkpayUsername": "kkpay",
   "balanceSource": "kkpay",
-  "watchGroupId": "-1003847260357",
+  "watchGroupId": "-1003294529818",
   "cfg": {
     "autoBet": false,
     "betAmount": 100,
@@ -127,6 +127,8 @@
   },
   "canadaMonitorGroupIds": [
     "-1003020298977",
-    "-1003066890553"
+    "-1003066890553",
+    "-1003294529818",
+    "-1003858203119"
   ]
 }

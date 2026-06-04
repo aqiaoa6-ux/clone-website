@@ -58,12 +58,28 @@ function parseCanadaBotConfirm(text: string, senderName: string): GroupBetEntry[
   const periodMatch = text.match(/期号[：:]\s*\n?([a-fA-F0-9]{8,})/);
   const period = periodMatch?.[1]?.trim() ?? null;
 
-  // 解析下注行: "[emoji?][方向/数字] -[金额] [KKCOIN|USDT|CNY] - ✅ 投注成功"
-  const betLine = /(大单|大双|小单|小双|大|小|单|双|\d{1,2})\s+-(\d+(?:\.\d+)?)\s+(KKCOIN|USDT|CNY)\s+-\s*✅\s*投注成功/gi;
+  // 解析下注行，兼容格式：
+  //   "🟠大单 -100 CNY - ✅ 投注成功"
+  //   "27 -50 USDT - ✅ 投注成功"
+  //   "大 -200 KKCOIN-✅ 投注成功"
+  // 允许方向前有任意 emoji，金额符号两侧空格可选
+  const betLine = /(?:^|[\s\S])?(大单|大双|小单|小双|大|小|单|双|\d{1,2})\s*-\s*(\d+(?:\.\d+)?)\s*(KKCOIN|USDT|CNY)\s*-\s*✅\s*投注成功/gi;
   const entries: GroupBetEntry[] = [];
   let m: RegExpExecArray | null;
+
+  // PC28 数字方向映射（加拿大 0-27）
+  function classifyNumDir(raw: string): string {
+    const n = parseInt(raw, 10);
+    if (isNaN(n)) return raw;
+    const big = n > 13;
+    const odd = n % 2 !== 0;
+    return `${big ? "大" : "小"}${odd ? "单" : "双"}`;
+  }
+
   while ((m = betLine.exec(text)) !== null) {
-    const direction = m[1]!;
+    const rawDir = m[1]!;
+    // 数字方向 → 分类为 大单/大双/小单/小双
+    const direction = /^\d+$/.test(rawDir) ? classifyNumDir(rawDir) : rawDir;
     const amount = parseFloat(m[2]!);
     const currRaw = m[3]!.toUpperCase();
     const currency: "kk" | "usdt" | "cny" =
