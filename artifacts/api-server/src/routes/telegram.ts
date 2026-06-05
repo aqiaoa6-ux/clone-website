@@ -3673,7 +3673,7 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
         newEntries.push(entry);
       }
     }
-    if (!didStop && newEntries.length > 0) {
+    if (newEntries.length > 0) {
       canadaLastBetAt = Date.now();
       pushAdminEvent("bets:batch", {
         bets: newEntries, period: canadaBetPeriod,
@@ -3683,18 +3683,15 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
   } catch { /* network hiccup / flood wait handled by GramJS */ }
 }
 
-// 单一串行共享 loop：依次轮询每个活跃群组，群间等待 600ms，每轮结束等 2s
+// 并行轮询所有活跃群组，每轮间隔 1s
 function scheduleCanadaLoop(session: TgSession): void {
   if (session.canadaSharedPoller) return; // already scheduled
   const loop = async () => {
     if (tgSessions.get(session.userId) !== session) return;
     const activeGroups = Object.keys(session.canadaMonitorPollers).filter(g => session.canadaMonitorPollers[g]);
     if (activeGroups.length === 0) { session.canadaSharedPoller = undefined; return; }
-    for (const gid of activeGroups) {
-      if (!session.canadaMonitorPollers[gid]) continue; // removed mid-loop
-      await pollOneCanadaGroup(session, gid);
-      await new Promise<void>(r => setTimeout(r, 600)); // 群间间隔
-    }
+    // 并行 getMessages 所有群组（GramJS 底层是 HTTP，无状态，可并行）
+    await Promise.allSettled(activeGroups.map(gid => pollOneCanadaGroup(session, gid)));
     // ── 整圈轮询完毕 → 按期号逐一快照（termContext 过滤，不混期）──
     if (pendingCanadaSnapshots.size > 0) {
       const terms = [...pendingCanadaSnapshots].sort((a, b) => a - b);
@@ -3740,7 +3737,7 @@ function scheduleCanadaLoop(session: TgSession): void {
       canadaLastBetAt = kept.length > 0 ? canadaLastBetAt : 0;
       pushAdminEvent("bets:reset", { bets: canadaBets, period: canadaBetPeriod, term: currentLotteryTerm });
     }
-    session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 2000);
+    session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 1000);
   };
   session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 0);
 }
