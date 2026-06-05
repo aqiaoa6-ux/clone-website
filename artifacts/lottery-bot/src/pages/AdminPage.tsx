@@ -205,6 +205,8 @@ export default function AdminPage() {
   const [hashTerm, setHashTerm] = useState<number | null>(null);
   const [hashLastBetAt, setHashLastBetAt] = useState<number>(0);
   const [nowTs, setNowTs] = useState(() => Date.now());
+  // 停止下注后快照数据（等待开奖时展示）
+  const [hashSnap, setHashSnap] = useState<{ term: number; dirs: Record<string, { kk: number; usdt: number; cny: number }>; closedAt: number } | null>(null);
   type PeriodRecord = {
     term: number | null;
     result: string | null;
@@ -447,9 +449,13 @@ export default function AdminPage() {
           } else if (ev.type === "bets:reset") {
             betBufferRef.current = [];
             latestTermRef.current = null;
-            latestLastBetAtRef.current = 0;
-            setHashLastBetAt(0);
+            if (ev.lastBetAt) {
+              latestLastBetAtRef.current = ev.lastBetAt as number;
+              setHashLastBetAt(ev.lastBetAt as number);
+            }
             if (ev.term) setHashTerm(ev.term as number);
+            if (ev.snap) setHashSnap(ev.snap as { term: number; dirs: Record<string, { kk: number; usdt: number; cny: number }>; closedAt: number });
+            else setHashSnap(null);
             resetPendingRef.current = {
               bets: (ev.bets as GroupBetEntry[]) ?? [],
               period: (ev.period as string | null) ?? null,
