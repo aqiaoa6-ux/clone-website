@@ -1,33 +1,22 @@
-import express, { type Express } from "express";
+import express, { type Express, type Request, type Response } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import pinoHttpImport from "pino-http";
+import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
 
-const pinoHttp =
-  (pinoHttpImport as unknown as { default?: typeof pinoHttpImport }).default ??
-  pinoHttpImport;
-
 const app: Express = express();
-
 app.set("trust proxy", 1);
 
 app.use(
-  pinoHttp({
+  (pinoHttp as unknown as typeof pinoHttp.default)({
     logger,
     serializers: {
-      req(req: any) {
-        return {
-          id: req.id,
-          method: req.method,
-          url: req.url?.split("?")[0],
-        };
+      req(req: Request) {
+        return { id: (req as any).id, method: req.method, url: req.url?.split("?")[0] };
       },
-      res(res: any) {
-        return {
-          statusCode: res.statusCode,
-        };
+      res(res: Response) {
+        return { statusCode: res.statusCode };
       },
     },
   })
