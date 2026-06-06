@@ -2829,10 +2829,11 @@ async function pollLottery(session: TgSession): Promise<void> {
           pushEvent(session, "chase:level_update", { num: targetNum, level: session.chaseLevels[key], won });
         }
       }
-      // 追号中奖后自动停止追号
-      if (chaseWon && session.cfg.enableChase) {
-        session.cfg.enableChase = false;
-        pushEvent(session, "chase:won_stop", { sum });
+      if (chaseWon && session.cfg.chaseDoubleOnLoss && session.cfg.chaseAmountLevels.length > 1) {
+        for (const c of session.cfg.chaseNumbers) {
+          session.chaseLevels[String(c.num)] = 0;
+        }
+        pushEvent(session, "chase:reset_all", { sum });
       }
     }
 
@@ -3252,6 +3253,7 @@ function settleHashBets(session: TgSession, result: HashResult): void {
   const pending = session.betLog.filter(b => b.status === "sent");
   session.recentResults.push(result.label);
   if (session.recentResults.length > 30) session.recentResults.shift();
+  let chaseWon = false;
   for (const bet of pending) {
     const odds = session.cfg.odds ?? 1.98;
     bet.lotteryResult = `${result.value} ${result.label}`;
@@ -3260,6 +3262,7 @@ function settleHashBets(session: TgSession, result: HashResult): void {
       // 追号注：按号码匹配开奖数字
       const targetNum = parseInt(bet.betContent, 10);
       const won = !isNaN(targetNum) && targetNum === result.value;
+      if (won) chaseWon = true;
       const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
       settleBet(session, { won, pnl, betId: bet.id, period: 0, isChase: true });
       // 追号倍投层次更新：中→回第一层；不中→进下一层（最后层停留）
@@ -3274,6 +3277,12 @@ function settleHashBets(session: TgSession, result: HashResult): void {
       const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
       settleBet(session, { won, pnl, betId: bet.id, period: 0 });
     }
+  }
+  if (chaseWon && session.cfg.chaseDoubleOnLoss && session.cfg.chaseAmountLevels.length > 1) {
+    for (const c of session.cfg.chaseNumbers) {
+      session.chaseLevels[String(c.num)] = 0;
+    }
+    pushEvent(session, "chase:reset_all", { sum: result.value });
   }
 }
 
