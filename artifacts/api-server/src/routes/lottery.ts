@@ -1,27 +1,25 @@
-import { Router, type Request, type Response } from "express";
-import { z } from "zod";
-import { lotteryService } from "../lib/lottery"; // 修改为你实际路径
+import { Router } from "express";
+import { requireAuth } from "../middleware/requireAuth";
 
 const router = Router();
 
-// 示例 GET 接口
-router.get("/lottery", (req: Request, res: Response) => {
+router.get("/lottery/fengpan", requireAuth, async (req, res) => {
   try {
-    const result = lotteryService.getResult(); // 根据你的逻辑
-    res.status(200).json({ ok: true, result });
+    const r = await fetch("http://pc20.net/api/fengpan", {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Referer": "http://pc20.net/",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) {
+      res.status(502).json({ error: `upstream_http_${r.status}` });
+      return;
+    }
+    const data = await r.json() as unknown;
+    res.status(200).json(data);
   } catch (err) {
-    res.status(500).json({ ok: false, error: String(err) });
-  }
-});
-
-// 如果你有 POST 或其他接口也用 Request/Response
-router.post("/lottery/draw", (req: Request, res: Response) => {
-  try {
-    const body = req.body;
-    const result = lotteryService.draw(body);
-    res.status(200).json({ ok: true, result });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: String(err) });
+    res.status(500).json({ error: String(err) });
   }
 });
 
