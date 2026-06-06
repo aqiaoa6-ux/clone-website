@@ -140,7 +140,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
-  | "canada_kill" | "canada_kill_plus";
+  | "canada_kill" | "canada_kill_plus" | "canada_smart_plus";
 
 interface BetCfg {
   autoBet: boolean;
@@ -2443,6 +2443,36 @@ function canadaDecideKillGroupV2(session: TgSession): KillGroupOption {
   return killed;
 }
 
+function canadaSmartPlus(session: TgSession): KillGroupOption {
+  const raw = [...lotteryHistoryCache, ...session.recentResults].slice(-50);
+  const history = raw.filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
+  if (history.length < 4) return canadaDecideKillGroupV2(session);
+
+  const v2 = canadaDecideKillGroupV2(session);
+  const v1 = decideKillGroup(session);
+  if (v1 === v2) return v2;
+
+  const n = history.length;
+  const latest = history[n - 1]!;
+  let streak = 0;
+  for (let i = n - 1; i >= 0 && history[i] === latest; i--) streak++;
+
+  const tail6 = history.slice(-Math.min(6, n));
+  let altCount = 0;
+  for (let i = 0; i < tail6.length - 1; i++) if (tail6[i] !== tail6[i + 1]) altCount++;
+  const altRatio = tail6.length > 1 ? altCount / (tail6.length - 1) : 0.5;
+
+  const h10 = history.slice(-Math.min(10, n));
+  const bigCnt10 = h10.filter(r => r.startsWith("大")).length;
+  const smlCnt10 = h10.length - bigCnt10;
+  const oddCnt10 = h10.filter(r => r.includes("单")).length;
+  const evnCnt10 = h10.length - oddCnt10;
+  const hasStrongSide = bigCnt10 >= 7 || smlCnt10 >= 7 || oddCnt10 >= 7 || evnCnt10 >= 7;
+
+  if (streak >= 2 || altRatio >= 0.75 || hasStrongSide) return v2;
+  return v1;
+}
+
 // ─── 哈希28 杀组专用决策 ─────────────────────────────────────────────────────
 // 使用 session.hashResults（最新优先）进行七维评分，选出最冷组杀掉
 function hashDecideKillGroup(session: TgSession): KillGroupOption {
@@ -2719,11 +2749,23 @@ async function runAutoBet(session: TgSession): Promise<void> {
     return;
   }
 
-  // 加拿大六维近热杀组（canada_kill = 有散点保护，canada_kill_plus = 每期必下）
-  const canadaKillAlgo = session.cfg.algorithms.find(a => a === "canada_kill" || a === "canada_kill_plus");
-  if (canadaKillAlgo) {
-    if (canadaKillAlgo === "canada_kill") {
-      // 散点循环检测：近3期全不同 → 跳过本期，等形态聚集
+  const cfgAlgos = (session.cfg.algorithms ?? []) as AlgorithmId[];
+  const canadaAlgos = cfgAlgos.filter(a => a === "canada_kill" || a === "canada_kill_plus" || a === "canada_smart_plus");
+  if (canadaAlgos.length > 0) {
+    const primary = canadaAlgos[0]!;
+    const fallback = canadaAlgos[1] ?? primary;
+    let canadaAlgo: AlgorithmId = primary;
+
+    if (fallback !== primary) {
+      const last = session.betLog.find(b =>
+        !b.isChase &&
+        b.won !== undefined &&
+        (b.algoId === primary || b.algoId === fallback)
+      );
+      if (last?.algoId === primary && last.won === false) canadaAlgo = fallback;
+    }
+
+    if (canadaAlgo === "canada_kill") {
       const raw3 = [...lotteryHistoryCache, ...session.recentResults].slice(-50)
         .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
         .slice(-3);
@@ -2745,9 +2787,12 @@ async function runAutoBet(session: TgSession): Promise<void> {
         return;
       }
     }
-    const killed = canadaDecideKillGroupV2(session);
-    session.lastAlgoUsed = canadaKillAlgo;
-    pushEvent(session, "bet:kill", { killed, algo: canadaKillAlgo });
+
+    const killed = canadaAlgo === "canada_smart_plus"
+      ? canadaSmartPlus(session)
+      : canadaDecideKillGroupV2(session);
+    session.lastAlgoUsed = canadaAlgo;
+    pushEvent(session, "bet:kill", { killed, algo: canadaAlgo });
     await placeKillGroupBets(session, killed);
     return;
   }

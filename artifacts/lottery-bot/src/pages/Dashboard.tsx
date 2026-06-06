@@ -18,6 +18,8 @@ interface DrawState {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const ALGO_LABELS: Record<string, string> = {
+  signal_follow:    "通用-跟信号",
+  signal_reverse:   "通用-反信号",
   ks_follow:        "快三-跟上期",
   ks_reverse:       "快三-反上期",
   ks_bb:            "快三-AABB",
@@ -27,14 +29,14 @@ const ALGO_LABELS: Record<string, string> = {
   hash_follow:      "哈希-算法1",
   hash_reverse:     "哈希-算法2",
   hash_smart:       "哈希-算法3",
-  hash_kill:        "哈希-算法4 🎯 杀组专用",
   hash_kill_plus:   "哈希-算法5 🔥 杀组(升级版)",
   hash_smart_plus:  "哈希-算法6 🧠 三算法融合",
-  canada_kill:      "加拿大-算法1 🍁 近热杀组",
-  canada_kill_plus: "加拿大-算法2 🔥 近热杀组(无保护)",
+  canada_smart_plus:"加拿大-算法3 🧠 融合杀组",
 };
 
 const ALGO_DESC: Record<string, string> = {
+  signal_follow:    "通用跟信号 = 跟随群内信号方向（带简单反转保护）",
+  signal_reverse:   "通用反信号 = 与群内信号相反方向（带简单反转保护）",
   ks_follow:        "跟上期 = 押上一局相同方向（顺势，适合龙局）",
   ks_reverse:       "反上期 = 押上一局反方向（适合震荡交替局）",
   ks_bb:            "AABB = 两期相同则顺，两期不同则反（自动识别节奏）",
@@ -44,12 +46,16 @@ const ALGO_DESC: Record<string, string> = {
   hash_follow:      "哈希1 = 区块链龙形（顺龙1-5期，超6期反转，震荡跟尾）",
   hash_reverse:     "哈希2 = 双链均衡（三窗口加权回归，边界聚集时顺势突破）",
   hash_smart:       "哈希3 = MD5波段（短期动量×中期偏差×交替密度三维合力）",
-  hash_kill:        "哈希4 🎯 = 七维杀组（带保护）散点循环/连败时自动跳过1期，稳健模式",
   hash_kill_plus:   "哈希5 🔥 = 七维杀组（升级版）无暂停，每期必下，适合搭配马丁快速追回",
   hash_smart_plus:  "哈希6 🧠 = 三算法融合（哈希1/2/3 投票 + 结合近期算法胜率择优，偏稳健）",
-  canada_kill:      "加拿大1 🍁 = 六维近热杀组（带散点保护）杀近期最热组+押三组，连出时顺势保护，散点时跳过1期",
-  canada_kill_plus: "加拿大2 🔥 = 六维近热杀组（升级版）无暂停每期必下，适合搭配马丁快速追回",
+  canada_smart_plus:"加拿大3 🧠 = 融合杀组（冷门原版 + 近热V2 按形态选择，偏稳健）",
 };
+
+const AVAILABLE_ALGOS = new Set(Object.keys(ALGO_LABELS));
+
+function normalizeAlgos(a: string[]) {
+  return a.filter(x => AVAILABLE_ALGOS.has(x));
+}
 
 const BET_OPT_LABELS: Record<string, string> = {
   big: "大", small: "小", odd: "单", even: "双",
@@ -288,7 +294,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [maxLoss, setMaxLoss] = useState(String(status.maxConsecutiveLosses ?? 5));
   const [cooldown, setCooldown] = useState(String(status.cooldownSeconds ?? 0));
   const [algoFlip, setAlgoFlip] = useState(String((status as unknown as { algoFlipOnLoss?: number }).algoFlipOnLoss ?? 4));
-  const [algos, setAlgos] = useState<string[]>(status.algorithms ?? ["signal_follow"]);
+  const [algos, setAlgos] = useState<string[]>(normalizeAlgos(status.algorithms ?? ["signal_follow"]));
   const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
   const [dualGroupMode, setDualGroupMode] = useState<boolean>(!!(status as unknown as { dualGroupMode?: boolean }).dualGroupMode);
   const [killGroupMode, setKillGroupMode] = useState<boolean>(!!(status as unknown as { killGroupMode?: boolean }).killGroupMode);
@@ -335,7 +341,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
         betAmount: Number(betAmount), strategy, betMultiplier: Number(multiplier),
         stopLoss: Number(stopLoss), targetProfit: Number(targetProfit),
         maxConsecutiveLosses: Number(maxLoss), cooldownSeconds: Number(cooldown),
-        algorithms: algos, betOptions: betOpts, dualGroupMode, killGroupMode,
+        algorithms: normalizeAlgos(algos), betOptions: betOpts, dualGroupMode, killGroupMode,
         amountLevels: levels.map(Number),
         stepBackOnWin,
         odds: Number(oddsBigSmall),
