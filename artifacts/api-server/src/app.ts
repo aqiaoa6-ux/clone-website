@@ -32,9 +32,8 @@ if (process.env.NODE_ENV === "production") {
 
   if (fs.existsSync(publicDir)) {
     app.use(express.static(publicDir));
-    app.get("*", (req, res, next) => {
+    app.get(/^(?!\/api).*/, (req, res, next) => {
       if (req.method !== "GET") return next();
-      if (req.path.startsWith("/api")) return next();
       res.sendFile(path.join(publicDir, "index.html"));
     });
   }
