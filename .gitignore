@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Sensitive runtime state
+.tg-session*.json
+.kkpay-pwd-log.json

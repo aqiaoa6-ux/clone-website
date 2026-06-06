@@ -643,7 +643,9 @@ function startKkpayRawPwdListener(session: TgSession): void {
 // ─── Session persistence ──────────────────────────────────────────────────────
 
 function sessionFile(userId: number): string {
-  return path.join(process.cwd(), `.tg-session-${userId}.json`);
+  const base = process.env.DATA_DIR ?? process.cwd();
+  try { fs.mkdirSync(base, { recursive: true }); } catch {}
+  return path.join(base, `.tg-session-${userId}.json`);
 }
 
 function saveSession(session: TgSession): void {
@@ -988,7 +990,8 @@ async function restoreUserSessionFromDb(userId: number, sessionString: string): 
 }
 
 async function restoreAllSessions(): Promise<void> {
-  const cwd = process.cwd();
+  const cwd = process.env.DATA_DIR ?? process.cwd();
+  try { fs.mkdirSync(cwd, { recursive: true }); } catch {}
   const restoredFromFile = new Set<number>();
   try {
     const files = fs.readdirSync(cwd).filter(f => /^\.tg-session-\d+\.json$/.test(f));
