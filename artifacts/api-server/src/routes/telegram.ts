@@ -139,7 +139,7 @@ type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "sm
 type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
-  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_kill" | "hash_kill_plus"
+  | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
   | "canada_kill" | "canada_kill_plus";
 
 interface BetCfg {
@@ -1690,10 +1690,50 @@ function hashWave(session: TgSession, labels: string[]): string | null {
   return scoreA > scoreB ? optA : optB;
 }
 
+function hashSmartPlus(session: TgSession, labels: string[]): string | null {
+  const candidates: Array<{ algo: AlgorithmId; pick: string | null }> = [
+    { algo: "hash_follow", pick: hashDragon(session, labels) },
+    { algo: "hash_reverse", pick: hashBalance(session, labels) },
+    { algo: "hash_smart", pick: hashWave(session, labels) },
+  ];
+
+  const picks = candidates
+    .map((c) => ({ algo: c.algo, pick: c.pick && labels.includes(c.pick) ? c.pick : null }))
+    .filter((x): x is { algo: AlgorithmId; pick: string } => x.pick !== null);
+
+  if (picks.length === 0) return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  if (picks.length === 1) return picks[0]!.pick;
+
+  const best = picks
+    .map(({ algo, pick }) => {
+      const s = session.algoStats[algo];
+      const total = (s?.wins ?? 0) + (s?.losses ?? 0);
+      const rate = total > 0 ? (s!.wins / total) : 0.5;
+      return { algo, pick, total, rate };
+    })
+    .sort((a, b) => {
+      if (a.total < 6 && b.total >= 6) return 1;
+      if (a.total >= 6 && b.total < 6) return -1;
+      if (a.rate !== b.rate) return b.rate - a.rate;
+      return b.total - a.total;
+    })[0]!;
+
+  const vote: Record<string, number> = {};
+  for (const p of picks) vote[p.pick] = (vote[p.pick] ?? 0) + 1;
+  const voted = Object.entries(vote).sort((a, b) => b[1] - a[1]);
+  const top = voted[0]?.[0];
+  const topCount = voted[0]?.[1] ?? 0;
+  const secondCount = voted[1]?.[1] ?? 0;
+
+  if (top && topCount > secondCount) return top;
+  return best.pick;
+}
+
 function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], signalText = ""): string | null {
   if (algoId === "hash_follow")  return hashDragon(session, labels);
   if (algoId === "hash_reverse") return hashBalance(session, labels);
   if (algoId === "hash_smart")   return hashWave(session, labels);
+  if (algoId === "hash_smart_plus") return hashSmartPlus(session, labels);
   if (algoId === "ks_follow")        return ksFollow(session, labels);
   if (algoId === "ks_reverse")       return ksReverse(session, labels);
   if (algoId === "ks_bb")            return ksBB(session, labels);
@@ -3299,11 +3339,24 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
   const risk = checkRisk(session);
   if (!risk.ok) return;
 
-  const rawAlgoId = (session.cfg.algorithms[session.algIndex % Math.max(session.cfg.algorithms.length, 1)] ?? "ai_trend") as AlgorithmId;
-  const SIGNAL_ALGOS: AlgorithmId[] = ["signal_follow", "signal_reverse"];
-  const algoId: AlgorithmId = SIGNAL_ALGOS.includes(rawAlgoId) ? "ks_bb" : rawAlgoId;
+  const cfgAlgos = (session.cfg.algorithms ?? []) as AlgorithmId[];
+  const hashAlgos = cfgAlgos.filter(a => a.startsWith("hash_"));
+  const primary =
+    (hashAlgos.includes("hash_kill_plus") ? "hash_kill_plus"
+      : (hashAlgos.includes("hash_kill") ? "hash_kill"
+        : (hashAlgos[0] ?? "hash_kill_plus"))) as AlgorithmId;
+  const fallback = (hashAlgos.find(a => a !== primary) ?? primary) as AlgorithmId;
 
-  session.algIndex++;
+  let algoId: AlgorithmId = primary;
+  if (fallback !== primary) {
+    const last = session.betLog.find(b =>
+      !b.isChase &&
+      b.won !== undefined &&
+      (b.algoId === primary || b.algoId === fallback)
+    );
+    if (last?.algoId === primary && last.won === false) algoId = fallback;
+  }
+
   session.lastAlgoUsed = algoId;
 
   // ── 算法4 杀组专用：选出最冷组，押其余三组 ─────────────────────────────────
