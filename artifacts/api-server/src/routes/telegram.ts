@@ -3771,7 +3771,13 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
       if (/停止下注|停止投注|已封盘/.test(text) && /期号/.test(text)) {
         const stopTermMatch = /期号[：:]\s*(\d+)/.exec(text);
         const stopTerm = stopTermMatch ? parseInt(stopTermMatch[1]!, 10) : currentLotteryTerm;
-        if (stopTerm) scheduleSnapshot(stopTerm, SNAPSHOT_DELAY_MS);
+        if (stopTerm) {
+          if (canadaCurrentBetTerm === null) canadaCurrentBetTerm = stopTerm;
+          for (const b of canadaBets) {
+            if (b.termContext === null) b.termContext = stopTerm;
+          }
+          scheduleSnapshot(stopTerm, SNAPSHOT_DELAY_MS);
+        }
         continue;
       }
 
