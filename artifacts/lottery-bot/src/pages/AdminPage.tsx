@@ -533,7 +533,7 @@ export default function AdminPage() {
         setHashBets(reset.bets.slice(0, 500));
         setHashPeriod(reset.period);
       }
-    }, 500);
+    }, 1000);
 
     return () => {
       destroyed = true;

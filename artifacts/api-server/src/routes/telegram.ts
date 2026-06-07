@@ -49,9 +49,8 @@ const DIR_KEYS = ["大单", "大双", "大", "小单", "小双", "小"] as const
 const periodHistory: PeriodRecord[] = [];
 const pendingCanadaSnapshots = new Set<number>();
 // 停止下注后延迟 20 秒再快照，于是当期下注数据仍展示在实时监控
-const SNAPSHOT_DELAY_MS = 5_000;
+const SNAPSHOT_DELAY_MS = 20_000;
 const pendingSnapshotTimers = new Map<number, NodeJS.Timeout>();
-const CANADA_POLL_GROUPS_PER_TICK = 4;
 
 // 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
 const CANADA_WINDOW_MS = 5 * 60 * 1000;
@@ -319,7 +318,6 @@ interface TgSession {
   canadaMonitorPollers: Record<string, boolean>;   // groupId → active flag
   canadaSharedPoller?: ReturnType<typeof setTimeout>; // 单一串行 loop
   canadaMonitorLastMsgIds: Record<string, number>;
-  canadaPollCursor: number;
 }
 
 interface PersistedData {
@@ -941,7 +939,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
     hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
-    canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaPollCursor: 0,
+    canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {},
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -3760,47 +3758,10 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
       if (isBetStart) {
         const termMatch = /期号[：:]\s*(\d+)/.exec(text);
         const newTerm = termMatch ? parseInt(termMatch[1]!, 10) : null;
-        const prevTerm = canadaCurrentBetTerm;
-        if (prevTerm !== null && prevTerm !== newTerm) {
-          const timer = pendingSnapshotTimers.get(prevTerm);
-          if (timer) { clearTimeout(timer); pendingSnapshotTimers.delete(prevTerm); }
-          const betsForTerm = canadaBets.filter(b => b.termContext === prevTerm);
-          if (betsForTerm.length > 0) {
-            const snap: PeriodRecord = {
-              term: prevTerm,
-              result: null,
-              closedAt: Date.now(),
-              dirs: Object.fromEntries(DIR_KEYS.map(k => [k, { kk: 0, usdt: 0, cny: 0 }])),
-            };
-            for (const b of betsForTerm) {
-              if (b.direction in snap.dirs) snap.dirs[b.direction][b.currency] += b.amount;
-            }
-            const existing = periodHistory.find(r => r.term === prevTerm);
-            if (existing) {
-              existing.dirs = snap.dirs;
-              existing.closedAt = snap.closedAt;
-            } else {
-              periodHistory.unshift(snap);
-              periodHistory.sort((a, b) => (b.term ?? 0) - (a.term ?? 0));
-              if (periodHistory.length > 30) periodHistory.pop();
-            }
-            lastCanadaSnap = { term: prevTerm, dirs: snap.dirs, closedAt: snap.closedAt };
-            pushAdminEvent("history:update", { history: periodHistory.slice(0, 30) });
-          }
-          const kept = canadaBets.filter(b => b.termContext === null || b.termContext !== prevTerm);
-          if (kept.length !== canadaBets.length) {
-            canadaBets.length = 0;
-            for (const b of kept) canadaBets.push(b);
-          }
-          canadaBetPeriod = canadaBets[0]?.period ?? null;
-          canadaLastBetAt = kept.length > 0 ? canadaLastBetAt : 0;
-          pushAdminEvent("bets:reset", {
-            bets: canadaBets,
-            period: canadaBetPeriod,
-            term: newTerm ?? canadaCurrentBetTerm ?? currentLotteryTerm,
-            lastBetAt: canadaLastBetAt,
-            snap: lastCanadaSnap,
-          });
+        if (canadaCurrentBetTerm !== null) {
+          const timer = pendingSnapshotTimers.get(canadaCurrentBetTerm);
+          if (timer) { clearTimeout(timer); pendingSnapshotTimers.delete(canadaCurrentBetTerm); }
+          scheduleSnapshot(canadaCurrentBetTerm, 0);
         }
         if (newTerm !== null) canadaCurrentBetTerm = newTerm;
         continue;
@@ -3831,7 +3792,7 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
       canadaLastBetAt = Date.now();
       pushAdminEvent("bets:batch", {
         bets: newEntries, period: canadaBetPeriod,
-        term: canadaCurrentBetTerm ?? currentLotteryTerm, lastBetAt: canadaLastBetAt,
+        term: currentLotteryTerm, lastBetAt: canadaLastBetAt,
       });
     }
   } catch { /* network hiccup / flood wait handled by GramJS */ }
@@ -3856,16 +3817,10 @@ function scheduleSnapshot(term: number, delayMs: number): void {
 function scheduleCanadaLoop(session: TgSession): void {
   if (session.canadaSharedPoller) return; // already scheduled
   const loop = async () => {
-    const startedAt = Date.now();
     if (tgSessions.get(session.userId) !== session) return;
     const activeGroups = Object.keys(session.canadaMonitorPollers).filter(g => session.canadaMonitorPollers[g]);
     if (activeGroups.length === 0) { session.canadaSharedPoller = undefined; return; }
-    const cursor = session.canadaPollCursor % Math.max(activeGroups.length, 1);
-    const count = Math.min(CANADA_POLL_GROUPS_PER_TICK, activeGroups.length);
-    const picked = activeGroups.slice(cursor, cursor + count);
-    if (picked.length < count) picked.push(...activeGroups.slice(0, count - picked.length));
-    session.canadaPollCursor = (cursor + picked.length) % Math.max(activeGroups.length, 1);
-    await Promise.allSettled(picked.map(gid => pollOneCanadaGroup(session, gid)));
+    await Promise.allSettled(activeGroups.map(gid => pollOneCanadaGroup(session, gid)));
     // ── 整圈轮询完毕 → 按期号逐一快照（termContext 过滤，不混期）──
     if (pendingCanadaSnapshots.size > 0) {
       const terms = [...pendingCanadaSnapshots].sort((a, b) => a - b);
@@ -3910,11 +3865,9 @@ function scheduleCanadaLoop(session: TgSession): void {
       }
       canadaBetPeriod = canadaBets[0]?.period ?? null;
       canadaLastBetAt = kept.length > 0 ? canadaLastBetAt : 0;
-      pushAdminEvent("bets:reset", { bets: canadaBets, period: canadaBetPeriod, term: canadaCurrentBetTerm ?? currentLotteryTerm, lastBetAt: canadaLastBetAt, snap: lastCanadaSnap });
+      pushAdminEvent("bets:reset", { bets: canadaBets, period: canadaBetPeriod, term: currentLotteryTerm, lastBetAt: canadaLastBetAt, snap: lastCanadaSnap });
     }
-    const elapsed = Date.now() - startedAt;
-    const waitMs = Math.max(500, 1000 - elapsed);
-    session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, waitMs);
+    session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 1000);
   };
   session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 0);
 }
@@ -4249,7 +4202,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
       hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
-      canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaPollCursor: 0,
+      canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {},
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
@@ -5183,10 +5136,9 @@ router.get("/admin/hash-group-bets/events", requireAdminSecret, (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   res.write(": connected\n\n");
-  const term = canadaCurrentBetTerm ?? currentLotteryTerm;
   const totals = { kk: 0, usdt: 0, cny: 0 };
   for (const b of canadaBets) totals[b.currency] += b.amount;
-  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, term, lastBetAt: canadaLastBetAt, bets: canadaBets, totals, history: periodHistory.slice(0, 30) })}\n\n`);
+  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, term: currentLotteryTerm, lastBetAt: canadaLastBetAt, bets: canadaBets, totals, history: periodHistory.slice(0, 30) })}\n\n`);
   adminSseClients.add(res);
   const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
   req.on("close", () => { clearInterval(hb); adminSseClients.delete(res); });
