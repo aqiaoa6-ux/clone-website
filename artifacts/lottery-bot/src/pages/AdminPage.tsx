@@ -38,6 +38,28 @@ export default function AdminPage() {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
   const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog" | "shop" | "hashmon">("cards");
+  type KillDir = "大单" | "大双" | "小单" | "小双";
+  const KILL_DIRS: KillDir[] = ["大单", "大双", "小单", "小双"];
+  const KILL_AMT_KEY = "hashmon_kill_amounts_v1";
+  const [killAmts, setKillAmts] = useState<Record<KillDir, string>>(() => {
+    try {
+      const s = localStorage.getItem(KILL_AMT_KEY);
+      if (s) {
+        const v = JSON.parse(s) as Partial<Record<KillDir, string>>;
+        return {
+          大单: v.大单 ?? "1",
+          大双: v.大双 ?? "1",
+          小单: v.小单 ?? "1",
+          小双: v.小双 ?? "1",
+        };
+      }
+    } catch {}
+    return { 大单: "1", 大双: "1", 小单: "1", 小双: "1" };
+  });
+  const [hashCopied, setHashCopied] = useState(false);
+  useEffect(() => {
+    try { localStorage.setItem(KILL_AMT_KEY, JSON.stringify(killAmts)); } catch {}
+  }, [killAmts]);
 
   // ── card tab ──
   const [cards, setCards] = useState<AdminCard[]>([]);
@@ -285,6 +307,17 @@ export default function AdminPage() {
         return [...prev, { groupId: r.groupId, groupTitle: r.groupTitle, active: true }];
       });
     } catch { /* ignore */ } finally { setCanadaPickerSaving(null); }
+  };
+
+  const clearCanadaMonitorLocal = () => {
+    betBufferRef.current = [];
+    resetPendingRef.current = null;
+    setHashBets([]);
+    setHashPeriod(null);
+    setHashTerm(null);
+    setHashLastBetAt(0);
+    setHashSnap(null);
+    setHashHistory([]);
   };
 
   const removeCanadaGroup = async (groupId: string) => {
@@ -2138,11 +2171,53 @@ export default function AdminPage() {
                 return "text-sky-400";
               };
               const dirCols = ["大单", "大双", "大", "小单", "小双", "小"] as const;
+              const latestRec = hashHistory[0];
+              const pickLatestKill3 = () => {
+                if (!latestRec) return;
+                const zero = { kk: 0, usdt: 0, cny: 0 };
+                const ranked = KILL_DIRS
+                  .map(d => ({ d, u: toU(latestRec.dirs[d] ?? zero) }))
+                  .sort((a, b) => a.u - b.u);
+                const pick = ranked.slice(0, 3).map(x => x.d);
+                const text = pick.map(d => `${d} ${killAmts[d]}`.trim()).join("\n");
+                void navigator.clipboard.writeText(text);
+                setHashCopied(true);
+                setTimeout(() => setHashCopied(false), 2000);
+              };
               return (
                 <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
                   <div className="px-4 py-3 border-b border-[#252a3d] flex items-center gap-2">
                     <span className="text-white font-semibold text-sm">📋 开奖记录</span>
                     <span className="text-slate-500 text-xs">最近 {hashHistory.length} 期</span>
+                    <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {KILL_DIRS.map(d => (
+                          <div key={d} className="flex items-center gap-1 bg-[#0d1117] border border-[#252a3d] rounded-lg px-2 py-1">
+                            <span className="text-[10px] text-slate-500">{d}</span>
+                            <input
+                              type="number"
+                              value={killAmts[d]}
+                              onChange={e => setKillAmts(p => ({ ...p, [d]: e.target.value }))}
+                              className="w-12 bg-transparent text-white text-xs font-mono outline-none"
+                              min="0"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <button
+                        disabled={!latestRec}
+                        onClick={pickLatestKill3}
+                        className="text-xs px-2 py-1 rounded-lg border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 transition"
+                      >
+                        {hashCopied ? "已复制" : "复制最小三组"}
+                      </button>
+                      <button
+                        onClick={clearCanadaMonitorLocal}
+                        className="text-xs px-2 py-1 rounded-lg border border-red-500/30 text-red-300 hover:bg-red-500/10 transition"
+                      >
+                        清空
+                      </button>
+                    </div>
                   </div>
                   <div className="overflow-x-auto">
                     <table className="w-full text-xs">
