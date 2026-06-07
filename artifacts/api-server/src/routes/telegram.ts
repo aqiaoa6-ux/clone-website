@@ -49,7 +49,7 @@ const DIR_KEYS = ["大单", "大双", "大", "小单", "小双", "小"] as const
 const periodHistory: PeriodRecord[] = [];
 const pendingCanadaSnapshots = new Set<number>();
 // 停止下注后延迟 20 秒再快照，于是当期下注数据仍展示在实时监控
-const SNAPSHOT_DELAY_MS = 20_000;
+const SNAPSHOT_DELAY_MS = 5_000;
 const pendingSnapshotTimers = new Map<number, NodeJS.Timeout>();
 
 // 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
@@ -3818,6 +3818,7 @@ function scheduleSnapshot(term: number, delayMs: number): void {
 function scheduleCanadaLoop(session: TgSession): void {
   if (session.canadaSharedPoller) return; // already scheduled
   const loop = async () => {
+    const startedAt = Date.now();
     if (tgSessions.get(session.userId) !== session) return;
     const activeGroups = Object.keys(session.canadaMonitorPollers).filter(g => session.canadaMonitorPollers[g]);
     if (activeGroups.length === 0) { session.canadaSharedPoller = undefined; return; }
@@ -3869,7 +3870,9 @@ function scheduleCanadaLoop(session: TgSession): void {
       canadaLastBetAt = kept.length > 0 ? canadaLastBetAt : 0;
       pushAdminEvent("bets:reset", { bets: canadaBets, period: canadaBetPeriod, term: currentLotteryTerm, lastBetAt: canadaLastBetAt, snap: lastCanadaSnap });
     }
-    session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 1000);
+    const elapsed = Date.now() - startedAt;
+    const waitMs = Math.max(200, 1000 - elapsed);
+    session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, waitMs);
   };
   session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 0);
 }

@@ -533,7 +533,7 @@ export default function AdminPage() {
         setHashBets(reset.bets.slice(0, 500));
         setHashPeriod(reset.period);
       }
-    }, 1000);
+    }, 250);
 
     return () => {
       destroyed = true;
@@ -2171,12 +2171,22 @@ export default function AdminPage() {
                 return "text-sky-400";
               };
               const dirCols = ["大单", "大双", "大", "小单", "小双", "小"] as const;
-              const latestRec = hashHistory[0];
-              const pickLatestKill3 = () => {
-                if (!latestRec) return;
-                const zero = { kk: 0, usdt: 0, cny: 0 };
+              const liveZero = () => ({ kk: 0, usdt: 0, cny: 0 });
+              const liveDirs: Record<KillDir, { kk: number; usdt: number; cny: number }> = {
+                大单: liveZero(),
+                大双: liveZero(),
+                小单: liveZero(),
+                小双: liveZero(),
+              };
+              for (const b of hashBets) {
+                const d = b.direction as KillDir;
+                if (d in liveDirs) liveDirs[d][b.currency] += b.amount;
+              }
+              const hasLive = Object.values(liveDirs).some(v => v.kk + v.usdt + v.cny > 0);
+              const pickLiveKill3 = () => {
+                if (!hasLive) return;
                 const ranked = KILL_DIRS
-                  .map(d => ({ d, u: toU(latestRec.dirs[d] ?? zero) }))
+                  .map(d => ({ d, u: toU(liveDirs[d]) }))
                   .sort((a, b) => a.u - b.u);
                 const pick = ranked.slice(0, 3).map(x => x.d);
                 const text = pick.map(d => `${d} ${killAmts[d]}`.trim()).join("\n");
@@ -2205,8 +2215,8 @@ export default function AdminPage() {
                         ))}
                       </div>
                       <button
-                        disabled={!latestRec}
-                        onClick={pickLatestKill3}
+                        disabled={!hasLive}
+                        onClick={pickLiveKill3}
                         className="text-xs px-2 py-1 rounded-lg border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-40 transition"
                       >
                         {hashCopied ? "已复制" : "复制最小三组"}
