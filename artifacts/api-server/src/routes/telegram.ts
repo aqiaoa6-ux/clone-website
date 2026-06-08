@@ -63,10 +63,10 @@ const privateGroupTitleCache = new Map<string, string>();
 const PRIVATE_MAX_BETS = 2000;
 const PRIVATE_WINDOW_MS = 10 * 60 * 1000;
 
-function resolvePeerForClient(groupId: string): string | bigint {
+function resolvePeerForClient(groupId: string): string | ReturnType<typeof bigInt> {
   const gid = groupId.trim();
-  if (/^-100\d+$/.test(gid)) return BigInt(gid.slice(4));
-  if (/^\d+$/.test(gid)) return BigInt(gid);
+  if (/^-100\d+$/.test(gid)) return bigInt(gid.slice(4));
+  if (/^\d+$/.test(gid)) return bigInt(gid);
   return gid;
 }
 
