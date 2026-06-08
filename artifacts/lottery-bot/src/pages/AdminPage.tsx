@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry } from "../lib/api";
@@ -33,6 +33,8 @@ const KKPAY_KEYBOARD: string[][] = [
 const fmt = (v: number) => (v >= 0 ? "+" : "") + v.toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 const fmtTime = (ts: number) => new Date(ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+type PrivateSummaryDir = "大" | "小" | "单" | "双" | "大单" | "大双" | "小单" | "小双";
+const PRIVATE_SUMMARY_DIRS: PrivateSummaryDir[] = ["大", "小", "单", "双", "大单", "大双", "小单", "小双"];
 
 export default function AdminPage() {
   const { user, logout } = useAuth();
@@ -338,6 +340,21 @@ export default function AdminPage() {
   const [privateTerm, setPrivateTerm] = useState<number | null>(null);
   const [privateLastBetAt, setPrivateLastBetAt] = useState<number>(0);
   const privateBetBufferRef = useRef<GroupBetEntry[]>([]);
+  const privateSummary = useMemo(() => {
+    const totals: Record<PrivateSummaryDir, number> = {
+      大: 0, 小: 0, 单: 0, 双: 0, 大单: 0, 大双: 0, 小单: 0, 小双: 0,
+    };
+    const add = (dir: PrivateSummaryDir, amount: number) => { totals[dir] += amount; };
+
+    for (const b of privateBets) {
+      const amount = Number(b.amount);
+      if (!isFinite(amount) || amount <= 0) continue;
+      const dir = b.direction.trim() as PrivateSummaryDir | string;
+      if (dir in totals) add(dir as PrivateSummaryDir, amount);
+    }
+
+    return PRIVATE_SUMMARY_DIRS.map(dir => ({ dir, amount: totals[dir] }));
+  }, [privateBets]);
 
   const loadPrivateGroups = async () => {
     try {
@@ -2562,6 +2579,31 @@ export default function AdminPage() {
               </div>
               <div className="text-xs text-slate-500">
                 只显示本期（新期开盘消息出现后会自动清空上期）
+              </div>
+            </div>
+
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-[#252a3d] flex items-center justify-between">
+                <span className="text-white font-semibold text-sm">金额汇总</span>
+                <span className="text-xs text-slate-500">大 / 小 / 单 / 双 / 组合</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3">
+                {privateSummary.map(item => {
+                  const dirColor =
+                    item.dir.startsWith("大") ? "text-red-400" :
+                    item.dir.startsWith("小") ? "text-sky-400" :
+                    item.dir === "单" ? "text-orange-300" :
+                    item.dir === "双" ? "text-violet-300" :
+                    "text-slate-300";
+                  return (
+                    <div key={item.dir} className="rounded-xl border border-[#252a3d] bg-[#0d1117] px-3 py-2.5">
+                      <div className={`text-sm font-semibold ${dirColor}`}>{item.dir}</div>
+                      <div className="mt-1 text-white font-mono text-base">
+                        {item.amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
