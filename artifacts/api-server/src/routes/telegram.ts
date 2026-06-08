@@ -63,6 +63,13 @@ const privateGroupTitleCache = new Map<string, string>();
 const PRIVATE_MAX_BETS = 2000;
 const PRIVATE_WINDOW_MS = 10 * 60 * 1000;
 
+function resolvePeerForClient(groupId: string): string | bigint {
+  const gid = groupId.trim();
+  if (/^-100\d+$/.test(gid)) return BigInt(gid.slice(4));
+  if (/^\d+$/.test(gid)) return BigInt(gid);
+  return gid;
+}
+
 function getCanadaLiveTerm(): number | null {
   return canadaCurrentBetTerm ?? currentLotteryTerm;
 }
@@ -4052,7 +4059,8 @@ async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise
       if (inList) privateGroupTitleCache.set(groupId, inList);
     }
     const lastId = session.privateMonitorLastMsgIds[groupId] ?? 0;
-    const msgs = await session.client.getMessages(groupId, {
+    const peer = resolvePeerForClient(groupId);
+    const msgs = await session.client.getMessages(peer, {
       limit: 20,
       ...(lastId > 0 ? { minId: lastId } : {}),
     }) as Api.Message[];
@@ -4133,8 +4141,9 @@ function schedulePrivateLoop(session: TgSession): void {
 function startPrivateMonitorPoller(session: TgSession, groupId: string): void {
   void (async () => {
     try {
+      const peer = resolvePeerForClient(groupId);
       if (!session.privateMonitorLastMsgIds[groupId]) {
-        const baseline = await session.client.getMessages(groupId, { limit: 1 }) as Api.Message[];
+        const baseline = await session.client.getMessages(peer, { limit: 1 }) as Api.Message[];
         if (baseline.length > 0) {
           session.privateMonitorLastMsgIds[groupId] = baseline[0]!.id;
         }
@@ -5511,7 +5520,7 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
     const inList = session.groups.find(g => g.id === gid || `-100${g.id}` === gid)?.title;
     if (inList) { privateGroupTitleCache.set(gid, inList); return inList; }
     try {
-      const ent = await session.client.getEntity(gid);
+      const ent = await session.client.getEntity(resolvePeerForClient(gid));
       const title = (ent as unknown as { title?: string }).title;
       if (title) { privateGroupTitleCache.set(gid, title); return title; }
     } catch {}
