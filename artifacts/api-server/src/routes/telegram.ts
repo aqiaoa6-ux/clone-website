@@ -70,6 +70,25 @@ function resolvePeerForClient(groupId: string): string | ReturnType<typeof bigIn
   return gid;
 }
 
+function normalizeGroupId(groupId: string): string {
+  const gid = groupId.trim();
+  if (/^-100\d+$/.test(gid)) return gid.slice(4);
+  return gid;
+}
+
+function sameGroupId(a?: string, b?: string): boolean {
+  if (!a || !b) return false;
+  return normalizeGroupId(a) === normalizeGroupId(b);
+}
+
+function findGroupInSession(session: TgSession, groupId: string): GroupInfo | undefined {
+  return session.groups.find(g => sameGroupId(g.id, groupId));
+}
+
+function canonicalGroupId(session: TgSession, groupId: string): string {
+  return findGroupInSession(session, groupId)?.id ?? normalizeGroupId(groupId);
+}
+
 function getCanadaLiveTerm(): number | null {
   return canadaCurrentBetTerm ?? currentLotteryTerm;
 }
@@ -5446,7 +5465,10 @@ router.get("/admin/private-bets", requireAdminSecret, (_req, res) => {
 // 辅助: 找到监控某个 groupId 的 session（先找已有的，再找第一个可用的）
 function findSessionForGroup(groupId: string): TgSession | undefined {
   for (const s of tgSessions.values()) {
-    if (s.canadaMonitorGroupIds.includes(groupId) && s.me) return s;
+    if (s.me && (s.canadaMonitorGroupIds.some(g => sameGroupId(g, groupId)) || s.privateMonitorGroupIds.some(g => sameGroupId(g, groupId)))) return s;
+  }
+  for (const s of tgSessions.values()) {
+    if (s.me && findGroupInSession(s, groupId)) return s;
   }
   for (const s of tgSessions.values()) { if (s.me) return s; }
   return undefined;
@@ -5458,7 +5480,7 @@ router.get("/admin/canada-monitor-groups", requireAdminSecret, async (_req, res)
   const resolveTitle = async (session: TgSession, gid: string): Promise<string | undefined> => {
     const cached = canadaGroupTitleCache.get(gid);
     if (cached) return cached;
-    const inList = session.groups.find(g => g.id === gid || `-100${g.id}` === gid)?.title;
+    const inList = findGroupInSession(session, gid)?.title;
     if (inList) { canadaGroupTitleCache.set(gid, inList); return inList; }
     try {
       const ent = await session.client.getEntity(gid);
@@ -5482,14 +5504,15 @@ router.post("/admin/canada-monitor-groups/add", requireAdminSecret, (req, res) =
   if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
   const target = findSessionForGroup(groupId);
   if (!target) { res.status(400).json({ error: "没有已连接的 TG 账号" }); return; }
-  if (!target.canadaMonitorGroupIds.includes(groupId)) {
-    target.canadaMonitorGroupIds.push(groupId);
+  const gid = canonicalGroupId(target, groupId);
+  if (!target.canadaMonitorGroupIds.some(g => sameGroupId(g, gid))) {
+    target.canadaMonitorGroupIds.push(gid);
     saveSession(target);
   }
-  startCanadaMonitorPoller(target, groupId);
-  const title = target.groups.find(g => g.id === groupId || `-100${g.id}` === groupId)?.title;
-  if (title) canadaGroupTitleCache.set(groupId, title);
-  res.json({ ok: true, groupId, groupTitle: title ?? groupId, userId: target.userId });
+  startCanadaMonitorPoller(target, gid);
+  const title = findGroupInSession(target, gid)?.title;
+  if (title) canadaGroupTitleCache.set(gid, title);
+  res.json({ ok: true, groupId: gid, groupTitle: title ?? gid, userId: target.userId });
 });
 
 // POST /admin/canada-monitor-groups/remove — 移除监控群
@@ -5497,9 +5520,10 @@ router.post("/admin/canada-monitor-groups/remove", requireAdminSecret, (req, res
   const { groupId } = req.body as { groupId?: string };
   if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
   for (const session of tgSessions.values()) {
-    const idx = session.canadaMonitorGroupIds.indexOf(groupId);
+    const idx = session.canadaMonitorGroupIds.findIndex(g => sameGroupId(g, groupId));
     if (idx >= 0) {
-      stopCanadaMonitorPoller(session, groupId);
+      const gid = session.canadaMonitorGroupIds[idx]!;
+      stopCanadaMonitorPoller(session, gid);
       session.canadaMonitorGroupIds.splice(idx, 1);
       saveSession(session);
     }
@@ -5512,7 +5536,7 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
   const resolveTitle = async (session: TgSession, gid: string): Promise<string | undefined> => {
     const cached = privateGroupTitleCache.get(gid);
     if (cached) return cached;
-    const inList = session.groups.find(g => g.id === gid || `-100${g.id}` === gid)?.title;
+    const inList = findGroupInSession(session, gid)?.title;
     if (inList) { privateGroupTitleCache.set(gid, inList); return inList; }
     try {
       const ent = await session.client.getEntity(resolvePeerForClient(gid));
@@ -5535,23 +5559,25 @@ router.post("/admin/private-monitor-groups/add", requireAdminSecret, (req, res) 
   if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
   const target = findSessionForGroup(groupId);
   if (!target) { res.status(400).json({ error: "没有已连接的 TG 账号" }); return; }
-  if (!target.privateMonitorGroupIds.includes(groupId)) {
-    target.privateMonitorGroupIds.push(groupId);
+  const gid = canonicalGroupId(target, groupId);
+  if (!target.privateMonitorGroupIds.some(g => sameGroupId(g, gid))) {
+    target.privateMonitorGroupIds.push(gid);
     saveSession(target);
   }
-  startPrivateMonitorPoller(target, groupId);
-  const title = target.groups.find(g => g.id === groupId || `-100${g.id}` === groupId)?.title;
-  if (title) privateGroupTitleCache.set(groupId, title);
-  res.json({ ok: true, groupId, groupTitle: title ?? groupId, userId: target.userId });
+  startPrivateMonitorPoller(target, gid);
+  const title = findGroupInSession(target, gid)?.title;
+  if (title) privateGroupTitleCache.set(gid, title);
+  res.json({ ok: true, groupId: gid, groupTitle: title ?? gid, userId: target.userId });
 });
 
 router.post("/admin/private-monitor-groups/remove", requireAdminSecret, (req, res) => {
   const { groupId } = req.body as { groupId?: string };
   if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
   for (const session of tgSessions.values()) {
-    const idx = session.privateMonitorGroupIds.indexOf(groupId);
+    const idx = session.privateMonitorGroupIds.findIndex(g => sameGroupId(g, groupId));
     if (idx >= 0) {
-      stopPrivateMonitorPoller(session, groupId);
+      const gid = session.privateMonitorGroupIds[idx]!;
+      stopPrivateMonitorPoller(session, gid);
       session.privateMonitorGroupIds.splice(idx, 1);
       saveSession(session);
     }
