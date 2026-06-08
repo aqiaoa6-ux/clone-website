@@ -37,7 +37,7 @@ const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { ho
 export default function AdminPage() {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
-  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog" | "shop" | "hashmon">("cards");
+  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog" | "shop" | "hashmon" | "privmon">("cards");
   type KillDir = "大单" | "大双" | "小单" | "小双";
   const KILL_DIRS: KillDir[] = ["大单", "大双", "小单", "小双"];
   const KILL_AMT_KEY = "hashmon_kill_amounts_v1";
@@ -327,6 +327,54 @@ export default function AdminPage() {
     } catch { /* ignore */ }
   };
 
+  type PrivateMonGroup = { groupId: string; groupTitle: string | undefined; active: boolean };
+  const [privateGroups, setPrivateGroups] = useState<PrivateMonGroup[]>([]);
+  const [privatePickerOpen, setPrivatePickerOpen] = useState(false);
+  const [privatePickerList, setPrivatePickerList] = useState<{ id: string; title: string; type: string }[]>([]);
+  const [privatePickerSearch, setPrivatePickerSearch] = useState("");
+  const [privatePickerSaving, setPrivatePickerSaving] = useState<string | null>(null);
+  const privateSseRef = useRef<EventSource | null>(null);
+  const [privateBets, setPrivateBets] = useState<GroupBetEntry[]>([]);
+  const [privateTerm, setPrivateTerm] = useState<number | null>(null);
+  const [privateLastBetAt, setPrivateLastBetAt] = useState<number>(0);
+  const privateBetBufferRef = useRef<GroupBetEntry[]>([]);
+
+  const loadPrivateGroups = async () => {
+    try {
+      const r = await api.admin.privateMonitorGroups();
+      setPrivateGroups(r.groups);
+    } catch { /* ignore */ }
+  };
+
+  const openPrivatePicker = async () => {
+    setPrivatePickerOpen(true);
+    setPrivatePickerSearch("");
+    try {
+      const r = await api.admin.tgGroups();
+      const all: { id: string; title: string; type: string }[] = [];
+      for (const s of r.sessions) all.push(...s.groups);
+      setPrivatePickerList(all);
+    } catch { /* ignore */ }
+  };
+
+  const addPrivateGroup = async (groupId: string) => {
+    setPrivatePickerSaving(groupId);
+    try {
+      const r = await api.admin.addPrivateMonitorGroup(groupId);
+      setPrivateGroups(prev => {
+        if (prev.some(g => g.groupId === r.groupId)) return prev;
+        return [...prev, { groupId: r.groupId, groupTitle: r.groupTitle, active: true }];
+      });
+    } catch { /* ignore */ } finally { setPrivatePickerSaving(null); }
+  };
+
+  const removePrivateGroup = async (groupId: string) => {
+    try {
+      await api.admin.removePrivateMonitorGroup(groupId);
+      setPrivateGroups(prev => prev.filter(g => g.groupId !== groupId));
+    } catch { /* ignore */ }
+  };
+
   // ── pwd log tab ──
   type PwdLogEvent = { id: string; timestamp: number; userId: number; username: string; event: "pwd_requested" | "pwd_sent" | "pwd_success"; text: string; context?: string };
   const [pwdLog, setPwdLog] = useState<PwdLogEvent[]>([]);
@@ -415,11 +463,12 @@ export default function AdminPage() {
     if (tab === "pwdlog") void loadPwdLog(pwdLogDate);
     if (tab === "shop") void loadShop();
     if (tab === "hashmon") void loadCanadaGroups();
+    if (tab === "privmon") void loadPrivateGroups();
   }, [tab]);
 
   // 1s 心跳：驱动"X秒前"新鲜度显示
   useEffect(() => {
-    if (tab !== "hashmon") return;
+    if (tab !== "hashmon" && tab !== "privmon") return;
     const id = setInterval(() => setNowTs(Date.now()), 1000);
     return () => clearInterval(id);
   }, [tab]);
@@ -540,6 +589,77 @@ export default function AdminPage() {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       clearInterval(flushId);
       if (hashSseRef.current) { hashSseRef.current.close(); hashSseRef.current = null; }
+    };
+  }, [tab, secretVerified]);
+
+  useEffect(() => {
+    if (tab !== "privmon" || !secretVerified) {
+      if (privateSseRef.current) { privateSseRef.current.close(); privateSseRef.current = null; }
+      return;
+    }
+    privateBetBufferRef.current = [];
+
+    let destroyed = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      if (destroyed) return;
+      const es = new EventSource("/api/admin/private-bets/events", { withCredentials: true });
+      privateSseRef.current = es;
+
+      es.onmessage = (e) => {
+        if (!e.data) return;
+        try {
+          const ev = JSON.parse(e.data as string) as Record<string, unknown>;
+          if (ev.type === "init") {
+            privateBetBufferRef.current = [];
+            setPrivateBets((ev.bets as GroupBetEntry[]) ?? []);
+            setPrivateTerm((ev.term as number | null) ?? null);
+            setPrivateLastBetAt((ev.lastBetAt as number) ?? 0);
+          } else if (ev.type === "bets:reset") {
+            privateBetBufferRef.current = [];
+            setPrivateBets((ev.bets as GroupBetEntry[]) ?? []);
+            setPrivateTerm((ev.term as number | null) ?? null);
+            setPrivateLastBetAt((ev.lastBetAt as number) ?? 0);
+          } else if (ev.type === "bets:batch") {
+            const bets = (ev.bets as GroupBetEntry[]) ?? [];
+            if (ev.term) setPrivateTerm(ev.term as number);
+            if (ev.lastBetAt) setPrivateLastBetAt(ev.lastBetAt as number);
+            for (const b of bets) privateBetBufferRef.current.push(b);
+          } else if (ev.type === "bets:cleanup") {
+            privateBetBufferRef.current = [];
+            void fetch("/api/admin/private-bets", { credentials: "include" })
+              .then(r => r.ok ? r.json() : null)
+              .then((d: { bets?: GroupBetEntry[]; term?: number | null } | null) => {
+                if (d?.bets) { setPrivateBets(d.bets); setPrivateTerm(d.term ?? null); }
+              }).catch(() => { /* ignore */ });
+          }
+        } catch { /* ignore */ }
+      };
+
+      es.onerror = () => {
+        if (destroyed) return;
+        try { es.close(); } catch {}
+        privateSseRef.current = null;
+        if (!reconnectTimer) reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 1500);
+      };
+    };
+
+    connect();
+
+    const flushId = setInterval(() => {
+      const buf = privateBetBufferRef.current;
+      if (buf.length === 0) return;
+      privateBetBufferRef.current = [];
+      const newBets = [...buf].reverse();
+      setPrivateBets(prev => [...newBets, ...prev].slice(0, 500));
+    }, 1000);
+
+    return () => {
+      destroyed = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      clearInterval(flushId);
+      if (privateSseRef.current) { privateSseRef.current.close(); privateSseRef.current = null; }
     };
   }, [tab, secretVerified]);
 
@@ -743,10 +863,10 @@ export default function AdminPage() {
           </div>
         </div>
         <div className="max-w-3xl mx-auto px-4 flex gap-1 pb-2 flex-wrap">
-          {(["cards", "monitor", "users", "pwdlog", "shop", "hashmon"] as const).map(t => (
+          {(["cards", "monitor", "users", "pwdlog", "shop", "hashmon", "privmon"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-4 py-1.5 rounded-lg transition font-medium ${tab === t ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : "🍁 加拿大监控"}
+              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : t === "hashmon" ? "🍁 加拿大监控" : "🧩 新群监控"}
             </button>
           ))}
         </div>
@@ -2310,6 +2430,156 @@ export default function AdminPage() {
                         <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${curColor[b.currency]} flex-shrink-0`}>
                           {b.currency.toUpperCase()}
                         </span>
+                        <span className={`text-sm font-semibold w-16 text-right flex-shrink-0 ${dirColor}`}>
+                          {b.direction}
+                        </span>
+                        <span className="text-white font-mono text-sm flex-shrink-0 w-20 text-right">
+                          {b.amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+                        </span>
+                        <span className="text-slate-400 text-xs truncate flex-1 min-w-0">{b.senderName || b.senderId}</span>
+                        <span className="text-slate-600 text-[10px] flex-shrink-0 tabular-nums">
+                          {new Date(b.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === "privmon" && (
+          <div className="space-y-3">
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={() => setGroupsCollapsed(c => !c)}
+                  className="flex items-center gap-2 flex-1 text-left"
+                >
+                  <span className="text-white font-semibold text-sm">监控群组</span>
+                  <span className="text-slate-500 text-xs">({privateGroups.length})</span>
+                  <span className="text-slate-500 text-xs ml-auto">{groupsCollapsed ? "▶" : "▼"}</span>
+                </button>
+                <button
+                  onClick={() => void openPrivatePicker()}
+                  className="text-xs text-blue-400 hover:text-blue-300 transition-colors ml-3"
+                >+ 添加</button>
+              </div>
+              {!groupsCollapsed && (
+                <div className="mt-3">
+                  {privateGroups.length === 0 ? (
+                    <button
+                      onClick={() => void openPrivatePicker()}
+                      className="w-full py-2.5 rounded-xl border border-dashed border-[#353a55] text-slate-400 text-sm hover:border-blue-500/50 hover:text-blue-400 transition-colors"
+                    >
+                      + 选择要监控的群组
+                    </button>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {privateGroups.map(g => (
+                        <div key={g.groupId} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#0d1117] border border-[#252a3d]">
+                          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${g.active ? "bg-emerald-400" : "bg-slate-500"}`} />
+                          <span className="text-white text-sm truncate flex-1">{g.groupTitle ?? g.groupId}</span>
+                          <button
+                            onClick={() => void removePrivateGroup(g.groupId)}
+                            className="text-[10px] text-red-400/70 hover:text-red-400 transition-colors flex-shrink-0"
+                          >移除</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {privatePickerOpen && (
+              <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60" onClick={() => setPrivatePickerOpen(false)}>
+                <div className="bg-[#161929] border border-[#252a3d] rounded-t-2xl w-full max-w-lg p-4 pb-8" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-white font-semibold text-sm">添加监控群组</span>
+                    <button onClick={() => setPrivatePickerOpen(false)} className="text-slate-400 text-lg leading-none">×</button>
+                  </div>
+                  <input
+                    className="w-full bg-[#0d1117] border border-[#252a3d] rounded-xl px-3 py-2 text-sm text-white placeholder-slate-600 mb-3 outline-none"
+                    placeholder="搜索群名…"
+                    value={privatePickerSearch}
+                    onChange={e => setPrivatePickerSearch(e.target.value)}
+                  />
+                  <div className="overflow-y-auto max-h-64 space-y-1">
+                    {privatePickerList.length === 0 && (
+                      <div className="text-center text-slate-600 text-sm py-6">
+                        暂无群组，请先连接 TG 账号并同步群列表
+                      </div>
+                    )}
+                    {privatePickerList
+                      .filter(g => !privatePickerSearch || g.title.toLowerCase().includes(privatePickerSearch.toLowerCase()))
+                      .map(g => {
+                        const alreadyAdded = privateGroups.some(m => m.groupId === g.id || m.groupId === `-100${g.id}`);
+                        return (
+                          <button
+                            key={g.id}
+                            disabled={privatePickerSaving === g.id || alreadyAdded}
+                            onClick={() => void addPrivateGroup(g.id)}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left hover:bg-white/5 transition-colors ${alreadyAdded ? "opacity-40 cursor-not-allowed border border-transparent" : "border border-transparent"}`}
+                          >
+                            <span className="text-slate-500 text-xs">{g.type === "channel" ? "📢" : "👥"}</span>
+                            <span className="text-white text-sm truncate flex-1">{g.title}</span>
+                            {alreadyAdded && <span className="text-emerald-400 text-xs flex-shrink-0">已添加</span>}
+                            {privatePickerSaving === g.id && <span className="text-blue-400 text-xs flex-shrink-0">添加中…</span>}
+                          </button>
+                        );
+                      })
+                    }
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-semibold text-sm">🧩 新群下注监控</span>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                  </span>
+                </div>
+                <div className="flex flex-col items-end gap-0.5">
+                  <span className="text-xs text-white font-mono font-bold">
+                    {privateTerm ? `${privateTerm} 期` : "等待期号…"}
+                  </span>
+                  <span className={`text-[10px] font-mono ${privateLastBetAt > 0 && nowTs - privateLastBetAt < 10_000 ? "text-emerald-400" : "text-slate-600"}`}>
+                    {privateLastBetAt > 0
+                      ? (() => {
+                          const s = Math.floor((nowTs - privateLastBetAt) / 1000);
+                          if (s < 60) return `${s}秒前`;
+                          return `${Math.floor(s / 60)}分${s % 60}秒前`;
+                        })()
+                      : "暂无数据"}
+                  </span>
+                </div>
+              </div>
+              <div className="text-xs text-slate-500">
+                只显示本期（新期开盘消息出现后会自动清空上期）
+              </div>
+            </div>
+
+            <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-[#252a3d] flex items-center justify-between">
+                <span className="text-white font-semibold text-sm">下注明细</span>
+                <span className="text-xs text-slate-500">{privateBets.length} 条</span>
+              </div>
+              {privateBets.length === 0 ? (
+                <div className="px-4 py-8 text-center text-slate-600 text-sm">
+                  暂无下注记录，等待群组消息…
+                </div>
+              ) : (
+                <div className="divide-y divide-[#1e2235]">
+                  {privateBets.map(b => {
+                    const dirColor = b.direction.startsWith("大") ? "text-red-400" : b.direction.startsWith("小") ? "text-sky-400" : "text-slate-300";
+                    return (
+                      <div key={b.id} className="px-4 py-2.5 flex items-center gap-3 hover:bg-white/[0.02]">
                         <span className={`text-sm font-semibold w-16 text-right flex-shrink-0 ${dirColor}`}>
                           {b.direction}
                         </span>

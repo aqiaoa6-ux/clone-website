@@ -55,9 +55,20 @@ const CANADA_POLL_GROUPS_PER_TICK = 4;
 const CANADA_MAX_BETS = 2000;
 const CANADA_WINDOW_MS = 10 * 60 * 1000;
 const canadaGroupTitleCache = new Map<string, string>();
+const privateBets: GroupBetEntry[] = [];
+let privateCurrentTerm: number | null = null;
+let privateLastBetAt = 0;
+const privateSseClients = new Set<Response>();
+const privateGroupTitleCache = new Map<string, string>();
+const PRIVATE_MAX_BETS = 2000;
+const PRIVATE_WINDOW_MS = 10 * 60 * 1000;
 
 function getCanadaLiveTerm(): number | null {
   return canadaCurrentBetTerm ?? currentLotteryTerm;
+}
+
+function getPrivateLiveTerm(): number | null {
+  return privateCurrentTerm;
 }
 
 // 加拿大监控：保留 30 分钟滑动窗口，每 60s 清理过期注单
@@ -75,11 +86,30 @@ setInterval(() => {
   }
 }, 60_000);
 
+setInterval(() => {
+  const cutoff = Date.now() - PRIVATE_WINDOW_MS;
+  const before = privateBets.length;
+  const kept = privateBets.filter(b => b.ts >= cutoff);
+  if (kept.length !== before) {
+    privateBets.length = 0;
+    for (const b of kept) privateBets.push(b);
+    pushPrivateAdminEvent("bets:cleanup", { count: privateBets.length });
+  }
+}, 60_000);
+
 function pushAdminEvent(type: string, payload: Record<string, unknown>): void {
   if (adminSseClients.size === 0) return;
   const data = JSON.stringify({ type, ...payload });
   for (const res of adminSseClients) {
     try { res.write(`data: ${data}\n\n`); } catch { adminSseClients.delete(res); }
+  }
+}
+
+function pushPrivateAdminEvent(type: string, payload: Record<string, unknown>): void {
+  if (privateSseClients.size === 0) return;
+  const data = JSON.stringify({ type, ...payload });
+  for (const res of privateSseClients) {
+    try { res.write(`data: ${data}\n\n`); } catch { privateSseClients.delete(res); }
   }
 }
 
@@ -327,6 +357,12 @@ interface TgSession {
   canadaMonitorLastMsgIds: Record<string, number>;
   canadaMonitorInFlight: Record<string, boolean>;
   canadaPollCursor: number;
+  privateMonitorGroupIds: string[];
+  privateMonitorPollers: Record<string, boolean>;
+  privateSharedPoller?: ReturnType<typeof setTimeout>;
+  privateMonitorLastMsgIds: Record<string, number>;
+  privateMonitorInFlight: Record<string, boolean>;
+  privatePollCursor: number;
 }
 
 interface PersistedData {
@@ -340,6 +376,7 @@ interface PersistedData {
   balanceSource: "manual" | "kkpay";
   watchGroupId?: string;
   canadaMonitorGroupIds?: string[];
+  privateMonitorGroupIds?: string[];
   cfg?: Partial<BetCfg>;
   kuaisanResults?: KuaisanResult[];
   hashResults?: HashResult[];
@@ -680,6 +717,7 @@ function saveSession(session: TgSession): void {
       } : undefined,
     };
     if (session.canadaMonitorGroupIds.length > 0) (data as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
+    if (session.privateMonitorGroupIds.length > 0) (data as unknown as Record<string, unknown>).privateMonitorGroupIds = session.privateMonitorGroupIds;
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
     // 同步到数据库（异步，失败不影响主流程）
     const sessionStr = data.sessionString;
@@ -829,6 +867,8 @@ function destroySession(session: TgSession, reason: string): void {
     };
     if (session.canadaMonitorGroupIds.length > 0)
       (stub as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
+    if (session.privateMonitorGroupIds.length > 0)
+      (stub as unknown as Record<string, unknown>).privateMonitorGroupIds = session.privateMonitorGroupIds;
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(stub, null, 2), "utf-8");
   } catch { /* ok */ }
   logger.warn({ userId: session.userId, reason }, "[tg] fatal auth error — session destroyed, user must re-login");
@@ -949,6 +989,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
     hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
     canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
+    privateMonitorGroupIds: (data as unknown as { privateMonitorGroupIds?: string[] }).privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -965,6 +1006,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
   if (connected) {
     if (session.watchGroupId) startGroupListener(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
+    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     logger.info({ userId }, "[tg] session restored (online)");
@@ -3744,6 +3786,10 @@ function stopCanadaMonitorPoller(session: TgSession, groupId?: string): void {
 // 对单个群组拉取并处理新消息；返回 true 表示触发了「停止下注」
 async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<void> {
   try {
+    if (!canadaGroupTitleCache.has(groupId)) {
+      const inList = session.groups.find(g => g.id === groupId || `-100${g.id}` === groupId)?.title;
+      if (inList) canadaGroupTitleCache.set(groupId, inList);
+    }
     const lastId = session.canadaMonitorLastMsgIds[groupId] ?? 0;
     const msgs = await session.client.getMessages(groupId, {
       limit: 20,
@@ -3805,9 +3851,12 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
     }
     if (newEntries.length > 0) {
       canadaLastBetAt = Date.now();
+      const term = getCanadaLiveTerm();
+      const bets = term ? newEntries.filter(b => b.termContext === term) : newEntries;
+      if (bets.length === 0) return;
       pushAdminEvent("bets:batch", {
-        bets: newEntries, period: canadaBetPeriod,
-        term: currentLotteryTerm, lastBetAt: canadaLastBetAt,
+        bets, period: canadaBetPeriod,
+        term, lastBetAt: canadaLastBetAt,
       });
     }
   } catch { /* network hiccup / flood wait handled by GramJS */ }
@@ -3890,7 +3939,9 @@ function scheduleCanadaLoop(session: TgSession): void {
       }
       canadaBetPeriod = canadaBets[0]?.period ?? null;
       canadaLastBetAt = kept.length > 0 ? canadaLastBetAt : 0;
-      pushAdminEvent("bets:reset", { bets: canadaBets, period: canadaBetPeriod, term: currentLotteryTerm, lastBetAt: canadaLastBetAt, snap: lastCanadaSnap });
+      const term = getCanadaLiveTerm();
+      const bets = term ? canadaBets.filter(b => b.termContext === term) : canadaBets;
+      pushAdminEvent("bets:reset", { bets, period: canadaBetPeriod, term, lastBetAt: canadaLastBetAt, snap: lastCanadaSnap });
     }
     session.canadaSharedPoller = setTimeout(() => { session.canadaSharedPoller = undefined; void loop(); }, 1000);
   };
@@ -3911,6 +3962,156 @@ function startCanadaMonitorPoller(session: TgSession, groupId: string): void {
     } catch { /* ignore */ }
     session.canadaMonitorPollers[groupId] = true;
     scheduleCanadaLoop(session);
+  })();
+}
+
+function stopPrivateMonitorPoller(session: TgSession, groupId?: string): void {
+  if (groupId) {
+    delete session.privateMonitorPollers[groupId];
+  } else {
+    for (const gid of Object.keys(session.privateMonitorPollers)) {
+      delete session.privateMonitorPollers[gid];
+    }
+  }
+  if (Object.keys(session.privateMonitorPollers).length === 0 && session.privateSharedPoller) {
+    clearTimeout(session.privateSharedPoller);
+    session.privateSharedPoller = undefined;
+  }
+}
+
+function parsePrivateBetConfirm(text: string, senderName: string): GroupBetEntry[] {
+  if (!text.includes("投注成功")) return [];
+  const nameMatch = text.match(/^【([^】]+)】/);
+  const betterName = nameMatch?.[1]?.trim() || senderName;
+  const betterId = (text.match(/^【[^】]+】/) ? "" : "") as string;
+  const entries: GroupBetEntry[] = [];
+
+  const betLine = /(大单|大双|小单|小双|大|小|单|双|数字\s*\d{1,2})\s*[\/\s]\s*(\d+(?:\.\d+)?)\s+投注成功/gi;
+  let m: RegExpExecArray | null;
+  while ((m = betLine.exec(text)) !== null) {
+    const rawDir = (m[1] ?? "").replace(/\s+/g, "");
+    const amount = parseFloat(m[2]!);
+    const dir = rawDir.startsWith("数字")
+      ? (() => {
+          const n = parseInt(rawDir.replace("数字", ""), 10);
+          if (!isFinite(n)) return rawDir;
+          return `${n > 13 ? "大" : "小"}${n % 2 !== 0 ? "单" : "双"}`;
+        })()
+      : rawDir;
+    if (!isFinite(amount) || amount <= 0) continue;
+    entries.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      ts: Date.now(),
+      senderId: betterId,
+      senderName: betterName,
+      currency: "cny",
+      amount,
+      direction: dir,
+      raw: text.slice(0, 200),
+      period: null,
+      termContext: null,
+    });
+  }
+  return entries;
+}
+
+async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise<void> {
+  try {
+    if (!privateGroupTitleCache.has(groupId)) {
+      const inList = session.groups.find(g => g.id === groupId || `-100${g.id}` === groupId)?.title;
+      if (inList) privateGroupTitleCache.set(groupId, inList);
+    }
+    const lastId = session.privateMonitorLastMsgIds[groupId] ?? 0;
+    const msgs = await session.client.getMessages(groupId, {
+      limit: 20,
+      ...(lastId > 0 ? { minId: lastId } : {}),
+    }) as Api.Message[];
+    if (!msgs.length) return;
+    const sorted = [...msgs].sort((a, b) => a.id - b.id);
+    const newEntries: GroupBetEntry[] = [];
+    for (const msg of sorted) {
+      const curLast = session.privateMonitorLastMsgIds[groupId] ?? 0;
+      if (msg.id <= curLast) continue;
+      session.privateMonitorLastMsgIds[groupId] = msg.id;
+      const text = msg.message ?? "";
+      if (!text) continue;
+
+      const startTermMatch =
+        text.match(/期号[：:]\s*(\d{6,})/)
+        ?? text.match(/^\s*(\d{6,}).*(开始下注|下注开始|下.?注.*开始)/);
+      const startLike = /开始下注|下注开始|请开始下注|下.?注.*开始/.test(text);
+      if (startTermMatch && startLike) {
+        const t = parseInt(startTermMatch[1]!, 10);
+        if (isFinite(t)) {
+          privateCurrentTerm = t;
+          privateBets.length = 0;
+          privateLastBetAt = 0;
+          pushPrivateAdminEvent("bets:reset", { term: privateCurrentTerm, lastBetAt: privateLastBetAt, bets: [] });
+        }
+        continue;
+      }
+
+      const stopTermMatch = text.match(/期号[：:]\s*(\d{6,})/);
+      if (stopTermMatch && /停止下注|下注结束|下注结束|封盘/.test(text)) {
+        const t = parseInt(stopTermMatch[1]!, 10);
+        if (isFinite(t)) privateCurrentTerm = t;
+        continue;
+      }
+
+      const u = msg.sender as Api.User | null;
+      const senderNm = u ? ([u.firstName, u.lastName].filter(Boolean).join(" ") || u.username || "") : "";
+      const entries = parsePrivateBetConfirm(text, senderNm);
+      for (const e of entries) {
+        e.termContext = privateCurrentTerm;
+        privateBets.unshift(e);
+        if (privateBets.length > PRIVATE_MAX_BETS) privateBets.pop();
+        newEntries.push(e);
+      }
+    }
+    if (newEntries.length > 0) {
+      privateLastBetAt = Date.now();
+      const term = getPrivateLiveTerm();
+      const bets = term ? newEntries.filter(b => b.termContext === term) : newEntries;
+      if (bets.length === 0) return;
+      pushPrivateAdminEvent("bets:batch", { bets, term, lastBetAt: privateLastBetAt });
+    }
+  } catch { /* ignore */ }
+}
+
+function schedulePrivateLoop(session: TgSession): void {
+  if (session.privateSharedPoller) return;
+  const loop = async () => {
+    if (tgSessions.get(session.userId) !== session) return;
+    const activeGroups = Object.keys(session.privateMonitorPollers).filter(g => session.privateMonitorPollers[g]);
+    if (activeGroups.length === 0) { session.privateSharedPoller = undefined; return; }
+    const len = activeGroups.length;
+    const startIdx = session.privatePollCursor % Math.max(len, 1);
+    let started = 0;
+    for (let i = 0; i < len && started < CANADA_POLL_GROUPS_PER_TICK; i++) {
+      const gid = activeGroups[(startIdx + i) % len]!;
+      if (session.privateMonitorInFlight[gid]) continue;
+      session.privateMonitorInFlight[gid] = true;
+      started++;
+      void pollOnePrivateGroup(session, gid).finally(() => { session.privateMonitorInFlight[gid] = false; });
+    }
+    session.privatePollCursor = (startIdx + Math.max(started, 1)) % Math.max(len, 1);
+    session.privateSharedPoller = setTimeout(() => { session.privateSharedPoller = undefined; void loop(); }, 1000);
+  };
+  session.privateSharedPoller = setTimeout(() => { session.privateSharedPoller = undefined; void loop(); }, 0);
+}
+
+function startPrivateMonitorPoller(session: TgSession, groupId: string): void {
+  void (async () => {
+    try {
+      if (!session.privateMonitorLastMsgIds[groupId]) {
+        const baseline = await session.client.getMessages(groupId, { limit: 1 }) as Api.Message[];
+        if (baseline.length > 0) {
+          session.privateMonitorLastMsgIds[groupId] = baseline[0]!.id;
+        }
+      }
+    } catch { /* ignore */ }
+    session.privateMonitorPollers[groupId] = true;
+    schedulePrivateLoop(session);
   })();
 }
 
@@ -4228,6 +4429,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
       hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
       canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
+      privateMonitorGroupIds: (existing as unknown as { privateMonitorGroupIds?: string[] } | undefined)?.privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
@@ -4256,6 +4458,7 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     session.groups = await fetchGroups(session.client);
     if (session.watchGroupId) startGroupListener(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
+    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     saveSession(session);
@@ -4284,6 +4487,7 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     session.groups = await fetchGroups(session.client);
     if (session.watchGroupId) startGroupListener(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
+    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
     saveSession(session);
@@ -5183,6 +5387,27 @@ router.get("/admin/hash-period-history", requireAdminSecret, (_req, res) => {
   res.json({ history: periodHistory.slice(0, 30) });
 });
 
+router.get("/admin/private-bets/events", requireAdminSecret, (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+  res.write(": connected\n\n");
+  const term = getPrivateLiveTerm();
+  const bets = term ? privateBets.filter(b => b.termContext === term) : privateBets;
+  res.write(`data: ${JSON.stringify({ type: "init", term, lastBetAt: privateLastBetAt, bets })}\n\n`);
+  privateSseClients.add(res);
+  const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
+  req.on("close", () => { clearInterval(hb); privateSseClients.delete(res); });
+});
+
+router.get("/admin/private-bets", requireAdminSecret, (_req, res) => {
+  const term = getPrivateLiveTerm();
+  const bets = term ? privateBets.filter(b => b.termContext === term) : privateBets;
+  res.json({ term, bets });
+});
+
 // ─── 加拿大监控群组配置 ─────────────────────────────────────────────────────
 // 辅助: 找到监控某个 groupId 的 session（先找已有的，再找第一个可用的）
 function findSessionForGroup(groupId: string): TgSession | undefined {
@@ -5211,7 +5436,7 @@ router.get("/admin/canada-monitor-groups", requireAdminSecret, async (_req, res)
   for (const session of tgSessions.values()) {
     for (const gid of session.canadaMonitorGroupIds) {
       const title = await resolveTitle(session, gid);
-      groups.push({ groupId: gid, groupTitle: title, userId: session.userId, active: !!session.canadaMonitorPollers[gid] });
+      groups.push({ groupId: gid, groupTitle: title ?? "无法访问/未加入", userId: session.userId, active: !!session.canadaMonitorPollers[gid] });
     }
   }
   res.json({ groups });
@@ -5242,6 +5467,58 @@ router.post("/admin/canada-monitor-groups/remove", requireAdminSecret, (req, res
     if (idx >= 0) {
       stopCanadaMonitorPoller(session, groupId);
       session.canadaMonitorGroupIds.splice(idx, 1);
+      saveSession(session);
+    }
+  }
+  res.json({ ok: true });
+});
+
+router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res) => {
+  const groups: Array<{ groupId: string; groupTitle: string | undefined; userId: number; active: boolean }> = [];
+  const resolveTitle = async (session: TgSession, gid: string): Promise<string | undefined> => {
+    const cached = privateGroupTitleCache.get(gid);
+    if (cached) return cached;
+    const inList = session.groups.find(g => g.id === gid || `-100${g.id}` === gid)?.title;
+    if (inList) { privateGroupTitleCache.set(gid, inList); return inList; }
+    try {
+      const ent = await session.client.getEntity(gid);
+      const title = (ent as unknown as { title?: string }).title;
+      if (title) { privateGroupTitleCache.set(gid, title); return title; }
+    } catch {}
+    return undefined;
+  };
+  for (const session of tgSessions.values()) {
+    for (const gid of session.privateMonitorGroupIds) {
+      const title = await resolveTitle(session, gid);
+      groups.push({ groupId: gid, groupTitle: title ?? "无法访问/未加入", userId: session.userId, active: !!session.privateMonitorPollers[gid] });
+    }
+  }
+  res.json({ groups });
+});
+
+router.post("/admin/private-monitor-groups/add", requireAdminSecret, (req, res) => {
+  const { groupId } = req.body as { groupId?: string };
+  if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
+  const target = findSessionForGroup(groupId);
+  if (!target) { res.status(400).json({ error: "没有已连接的 TG 账号" }); return; }
+  if (!target.privateMonitorGroupIds.includes(groupId)) {
+    target.privateMonitorGroupIds.push(groupId);
+    saveSession(target);
+  }
+  startPrivateMonitorPoller(target, groupId);
+  const title = target.groups.find(g => g.id === groupId || `-100${g.id}` === groupId)?.title;
+  if (title) privateGroupTitleCache.set(groupId, title);
+  res.json({ ok: true, groupId, groupTitle: title ?? groupId, userId: target.userId });
+});
+
+router.post("/admin/private-monitor-groups/remove", requireAdminSecret, (req, res) => {
+  const { groupId } = req.body as { groupId?: string };
+  if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
+  for (const session of tgSessions.values()) {
+    const idx = session.privateMonitorGroupIds.indexOf(groupId);
+    if (idx >= 0) {
+      stopPrivateMonitorPoller(session, groupId);
+      session.privateMonitorGroupIds.splice(idx, 1);
       saveSession(session);
     }
   }
