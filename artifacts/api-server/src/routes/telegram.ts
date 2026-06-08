@@ -4061,7 +4061,8 @@ async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise
     const lastId = session.privateMonitorLastMsgIds[groupId] ?? 0;
     const peer = resolvePeerForClient(groupId);
     const msgs = await session.client.getMessages(peer, {
-      limit: 20,
+      // 新增监控时先回捞最近消息，避免用户刚添加就看到 0 条
+      limit: lastId > 0 ? 20 : 60,
       ...(lastId > 0 ? { minId: lastId } : {}),
     }) as Api.Message[];
     if (!msgs.length) return;
@@ -4140,17 +4141,11 @@ function schedulePrivateLoop(session: TgSession): void {
 
 function startPrivateMonitorPoller(session: TgSession, groupId: string): void {
   void (async () => {
-    try {
-      const peer = resolvePeerForClient(groupId);
-      if (!session.privateMonitorLastMsgIds[groupId]) {
-        const baseline = await session.client.getMessages(peer, { limit: 1 }) as Api.Message[];
-        if (baseline.length > 0) {
-          session.privateMonitorLastMsgIds[groupId] = baseline[0]!.id;
-        }
-      }
-    } catch { /* ignore */ }
     session.privateMonitorPollers[groupId] = true;
     schedulePrivateLoop(session);
+    if (!session.privateMonitorLastMsgIds[groupId]) {
+      void pollOnePrivateGroup(session, groupId);
+    }
   })();
 }
 
