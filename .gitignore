@@ -51,3 +51,5 @@ Thumbs.db
 # Sensitive runtime state
 .tg-session*.json
 .kkpay-pwd-log.json
+artifacts/escrow-bot/.env
+artifacts/escrow-bot/data/

@@ -51,6 +51,7 @@ const pendingCanadaSnapshots = new Set<number>();
 // 停止下注后延迟 20 秒再快照，于是当期下注数据仍展示在实时监控
 const SNAPSHOT_DELAY_MS = 20_000;
 const pendingSnapshotTimers = new Map<number, NodeJS.Timeout>();
+const CANADA_POLL_GROUPS_PER_TICK = 4;
 
 // 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
 const CANADA_WINDOW_MS = 5 * 60 * 1000;
@@ -318,6 +319,8 @@ interface TgSession {
   canadaMonitorPollers: Record<string, boolean>;   // groupId → active flag
   canadaSharedPoller?: ReturnType<typeof setTimeout>; // 单一串行 loop
   canadaMonitorLastMsgIds: Record<string, number>;
+  canadaMonitorInFlight: Record<string, boolean>;
+  canadaPollCursor: number;
 }
 
 interface PersistedData {
@@ -939,7 +942,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
     hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
-    canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {},
+    canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -3826,7 +3829,17 @@ function scheduleCanadaLoop(session: TgSession): void {
     if (tgSessions.get(session.userId) !== session) return;
     const activeGroups = Object.keys(session.canadaMonitorPollers).filter(g => session.canadaMonitorPollers[g]);
     if (activeGroups.length === 0) { session.canadaSharedPoller = undefined; return; }
-    await Promise.allSettled(activeGroups.map(gid => pollOneCanadaGroup(session, gid)));
+    let started = 0;
+    const len = activeGroups.length;
+    const startIdx = session.canadaPollCursor % Math.max(len, 1);
+    for (let i = 0; i < len && started < CANADA_POLL_GROUPS_PER_TICK; i++) {
+      const gid = activeGroups[(startIdx + i) % len]!;
+      if (session.canadaMonitorInFlight[gid]) continue;
+      session.canadaMonitorInFlight[gid] = true;
+      started++;
+      void pollOneCanadaGroup(session, gid).finally(() => { session.canadaMonitorInFlight[gid] = false; });
+    }
+    session.canadaPollCursor = (startIdx + Math.max(started, 1)) % Math.max(len, 1);
     // ── 整圈轮询完毕 → 按期号逐一快照（termContext 过滤，不混期）──
     if (pendingCanadaSnapshots.size > 0) {
       const terms = [...pendingCanadaSnapshots].sort((a, b) => a - b);
@@ -4208,7 +4221,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
       hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
-      canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {},
+      canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
