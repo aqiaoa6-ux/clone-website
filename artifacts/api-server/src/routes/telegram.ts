@@ -3981,36 +3981,66 @@ function stopPrivateMonitorPoller(session: TgSession, groupId?: string): void {
 
 function parsePrivateBetConfirm(text: string, senderName: string): GroupBetEntry[] {
   if (!text.includes("投注成功")) return [];
-  const nameMatch = text.match(/^【([^】]+)】/);
-  const betterName = nameMatch?.[1]?.trim() || senderName;
-  const betterId = (text.match(/^【[^】]+】/) ? "" : "") as string;
   const entries: GroupBetEntry[] = [];
 
-  const betLine = /(大单|大双|小单|小双|大|小|单|双|数字\s*\d{1,2})\s*[\/\s]\s*(\d+(?:\.\d+)?)\s+投注成功/gi;
-  let m: RegExpExecArray | null;
-  while ((m = betLine.exec(text)) !== null) {
-    const rawDir = (m[1] ?? "").replace(/\s+/g, "");
-    const amount = parseFloat(m[2]!);
-    const dir = rawDir.startsWith("数字")
-      ? (() => {
-          const n = parseInt(rawDir.replace("数字", ""), 10);
-          if (!isFinite(n)) return rawDir;
-          return `${n > 13 ? "大" : "小"}${n % 2 !== 0 ? "单" : "双"}`;
-        })()
-      : rawDir;
-    if (!isFinite(amount) || amount <= 0) continue;
+  const classifyNum = (n: number): string => `${n > 13 ? "大" : "小"}${n % 2 !== 0 ? "单" : "双"}`;
+
+  const mkEntry = (player: string, dir: string, amount: number, raw: string) => {
     entries.push({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       ts: Date.now(),
-      senderId: betterId,
-      senderName: betterName,
+      senderId: "",
+      senderName: player,
       currency: "cny",
       amount,
       direction: dir,
-      raw: text.slice(0, 200),
+      raw,
       period: null,
       termContext: null,
     });
+  };
+
+  const sections: Array<{ player: string; body: string }> = [];
+  const reHeader = /【([^】]+)】下注信息/g;
+  let lastIdx = 0;
+  let curPlayer = senderName;
+  let mh: RegExpExecArray | null;
+  while ((mh = reHeader.exec(text)) !== null) {
+    const seg = text.slice(lastIdx, mh.index);
+    if (seg.trim()) sections.push({ player: curPlayer, body: seg });
+    curPlayer = (mh[1] ?? "").trim() || senderName;
+    lastIdx = reHeader.lastIndex;
+  }
+  const tail = text.slice(lastIdx);
+  if (tail.trim()) sections.push({ player: curPlayer, body: tail });
+  if (sections.length === 0) sections.push({ player: senderName, body: text });
+
+  for (const s of sections) {
+    const betLine = /(大单|大双|小单|小双|大|小|单|双|数字\s*\d{1,2})\s*[\/\s]\s*(\d+(?:\.\d+)?)\s+投注成功/gi;
+    let m: RegExpExecArray | null;
+    while ((m = betLine.exec(s.body)) !== null) {
+      const rawDir = (m[1] ?? "").replace(/\s+/g, "");
+      const amount = parseFloat(m[2]!);
+      if (!isFinite(amount) || amount <= 0) continue;
+      const dir = rawDir.startsWith("数字")
+        ? (() => {
+            const n = parseInt(rawDir.replace("数字", ""), 10);
+            if (!isFinite(n)) return rawDir;
+            return classifyNum(n);
+          })()
+        : rawDir;
+      mkEntry(s.player, dir, amount, s.body.slice(0, 200));
+    }
+
+    const yaLine = /(\d+(?:\.\d+)?)\s*押\s*(\d{1,2})\s+投注成功/gi;
+    let y: RegExpExecArray | null;
+    while ((y = yaLine.exec(s.body)) !== null) {
+      const amount = parseFloat(y[1]!);
+      const n = parseInt(y[2]!, 10);
+      if (!isFinite(amount) || amount <= 0) continue;
+      if (!isFinite(n)) continue;
+      mkEntry(s.player, classifyNum(n), amount, s.body.slice(0, 200));
+    }
   }
   return entries;
 }
