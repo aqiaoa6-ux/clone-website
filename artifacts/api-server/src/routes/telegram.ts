@@ -52,9 +52,15 @@ const pendingCanadaSnapshots = new Set<number>();
 const SNAPSHOT_DELAY_MS = 20_000;
 const pendingSnapshotTimers = new Map<number, NodeJS.Timeout>();
 const CANADA_POLL_GROUPS_PER_TICK = 4;
+const CANADA_MAX_BETS = 2000;
+const CANADA_WINDOW_MS = 10 * 60 * 1000;
+const canadaGroupTitleCache = new Map<string, string>();
 
-// 加拿大约每 3.5 分钟一期，保留 5 分钟滑动窗口，每 60s 清理过期注单
-const CANADA_WINDOW_MS = 5 * 60 * 1000;
+function getCanadaLiveTerm(): number | null {
+  return canadaCurrentBetTerm ?? currentLotteryTerm;
+}
+
+// 加拿大监控：保留 30 分钟滑动窗口，每 60s 清理过期注单
 setInterval(() => {
   const cutoff = Date.now() - CANADA_WINDOW_MS;
   const before = canadaBets.length;
@@ -3793,7 +3799,7 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
         entry.termContext = canadaCurrentBetTerm; // 标记归属期号
         if (entry.period) canadaBetPeriod = entry.period;
         canadaBets.unshift(entry);
-        if (canadaBets.length > 500) canadaBets.pop();
+        if (canadaBets.length > CANADA_MAX_BETS) canadaBets.pop();
         newEntries.push(entry);
       }
     }
@@ -5155,18 +5161,22 @@ router.get("/admin/hash-group-bets/events", requireAdminSecret, (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
   res.write(": connected\n\n");
+  const term = getCanadaLiveTerm();
+  const bets = term ? canadaBets.filter(b => b.termContext === term) : canadaBets;
   const totals = { kk: 0, usdt: 0, cny: 0 };
-  for (const b of canadaBets) totals[b.currency] += b.amount;
-  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, term: currentLotteryTerm, lastBetAt: canadaLastBetAt, bets: canadaBets, totals, history: periodHistory.slice(0, 30) })}\n\n`);
+  for (const b of bets) totals[b.currency] += b.amount;
+  res.write(`data: ${JSON.stringify({ type: "init", period: canadaBetPeriod, term, lastBetAt: canadaLastBetAt, bets, totals, history: periodHistory.slice(0, 30) })}\n\n`);
   adminSseClients.add(res);
   const hb = setInterval(() => { try { res.write(": ping\n\n"); } catch { /* ignore */ } }, 20_000);
   req.on("close", () => { clearInterval(hb); adminSseClients.delete(res); });
 });
 
 router.get("/admin/hash-group-bets", requireAdminSecret, (_req, res) => {
+  const term = getCanadaLiveTerm();
+  const bets = term ? canadaBets.filter(b => b.termContext === term) : canadaBets;
   const totals = { kk: 0, usdt: 0, cny: 0 };
-  for (const b of canadaBets) totals[b.currency] += b.amount;
-  res.json({ period: canadaBetPeriod, bets: canadaBets, totals });
+  for (const b of bets) totals[b.currency] += b.amount;
+  res.json({ period: canadaBetPeriod, term, bets, totals });
 });
 
 router.get("/admin/hash-period-history", requireAdminSecret, (_req, res) => {
@@ -5184,11 +5194,23 @@ function findSessionForGroup(groupId: string): TgSession | undefined {
 }
 
 // GET /admin/canada-monitor-groups — 列出当前所有监控群
-router.get("/admin/canada-monitor-groups", requireAdminSecret, (_req, res) => {
+router.get("/admin/canada-monitor-groups", requireAdminSecret, async (_req, res) => {
   const groups: Array<{ groupId: string; groupTitle: string | undefined; userId: number; active: boolean }> = [];
+  const resolveTitle = async (session: TgSession, gid: string): Promise<string | undefined> => {
+    const cached = canadaGroupTitleCache.get(gid);
+    if (cached) return cached;
+    const inList = session.groups.find(g => g.id === gid || `-100${g.id}` === gid)?.title;
+    if (inList) { canadaGroupTitleCache.set(gid, inList); return inList; }
+    try {
+      const ent = await session.client.getEntity(gid);
+      const title = (ent as unknown as { title?: string }).title;
+      if (title) { canadaGroupTitleCache.set(gid, title); return title; }
+    } catch {}
+    return undefined;
+  };
   for (const session of tgSessions.values()) {
     for (const gid of session.canadaMonitorGroupIds) {
-      const title = session.groups.find(g => g.id === gid || `-100${g.id}` === gid)?.title;
+      const title = await resolveTitle(session, gid);
       groups.push({ groupId: gid, groupTitle: title, userId: session.userId, active: !!session.canadaMonitorPollers[gid] });
     }
   }
@@ -5207,6 +5229,7 @@ router.post("/admin/canada-monitor-groups/add", requireAdminSecret, (req, res) =
   }
   startCanadaMonitorPoller(target, groupId);
   const title = target.groups.find(g => g.id === groupId || `-100${g.id}` === groupId)?.title;
+  if (title) canadaGroupTitleCache.set(groupId, title);
   res.json({ ok: true, groupId, groupTitle: title ?? groupId, userId: target.userId });
 });
 
