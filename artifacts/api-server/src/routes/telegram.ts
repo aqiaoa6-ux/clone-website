@@ -2192,6 +2192,51 @@ function chaseEffectiveAmount(session: TgSession, numKey: string, baseAmount: nu
   return session.cfg.chaseAmountLevels[Math.min(lvl, session.cfg.chaseAmountLevels.length - 1)]!;
 }
 
+function normalizeChaseNumbers(entries: Array<{ num: number; amount: number }>): Array<{ num: number; amount: number }> {
+  const deduped = new Map<number, { num: number; amount: number }>();
+  for (const entry of entries) {
+    const num = Number(entry.num);
+    const amount = Number(entry.amount);
+    if (!Number.isInteger(num) || num < 0 || num > 27) continue;
+    if (!isFinite(amount) || amount <= 0) continue;
+    if (!deduped.has(num)) deduped.set(num, { num, amount });
+  }
+  return [...deduped.values()];
+}
+
+function rebuildChaseLevels(session: TgSession, resetAll = false): void {
+  const next: Record<string, number> = {};
+  const maxLevel = Math.max(session.cfg.chaseAmountLevels.length - 1, 0);
+  for (const c of session.cfg.chaseNumbers) {
+    const key = String(c.num);
+    next[key] = resetAll ? 0 : Math.min(session.chaseLevels[key] ?? 0, maxLevel);
+  }
+  session.chaseLevels = next;
+}
+
+function settleChaseLevelProgress(session: TgSession, pending: BetRecord[], hitNum: number, resetPayload: Record<string, unknown>): void {
+  if (!session.cfg.chaseDoubleOnLoss || session.cfg.chaseAmountLevels.length <= 1) return;
+  const touched = new Set<string>();
+  let chaseWon = false;
+  for (const bet of pending) {
+    const key = String(parseInt(bet.betContent, 10));
+    if (!/^\d+$/.test(key) || touched.has(key)) continue;
+    touched.add(key);
+    const won = parseInt(key, 10) === hitNum;
+    if (won) chaseWon = true;
+  }
+  if (chaseWon) {
+    rebuildChaseLevels(session, true);
+    pushEvent(session, "chase:reset_all", resetPayload);
+    return;
+  }
+  for (const key of touched) {
+    const curLvl = session.chaseLevels[key] ?? 0;
+    session.chaseLevels[key] = Math.min(curLvl + 1, session.cfg.chaseAmountLevels.length - 1);
+    pushEvent(session, "chase:level_update", { num: Number(key), level: session.chaseLevels[key], won: false });
+  }
+}
+
 async function placeChaseOnly(session: TgSession): Promise<void> {
   if (!session.cfg.enableChase || session.chasePlacedThisCycle) return;
   const chaseEntries = session.cfg.chaseNumbers.filter(c => c.amount > 0);
@@ -2976,27 +3021,13 @@ async function pollLottery(session: TgSession): Promise<void> {
       // Settle chase number bets by sum value (excluded from main stats)
       const sum = (latest.sum1 ?? 0) + (latest.sum2 ?? 0) + (latest.sum3 ?? 0);
       const chasePending = session.betLog.filter(b => b.status === "sent" && b.isChase);
-      let chaseWon = false;
       for (const cb of chasePending) {
         const targetNum = parseInt(cb.betContent, 10);
         const won = !isNaN(targetNum) && targetNum === sum;
-        if (won) chaseWon = true;
         const winPnl = Math.round(cb.amount * (session.cfg.odds - 1) * 100) / 100;
         settleBet(session, { won, pnl: won ? winPnl : -cb.amount, result: latest.r3, betId: cb.id, period: latest.term, isChase: true });
-        // 追号倍投层数更新：中→回第一层；不中→进下一层（停留在最后层）
-        if (session.cfg.chaseDoubleOnLoss && session.cfg.chaseAmountLevels.length > 1) {
-          const key = cb.betContent;
-          const curLvl = session.chaseLevels[key] ?? 0;
-          session.chaseLevels[key] = won ? 0 : Math.min(curLvl + 1, session.cfg.chaseAmountLevels.length - 1);
-          pushEvent(session, "chase:level_update", { num: targetNum, level: session.chaseLevels[key], won });
-        }
       }
-      if (chaseWon && session.cfg.chaseDoubleOnLoss && session.cfg.chaseAmountLevels.length > 1) {
-        for (const c of session.cfg.chaseNumbers) {
-          session.chaseLevels[String(c.num)] = 0;
-        }
-        pushEvent(session, "chase:reset_all", { sum });
-      }
+      settleChaseLevelProgress(session, chasePending, sum, { sum });
     }
 
     session.lastSeenLotteryPeriod = latest.term;
@@ -3415,7 +3446,6 @@ function settleHashBets(session: TgSession, result: HashResult): void {
   const pending = session.betLog.filter(b => b.status === "sent");
   session.recentResults.push(result.label);
   if (session.recentResults.length > 30) session.recentResults.shift();
-  let chaseWon = false;
   for (const bet of pending) {
     const odds = session.cfg.odds ?? 1.98;
     bet.lotteryResult = `${result.value} ${result.label}`;
@@ -3424,28 +3454,15 @@ function settleHashBets(session: TgSession, result: HashResult): void {
       // 追号注：按号码匹配开奖数字
       const targetNum = parseInt(bet.betContent, 10);
       const won = !isNaN(targetNum) && targetNum === result.value;
-      if (won) chaseWon = true;
       const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
       settleBet(session, { won, pnl, betId: bet.id, period: 0, isChase: true });
-      // 追号倍投层次更新：中→回第一层；不中→进下一层（最后层停留）
-      if (session.cfg.chaseDoubleOnLoss && session.cfg.chaseAmountLevels.length > 1) {
-        const key = bet.betContent;
-        const curLvl = session.chaseLevels[key] ?? 0;
-        session.chaseLevels[key] = won ? 0 : Math.min(curLvl + 1, session.cfg.chaseAmountLevels.length - 1);
-        pushEvent(session, "chase:level_update", { num: targetNum, level: session.chaseLevels[key], won });
-      }
     } else {
       const won = evaluateHashBet(bet.betContent, result);
       const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
       settleBet(session, { won, pnl, betId: bet.id, period: 0 });
     }
   }
-  if (chaseWon && session.cfg.chaseDoubleOnLoss && session.cfg.chaseAmountLevels.length > 1) {
-    for (const c of session.cfg.chaseNumbers) {
-      session.chaseLevels[String(c.num)] = 0;
-    }
-    pushEvent(session, "chase:reset_all", { sum: result.value });
-  }
+  settleChaseLevelProgress(session, pending.filter(b => b.isChase), result.value, { sum: result.value });
 }
 
 async function runHashAutoBet(session: TgSession): Promise<void> {
@@ -4695,6 +4712,10 @@ router.post("/tg/config", requireCard, (req, res) => {
     hashBetOptions: (body as Partial<BetCfg>).hashBetOptions ?? prev.hashBetOptions,
     algoFlipOnLoss: body.algoFlipOnLoss ?? prev.algoFlipOnLoss,
   };
+  session.cfg.chaseNumbers = normalizeChaseNumbers(session.cfg.chaseNumbers);
+  if (body.chaseNumbers !== undefined || body.chaseAmountLevels !== undefined || body.chaseDoubleOnLoss !== undefined) {
+    rebuildChaseLevels(session, body.chaseNumbers !== undefined);
+  }
 
   if (body.amountLevels !== undefined || body.betAmount !== undefined || body.strategy !== undefined) {
     const lvl = Math.min(body.startLevel ?? 0, session.cfg.amountLevels.length - 1);

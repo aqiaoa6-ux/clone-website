@@ -57,6 +57,20 @@ function normalizeAlgos(a: string[]) {
   return a.filter(x => AVAILABLE_ALGOS.has(x));
 }
 
+function normalizeChaseNumbers(entries: Array<{ num: string; amount: string }>, chaseDoubleOnLoss: boolean) {
+  const seen = new Set<string>();
+  return entries
+    .filter(c => c.num !== "" && (chaseDoubleOnLoss || c.amount !== ""))
+    .filter(c => {
+      const key = String(Number(c.num));
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map(c => ({ num: Number(c.num), amount: chaseDoubleOnLoss ? 1 : Number(c.amount) }))
+    .filter(c => Number.isInteger(c.num) && c.num >= 0 && c.num <= 27 && isFinite(c.amount) && c.amount > 0);
+}
+
 const BET_OPT_LABELS: Record<string, string> = {
   big: "大", small: "小", odd: "单", even: "双",
 };
@@ -72,6 +86,8 @@ const KS_OPT_LABELS: Record<string, string> = {
 const STRATEGY_LABELS: Record<string, string> = {
   normal: "固定", martingale: "马丁", "anti-martingale": "反马丁",
 };
+
+const TG_LAST_GROUP_KEY = "tg_last_group_id_v1";
 
 function fmtNum(n: number): string {
   if (Math.abs(n) >= 1000000) return `${(n / 1000000).toFixed(2)}M`;
@@ -207,6 +223,7 @@ function GroupSetupCard({ groups, onDone, onRelogin }: { groups: TgGroup[]; onDo
 
   const selectGroup = async (gid: string) => {
     await api.tg.setGroup(gid);
+    try { localStorage.setItem(TG_LAST_GROUP_KEY, gid); } catch {}
     onDone();
   };
 
@@ -349,10 +366,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
         oddsBigEven: Number(oddsBigEven),
         oddsSmallOdd: Number(oddsSmallOdd),
         oddsSmallEven: Number(oddsSmallEven),
-        chaseNumbers: chaseNumbers
-          .filter(c => c.num !== "" && (chaseDoubleOnLoss || c.amount !== ""))
-          .map(c => ({ num: Number(c.num), amount: chaseDoubleOnLoss ? 1 : Number(c.amount) }))
-          .filter(c => c.num >= 0 && c.num <= 27),
+        chaseNumbers: normalizeChaseNumbers(chaseNumbers, chaseDoubleOnLoss),
         enableChase,
         chaseOnly,
         chaseDoubleOnLoss,
@@ -869,15 +883,35 @@ export default function Dashboard() {
       const hr = (s as unknown as Record<string,unknown>).hashResults as Array<{label:string;value:number;big:boolean;odd:boolean}> | undefined;
       if (hr?.length) setHashResults(hr);
       if (!s.connected) { setTgStep("login"); return; }
+      if (s.watchGroupId) {
+        try { localStorage.setItem(TG_LAST_GROUP_KEY, s.watchGroupId); } catch {}
+      }
       if (!s.watchGroupId) {
         const { groups: g } = await api.tg.groups();
         setGroups(g);
+        const savedGroupId = (() => {
+          try { return localStorage.getItem(TG_LAST_GROUP_KEY) ?? ""; } catch { return ""; }
+        })();
+        const savedGroup = savedGroupId
+          ? g.find(item => item.id === savedGroupId || `-100${item.id}` === savedGroupId || item.id === savedGroupId.replace(/^-100/, ""))
+          : undefined;
+        if (savedGroup) {
+          await api.tg.setGroup(savedGroup.id);
+          const restored = await api.tg.status();
+          setStatus(restored);
+          setTgStep("ready");
+          return;
+        }
+        if (status?.watchGroupId) {
+          setTgStep("ready");
+          return;
+        }
         setTgStep("group");
         return;
       }
       setTgStep("ready");
     } catch { setTgStep("login"); }
-  }, []);
+  }, [status?.watchGroupId]);
 
   const fetchBets = useCallback(async () => {
     try {
