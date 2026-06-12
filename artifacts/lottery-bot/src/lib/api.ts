@@ -81,6 +81,12 @@ export const api = {
     debugGroup: () => api.get<{ ok: boolean; watchGroupId?: string; messages?: Array<{ id: number; text: string; ts: number; hasMedia: boolean }>; error?: string }>("/tg/debug-group"),
   },
 
+  hash2: {
+    config: () => api.get<Hash2Config>("/hash2/config"),
+    saveConfig: (config: Hash2Config) => api.post<{ ok: boolean; config: Hash2Config }>("/hash2/config", config),
+    testAlert: (message?: string) => api.post<{ ok: boolean; message: string; at: number }>("/hash2/test-alert", { message }),
+  },
+
   lottery: {
     fengpan: () => api.get<LotteryData>("/lottery/fengpan"),
   },
@@ -225,6 +231,29 @@ export interface TgStatus {
   kuaisanLastDice?: number[];
   kuaisanResults?: KuaisanResultItem[];
   kuaisanChatLog?: Array<{ text: string; ts: number; chatId?: string }>;
+}
+
+export type Hash2Format = "amount_first" | "target_first";
+
+export interface Hash2Plan {
+  id: string;
+  name: string;
+  enabled: boolean;
+  bets: string[];
+  baseAmount: number;
+  handCount: number;
+  amountLevels: number[];
+  stopLoss: number;
+  targetProfit: number;
+  zeroAmountRuns: boolean;
+  format: Hash2Format;
+  webAlertEnabled: boolean;
+  voiceAlertEnabled: boolean;
+}
+
+export interface Hash2Config {
+  plans: Hash2Plan[];
+  updatedAt: number;
 }
 
 export interface BetRecord {

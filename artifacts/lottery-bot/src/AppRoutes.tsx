@@ -4,6 +4,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import CardKeyPage from "./pages/CardKeyPage";
 import Dashboard from "./pages/Dashboard";
+import Hash2Page from "./pages/Hash2Page";
 import AdminPage from "./pages/AdminPage";
 import TrendPage from "./pages/TrendPage";
 import TutorialPage from "./pages/TutorialPage";
@@ -96,6 +97,11 @@ export default function AppRoutes() {
       <Route path="/">
         <ProtectedRoute>
           <Dashboard />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/hash2">
+        <ProtectedRoute>
+          <Hash2Page />
         </ProtectedRoute>
       </Route>
       <Route>
