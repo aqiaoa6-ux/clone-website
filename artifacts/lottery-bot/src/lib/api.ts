@@ -84,6 +84,7 @@ export const api = {
   hash2: {
     config: () => api.get<Hash2Config>("/hash2/config"),
     saveConfig: (config: Hash2Config) => api.post<{ ok: boolean; config: Hash2Config }>("/hash2/config", config),
+    runtime: () => api.get<{ runtime: Hash2Runtime }>("/hash2/runtime"),
     testAlert: (message?: string) => api.post<{ ok: boolean; message: string; at: number }>("/hash2/test-alert", { message }),
   },
 
@@ -249,10 +250,45 @@ export interface Hash2Plan {
   format: Hash2Format;
   webAlertEnabled: boolean;
   voiceAlertEnabled: boolean;
+  numberOdds: Record<string, number>;
 }
 
 export interface Hash2Config {
   plans: Hash2Plan[];
+  updatedAt: number;
+}
+
+export interface Hash2Alert {
+  id: string;
+  planId: string;
+  planName: string;
+  message: string;
+  at: number;
+  level: "info" | "warn" | "success" | "error";
+  voice: boolean;
+}
+
+export interface Hash2PlanRuntime {
+  currentLevel: number;
+  sessionPnl: number;
+  totalRounds: number;
+  wins: number;
+  losses: number;
+  pendingPeriod: string | null;
+  lastSentPeriod: string | null;
+  lastSettledPeriod: string | null;
+  pendingAmount: number;
+  lastMessage: string;
+  blockedReason?: string;
+  lastHit?: string;
+  updatedAt: number;
+}
+
+export interface Hash2Runtime {
+  plans: Record<string, Hash2PlanRuntime>;
+  lastChannelMsgId: number;
+  activePeriod: string | null;
+  lastAlert?: Hash2Alert;
   updatedAt: number;
 }
 

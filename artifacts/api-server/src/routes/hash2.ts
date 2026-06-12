@@ -1,7 +1,10 @@
 import { Router } from "express";
+import { Api } from "telegram";
 import fs from "fs";
 import path from "path";
 import { requireCard } from "../middleware/requireAuth";
+import { logger } from "../lib/logger";
+import { tgSessions, type TgSession } from "./telegram";
 
 const router = Router();
 
@@ -21,6 +24,7 @@ interface Hash2Plan {
   format: Hash2Format;
   webAlertEnabled: boolean;
   voiceAlertEnabled: boolean;
+  numberOdds: Record<string, number>;
 }
 
 interface Hash2Config {
@@ -28,15 +32,66 @@ interface Hash2Config {
   updatedAt: number;
 }
 
+type Hash2AlertLevel = "info" | "warn" | "success" | "error";
+
+interface Hash2PlanRuntime {
+  currentLevel: number;
+  sessionPnl: number;
+  totalRounds: number;
+  wins: number;
+  losses: number;
+  pendingPeriod: string | null;
+  lastSentPeriod: string | null;
+  lastSettledPeriod: string | null;
+  pendingAmount: number;
+  lastMessage: string;
+  blockedReason?: string;
+  lastHit?: string;
+  updatedAt: number;
+}
+
+interface Hash2Alert {
+  id: string;
+  planId: string;
+  planName: string;
+  message: string;
+  at: number;
+  level: Hash2AlertLevel;
+  voice: boolean;
+}
+
+interface Hash2Runtime {
+  plans: Record<string, Hash2PlanRuntime>;
+  lastChannelMsgId: number;
+  activePeriod: string | null;
+  lastAlert?: Hash2Alert;
+  updatedAt: number;
+}
+
+interface ParsedHash2Result {
+  period: string;
+  parts?: [number, number, number];
+  value: number;
+  label: string;
+}
+
 const HASH2_MAX_PLANS = 5;
 const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
+const HASH2_RESULT_CHANNEL = "hx28kjw";
 const HASH2_ALLOWED_BETS = new Set([
   "big", "small", "odd", "even",
   "big-odd", "big-even", "small-odd", "small-even",
   "extreme-big", "extreme-small", "leopard", "pair", "straight",
   ...Array.from({ length: 28 }, (_, i) => `num:${i}`),
 ]);
+const HASH2_DEFAULT_NUMBER_ODDS: Record<string, number> = {
+  "0": 888, "1": 288, "2": 136, "3": 86, "4": 48, "5": 38, "6": 32, "7": 26,
+  "8": 20, "9": 17, "10": 15, "11": 14, "12": 13, "13": 12, "14": 12, "15": 13,
+  "16": 14, "17": 15, "18": 17, "19": 20, "20": 26, "21": 32, "22": 38, "23": 48,
+  "24": 86, "25": 136, "26": 288, "27": 888,
+};
+const hash2LoopInFlight = new Set<number>();
 
 function dataDir(): string {
   const dir = process.env.DATA_DIR ?? process.cwd();
@@ -63,6 +118,7 @@ function defaultPlan(index: number): Hash2Plan {
     format: "amount_first",
     webAlertEnabled: true,
     voiceAlertEnabled: true,
+    numberOdds: { ...HASH2_DEFAULT_NUMBER_ODDS },
   };
 }
 
@@ -80,6 +136,16 @@ function normalizeLevels(levels: number[] | undefined, handCount: number): numbe
   });
   if (handCount > 0) return next;
   return [...HASH2_DEFAULT_LEVELS];
+}
+
+function normalizeNumberOdds(input: Record<string, number> | undefined): Record<string, number> {
+  const next: Record<string, number> = {};
+  for (let i = 0; i <= 27; i++) {
+    const key = String(i);
+    const raw = Number(input?.[key] ?? HASH2_DEFAULT_NUMBER_ODDS[key]!);
+    next[key] = Number.isFinite(raw) && raw >= 0 ? raw : HASH2_DEFAULT_NUMBER_ODDS[key]!;
+  }
+  return next;
 }
 
 function normalizePlan(input: Partial<Hash2Plan> | undefined, index: number): Hash2Plan {
@@ -105,6 +171,7 @@ function normalizePlan(input: Partial<Hash2Plan> | undefined, index: number): Ha
     format: input?.format === "target_first" ? "target_first" : "amount_first",
     webAlertEnabled: input?.webAlertEnabled !== undefined ? !!input.webAlertEnabled : fallback.webAlertEnabled,
     voiceAlertEnabled: input?.voiceAlertEnabled !== undefined ? !!input.voiceAlertEnabled : fallback.voiceAlertEnabled,
+    numberOdds: normalizeNumberOdds(input?.numberOdds),
   };
 }
 
@@ -131,6 +198,337 @@ function saveConfig(userId: number, config: Hash2Config): void {
   fs.writeFileSync(hash2File(userId), JSON.stringify(config, null, 2), "utf-8");
 }
 
+function runtimeFile(userId: number): string {
+  return path.join(dataDir(), `.hash2-runtime-${userId}.json`);
+}
+
+function defaultPlanRuntime(): Hash2PlanRuntime {
+  return {
+    currentLevel: 0,
+    sessionPnl: 0,
+    totalRounds: 0,
+    wins: 0,
+    losses: 0,
+    pendingPeriod: null,
+    lastSentPeriod: null,
+    lastSettledPeriod: null,
+    pendingAmount: 0,
+    lastMessage: "",
+    updatedAt: Date.now(),
+  };
+}
+
+function normalizeRuntime(input: Partial<Hash2Runtime> | undefined, config: Hash2Config): Hash2Runtime {
+  const plans: Record<string, Hash2PlanRuntime> = {};
+  for (const plan of config.plans) {
+    const existing = input?.plans?.[plan.id];
+    plans[plan.id] = {
+      ...defaultPlanRuntime(),
+      ...existing,
+      currentLevel: Math.min(Math.max(Number(existing?.currentLevel ?? 0) || 0, 0), Math.max(plan.handCount - 1, 0)),
+      sessionPnl: Number(existing?.sessionPnl ?? 0) || 0,
+      totalRounds: Number(existing?.totalRounds ?? 0) || 0,
+      wins: Number(existing?.wins ?? 0) || 0,
+      losses: Number(existing?.losses ?? 0) || 0,
+      pendingAmount: Number(existing?.pendingAmount ?? 0) || 0,
+      updatedAt: Date.now(),
+    };
+  }
+  return {
+    plans,
+    lastChannelMsgId: Number(input?.lastChannelMsgId ?? 0) || 0,
+    activePeriod: input?.activePeriod ?? null,
+    lastAlert: input?.lastAlert,
+    updatedAt: Date.now(),
+  };
+}
+
+function loadRuntime(userId: number, config: Hash2Config): Hash2Runtime {
+  try {
+    const file = runtimeFile(userId);
+    if (!fs.existsSync(file)) return normalizeRuntime(undefined, config);
+    const raw = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<Hash2Runtime>;
+    return normalizeRuntime(raw, config);
+  } catch {
+    return normalizeRuntime(undefined, config);
+  }
+}
+
+function saveRuntime(userId: number, runtime: Hash2Runtime): void {
+  fs.writeFileSync(runtimeFile(userId), JSON.stringify(runtime, null, 2), "utf-8");
+}
+
+function makeAlert(plan: Hash2Plan, message: string, level: Hash2AlertLevel): Hash2Alert {
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    planId: plan.id,
+    planName: plan.name,
+    message,
+    at: Date.now(),
+    level,
+    voice: plan.voiceAlertEnabled,
+  };
+}
+
+function planStakeAmount(plan: Hash2Plan, runtime: Hash2PlanRuntime): number {
+  const levelAmount = plan.amountLevels[runtime.currentLevel] ?? 0;
+  if (Number.isFinite(levelAmount)) return Math.max(0, levelAmount);
+  return Math.max(0, plan.baseAmount);
+}
+
+function planRiskReason(plan: Hash2Plan, runtime: Hash2PlanRuntime): string | undefined {
+  if (plan.stopLoss > 0 && runtime.sessionPnl <= -plan.stopLoss) {
+    return `已达止损 ${plan.stopLoss}`;
+  }
+  if (plan.targetProfit > 0 && runtime.sessionPnl >= plan.targetProfit) {
+    return `已达止盈 ${plan.targetProfit}`;
+  }
+  return undefined;
+}
+
+function betKeyLabel(key: string): string {
+  if (key === "big") return "大";
+  if (key === "small") return "小";
+  if (key === "odd") return "单";
+  if (key === "even") return "双";
+  if (key === "big-odd") return "大单";
+  if (key === "big-even") return "大双";
+  if (key === "small-odd") return "小单";
+  if (key === "small-even") return "小双";
+  if (key === "extreme-big") return "极大";
+  if (key === "extreme-small") return "极小";
+  if (key === "leopard") return "豹子";
+  if (key === "pair") return "对子";
+  if (key === "straight") return "顺子";
+  if (key.startsWith("num:")) return key.slice(4);
+  return key;
+}
+
+function formatStake(amount: number): string {
+  return Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
+}
+
+function buildPlanMessage(plan: Hash2Plan, amount: number): string {
+  const parts = plan.bets.map(key => {
+    const label = betKeyLabel(key);
+    return plan.format === "amount_first" ? `${formatStake(amount)} ${label}` : `${label} ${formatStake(amount)}`;
+  });
+  return parts.join("  ");
+}
+
+function isStraight(parts?: [number, number, number]): boolean {
+  if (!parts) return false;
+  const sorted = [...parts].sort((a, b) => a - b);
+  return sorted[1] === sorted[0] + 1 && sorted[2] === sorted[1] + 1;
+}
+
+function isPair(parts?: [number, number, number]): boolean {
+  if (!parts) return false;
+  return new Set(parts).size === 2;
+}
+
+function isLeopard(parts?: [number, number, number]): boolean {
+  if (!parts) return false;
+  return new Set(parts).size === 1;
+}
+
+function evaluateBetKey(key: string, result: ParsedHash2Result): boolean {
+  const { value, label, parts } = result;
+  if (key === "big") return value >= 14;
+  if (key === "small") return value <= 13;
+  if (key === "odd") return value % 2 === 1;
+  if (key === "even") return value % 2 === 0;
+  if (key === "big-odd") return label === "大单";
+  if (key === "big-even") return label === "大双";
+  if (key === "small-odd") return label === "小单";
+  if (key === "small-even") return label === "小双";
+  if (key === "extreme-big") return value >= 22;
+  if (key === "extreme-small") return value <= 5;
+  if (key === "pair") return isPair(parts);
+  if (key === "straight") return isStraight(parts);
+  if (key === "leopard") return isLeopard(parts);
+  if (key.startsWith("num:")) return value === Number(key.slice(4));
+  return false;
+}
+
+function payoutOdds(key: string, plan: Hash2Plan): number {
+  if (key === "big" || key === "small" || key === "odd" || key === "even") return 2;
+  if (key === "big-odd" || key === "big-even" || key === "small-odd" || key === "small-even") return 4.2;
+  if (key === "extreme-big" || key === "extreme-small") return 15;
+  if (key === "pair") return 3.4;
+  if (key === "straight") return 18;
+  if (key === "leopard") return 88;
+  if (key.startsWith("num:")) return plan.numberOdds[key.slice(4)] ?? 0;
+  return 0;
+}
+
+function parseChannelText(text: string): { type: "open"; period: string } | { type: "result"; result: ParsedHash2Result } | null {
+  const openMatch = text.match(/第\s*(\d{4,})\s*期\s*开始/);
+  if (openMatch) {
+    return { type: "open", period: openMatch[1]! };
+  }
+  const full = text.match(/(\d{4,})期\s*(\d+)\+(\d+)\+(\d+)=(\d{1,2})\s*(大单|大双|小单|小双)/);
+  if (full) {
+    return {
+      type: "result",
+      result: {
+        period: full[1]!,
+        parts: [Number(full[2]!), Number(full[3]!), Number(full[4]!)] as [number, number, number],
+        value: Number(full[5]!),
+        label: full[6]!,
+      },
+    };
+  }
+  const partial = text.match(/(\d{4,})期[^\n]*?(\d{1,2})\s*(大单|大双|小单|小双)/);
+  if (partial) {
+    return {
+      type: "result",
+      result: {
+        period: partial[1]!,
+        value: Number(partial[2]!),
+        label: partial[3]!,
+      },
+    };
+  }
+  return null;
+}
+
+async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime, period: string): Promise<void> {
+  if (!plan.enabled || state.lastSentPeriod === period) return;
+  const riskReason = planRiskReason(plan, state);
+  if (riskReason) {
+    state.blockedReason = riskReason;
+    state.lastSentPeriod = period;
+    if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} ${riskReason}`, riskReason.includes("止损") ? "error" : "success");
+    return;
+  }
+  if (!session.watchGroupId || !session.me) {
+    state.blockedReason = "TG未连接或未选择群组";
+    return;
+  }
+  if (plan.bets.length === 0) {
+    state.blockedReason = "未选择下注项";
+    return;
+  }
+  const amount = planStakeAmount(plan, state);
+  state.pendingAmount = amount;
+  state.pendingPeriod = period;
+  state.lastSentPeriod = period;
+  state.updatedAt = Date.now();
+  state.blockedReason = undefined;
+  if (amount <= 0 && plan.zeroAmountRuns) {
+    state.lastMessage = "[虚拟运行] 金额为0，未实际下注";
+    return;
+  }
+  if (amount <= 0) {
+    state.blockedReason = "当前手数金额为0";
+    return;
+  }
+  const message = buildPlanMessage(plan, amount);
+  try {
+    await session.client.sendMessage(session.watchGroupId, { message });
+    state.lastMessage = message;
+    logger.info({ userId, plan: plan.name, period, message }, "[hash2] plan sent");
+  } catch (err) {
+    state.blockedReason = err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80);
+    if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} 发送失败：${state.blockedReason}`, "error");
+  }
+}
+
+function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime, result: ParsedHash2Result): void {
+  if (!plan.enabled) return;
+  if (state.pendingPeriod !== result.period || state.lastSettledPeriod === result.period) return;
+
+  const amount = state.pendingAmount;
+  let totalPnl = 0;
+  const hits = plan.bets.filter(key => evaluateBetKey(key, result));
+  for (const key of plan.bets) {
+    if (evaluateBetKey(key, result)) totalPnl += amount * (payoutOdds(key, plan) - 1);
+    else totalPnl -= amount;
+  }
+
+  state.sessionPnl += totalPnl;
+  state.totalRounds += 1;
+  if (hits.length > 0) {
+    state.wins += 1;
+    state.currentLevel = 0;
+  } else {
+    state.losses += 1;
+    state.currentLevel = Math.min(state.currentLevel + 1, Math.max(plan.handCount - 1, 0));
+  }
+  state.lastHit = hits.map(betKeyLabel).join(" / ");
+  state.lastSettledPeriod = result.period;
+  state.pendingPeriod = null;
+  state.pendingAmount = 0;
+  state.updatedAt = Date.now();
+
+  const riskReason = planRiskReason(plan, state);
+  if (riskReason) {
+    state.blockedReason = riskReason;
+    if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} ${riskReason}`, riskReason.includes("止损") ? "error" : "success");
+  } else {
+    state.blockedReason = undefined;
+  }
+}
+
+async function processUserHash2(session: TgSession): Promise<void> {
+  const userId = session.userId;
+  const config = loadConfig(userId);
+  const enabledPlans = config.plans.filter(plan => plan.enabled);
+  if (enabledPlans.length === 0) return;
+  const runtime = loadRuntime(userId, config);
+  const channel = HASH2_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
+  try {
+    const msgs = await session.client.getMessages(channel, {
+      limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
+      ...(runtime.lastChannelMsgId > 0 ? { minId: runtime.lastChannelMsgId } : {}),
+    }) as Api.Message[];
+    if (!msgs.length) {
+      saveRuntime(userId, runtime);
+      return;
+    }
+    const sorted = [...msgs].sort((a, b) => a.id - b.id);
+    for (const msg of sorted) {
+      if (msg.id <= runtime.lastChannelMsgId) continue;
+      runtime.lastChannelMsgId = msg.id;
+      const text = msg.message ?? "";
+      if (!text) continue;
+      const parsed = parseChannelText(text);
+      if (!parsed) continue;
+      if (parsed.type === "open") {
+        runtime.activePeriod = parsed.period;
+        for (const plan of enabledPlans) {
+          const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
+          runtime.plans[plan.id] = state;
+          await triggerPlanForPeriod(session, userId, plan, state, runtime, parsed.period);
+        }
+      } else {
+        for (const plan of enabledPlans) {
+          const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
+          runtime.plans[plan.id] = state;
+          settlePlanResult(plan, state, runtime, parsed.result);
+        }
+      }
+    }
+  } catch (err) {
+    logger.warn({ userId, err }, "[hash2] loop failed");
+  }
+  runtime.updatedAt = Date.now();
+  saveRuntime(userId, runtime);
+}
+
+function startHash2Loop(): void {
+  setInterval(() => {
+    for (const session of tgSessions.values()) {
+      if (hash2LoopInFlight.has(session.userId)) continue;
+      hash2LoopInFlight.add(session.userId);
+      void processUserHash2(session).finally(() => hash2LoopInFlight.delete(session.userId));
+    }
+  }, 3000);
+}
+
+startHash2Loop();
+
 router.get("/hash2/config", requireCard, (req, res) => {
   const userId = req.user!.userId;
   res.json(loadConfig(userId));
@@ -143,13 +541,30 @@ router.post("/hash2/config", requireCard, (req, res) => {
   res.json({ ok: true, config: next });
 });
 
+router.get("/hash2/runtime", requireCard, (req, res) => {
+  const userId = req.user!.userId;
+  const config = loadConfig(userId);
+  const runtime = loadRuntime(userId, config);
+  res.json({ runtime });
+});
+
 router.post("/hash2/test-alert", requireCard, (req, res) => {
+  const userId = req.user!.userId;
+  const config = loadConfig(userId);
+  const runtime = loadRuntime(userId, config);
+  const firstPlan = config.plans.find(plan => plan.enabled) ?? config.plans[0] ?? defaultPlan(0);
   const { message } = req.body as { message?: string };
-  res.json({
-    ok: true,
-    message: typeof message === "string" && message.trim()
+  runtime.lastAlert = makeAlert(
+    firstPlan,
+    typeof message === "string" && message.trim()
       ? message.trim().slice(0, 120)
       : "哈希2提醒测试：已触发网页语音提醒",
+    "info",
+  );
+  saveRuntime(userId, runtime);
+  res.json({
+    ok: true,
+    message: runtime.lastAlert.message,
     at: Date.now(),
   });
 });

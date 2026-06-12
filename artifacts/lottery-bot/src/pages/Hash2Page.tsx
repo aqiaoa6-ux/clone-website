@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import BottomNav from "../components/BottomNav";
-import { api, type Hash2Config, type Hash2Plan, type TgStatus } from "../lib/api";
+import { api, type Hash2Config, type Hash2Plan, type Hash2Runtime, type TgStatus } from "../lib/api";
 
 const HASH2_BET_OPTIONS: Array<{ key: string; label: string; group: "玩法1" | "玩法2" }> = [
   { key: "big", label: "大", group: "玩法1" },
@@ -40,6 +40,7 @@ function makeDefaultPlan(index: number): Hash2Plan {
     format: "amount_first",
     webAlertEnabled: true,
     voiceAlertEnabled: true,
+    numberOdds: Object.fromEntries(Array.from({ length: 28 }, (_, i) => [String(i), 0])),
   };
 }
 
@@ -58,18 +59,22 @@ export default function Hash2Page() {
   const [saving, setSaving] = useState(false);
   const [activePlan, setActivePlan] = useState(0);
   const [expandedLevels, setExpandedLevels] = useState<Record<string, boolean>>({});
+  const [expandedOdds, setExpandedOdds] = useState<Record<string, boolean>>({});
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
   const [testingAlert, setTestingAlert] = useState(false);
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
+  const [runtime, setRuntime] = useState<Hash2Runtime | null>(null);
+  const [seenAlertId, setSeenAlertId] = useState<string>("");
 
   useEffect(() => {
     let mounted = true;
     void (async () => {
       try {
-        const [cfg, tg] = await Promise.all([api.hash2.config(), api.tg.status()]);
+        const [cfg, tg, rt] = await Promise.all([api.hash2.config(), api.tg.status(), api.hash2.runtime()]);
         if (!mounted) return;
         setConfig(cfg.plans?.length ? cfg : makeDefaultConfig());
         setTgStatus(tg);
+        setRuntime(rt.runtime);
       } catch {
         if (!mounted) return;
         setConfig(makeDefaultConfig());
@@ -81,21 +86,38 @@ export default function Hash2Page() {
   }, []);
 
   useEffect(() => {
-    if (!alertMessage) return;
-    const voiceEnabled = config.plans.some(p => p.voiceAlertEnabled);
-    if (!voiceEnabled) return;
+    const timer = window.setInterval(() => {
+      void (async () => {
+        try {
+          const rt = await api.hash2.runtime();
+          setRuntime(rt.runtime);
+        } catch {
+          // ignore poll errors
+        }
+      })();
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const latest = runtime?.lastAlert;
+    if (!latest || latest.id === seenAlertId) return;
+    setSeenAlertId(latest.id);
+    setAlertMessage(latest.message);
+    if (!latest.voice) return;
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     try {
-      const utterance = new SpeechSynthesisUtterance(alertMessage);
+      const utterance = new SpeechSynthesisUtterance(latest.message);
       utterance.lang = "zh-CN";
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(utterance);
     } catch {
       // ignore browser voice failures
     }
-  }, [alertMessage, config.plans]);
+  }, [runtime?.lastAlert, seenAlertId]);
 
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
+  const currentPlanRuntime = currentPlan ? runtime?.plans?.[currentPlan.id] : undefined;
   const selectedLabels = useMemo(() => {
     return currentPlan.bets
       .map(key => HASH2_BET_OPTIONS.find(item => item.key === key)?.label ?? key)
@@ -125,11 +147,22 @@ export default function Hash2Page() {
     updatePlan(activePlan, { amountLevels: next });
   };
 
+  const setNumberOdd = (num: number, value: string) => {
+    updatePlan(activePlan, {
+      numberOdds: {
+        ...currentPlan.numberOdds,
+        [String(num)]: Math.max(0, Number(value) || 0),
+      },
+    });
+  };
+
   const saveConfig = async () => {
     setSaving(true);
     try {
       const { config: saved } = await api.hash2.saveConfig(config);
       setConfig(saved);
+      const rt = await api.hash2.runtime();
+      setRuntime(rt.runtime);
       setAlertMessage("哈希2配置已保存");
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "保存失败");
@@ -143,6 +176,8 @@ export default function Hash2Page() {
     try {
       const res = await api.hash2.testAlert("哈希2提醒测试：止盈止损网页提醒已触发");
       setAlertMessage(res.message);
+      const rt = await api.hash2.runtime();
+      setRuntime(rt.runtime);
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "提醒测试失败");
     } finally {
@@ -217,6 +252,16 @@ export default function Hash2Page() {
               </div>
             </div>
           </div>
+          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+              <div className="text-slate-500">当前期号</div>
+              <div className="text-white mt-1">{runtime?.activePeriod ?? "等待中"}</div>
+            </div>
+            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+              <div className="text-slate-500">最近提醒</div>
+              <div className="text-white mt-1 truncate">{runtime?.lastAlert?.message ?? "暂无"}</div>
+            </div>
+          </div>
           <div className="mt-3 flex gap-2">
             <button
               onClick={() => void testAlert()}
@@ -269,6 +314,29 @@ export default function Hash2Page() {
               >
                 <div className={`absolute top-1 w-5 h-5 bg-white rounded-full shadow transition-all ${currentPlan.enabled ? "left-8" : "left-1"}`} />
               </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+                <div className="text-slate-500">当前层级</div>
+                <div className="text-white mt-1">第{(currentPlanRuntime?.currentLevel ?? 0) + 1}手</div>
+              </div>
+              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+                <div className="text-slate-500">累计盈亏</div>
+                <div className={`${(currentPlanRuntime?.sessionPnl ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"} mt-1`}>
+                  {(currentPlanRuntime?.sessionPnl ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+                </div>
+              </div>
+              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+                <div className="text-slate-500">最近发单</div>
+                <div className="text-white mt-1 truncate">{currentPlanRuntime?.lastMessage || "暂无"}</div>
+              </div>
+              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+                <div className="text-slate-500">状态</div>
+                <div className={`${currentPlanRuntime?.blockedReason ? "text-red-400" : "text-emerald-400"} mt-1 truncate`}>
+                  {currentPlanRuntime?.blockedReason ?? "运行中/待触发"}
+                </div>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -425,6 +493,34 @@ export default function Hash2Page() {
                         min="0"
                         value={currentPlan.amountLevels[i] ?? 0}
                         onChange={e => setLevel(i, e.target.value)}
+                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
+              <button
+                onClick={() => setExpandedOdds(prev => ({ ...prev, [currentPlan.id]: !prev[currentPlan.id] }))}
+                className="w-full px-4 py-3 flex items-center justify-between text-left bg-[#111526]"
+              >
+                <span className="text-white font-semibold text-sm">0-27 自定义赔率</span>
+                <span className="text-slate-500 text-xs">
+                  {expandedOdds[currentPlan.id] ? "收起" : "展开"}
+                </span>
+              </button>
+              {expandedOdds[currentPlan.id] && (
+                <div className="grid grid-cols-4 gap-2 p-3">
+                  {Array.from({ length: 28 }, (_, i) => (
+                    <div key={i}>
+                      <label className="block text-[10px] text-slate-600 mb-1">{i}号赔率</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={currentPlan.numberOdds[String(i)] ?? 0}
+                        onChange={e => setNumberOdd(i, e.target.value)}
                         className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
                       />
                     </div>

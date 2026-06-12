@@ -288,7 +288,7 @@ function handleBetSendError(session: TgSession, errMsg: string): void {
   }
 }
 
-interface TgSession {
+export interface TgSession {
   userId: number;
   client: TelegramClient;
   stringSession: StringSession;
@@ -488,7 +488,7 @@ const HASH_BET_LABELS: Record<string, string> = {
 
 // ─── Module state ─────────────────────────────────────────────────────────────
 
-const tgSessions = new Map<number, TgSession>();
+export const tgSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
 // 哈希28 全局开奖历史（所有用户共享，最新优先，最多保留 100 期）
 let hashHistoryCache: HashResult[] = [];
