@@ -92,6 +92,7 @@ const HASH2_DEFAULT_NUMBER_ODDS: Record<string, number> = {
   "24": 86, "25": 136, "26": 288, "27": 888,
 };
 const hash2LoopInFlight = new Set<number>();
+const hash2BetDelayTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 function dataDir(): string {
   const dir = process.env.DATA_DIR ?? process.cwd();
@@ -497,17 +498,13 @@ async function processUserHash2(session: TgSession): Promise<void> {
       if (!parsed) continue;
       if (parsed.type === "open") {
         runtime.activePeriod = parsed.period;
-        for (const plan of enabledPlans) {
-          const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
-          runtime.plans[plan.id] = state;
-          await triggerPlanForPeriod(session, userId, plan, state, runtime, parsed.period);
-        }
       } else {
         for (const plan of enabledPlans) {
           const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
           runtime.plans[plan.id] = state;
           settlePlanResult(plan, state, runtime, parsed.result);
         }
+        scheduleHash2AutoBet(session, parsed.result.period);
       }
     }
   } catch (err) {
@@ -515,6 +512,35 @@ async function processUserHash2(session: TgSession): Promise<void> {
   }
   runtime.updatedAt = Date.now();
   saveRuntime(userId, runtime);
+}
+
+function clearHash2BetDelayTimer(userId: number): void {
+  const timer = hash2BetDelayTimers.get(userId);
+  if (timer) {
+    clearTimeout(timer);
+    hash2BetDelayTimers.delete(userId);
+  }
+}
+
+function scheduleHash2AutoBet(session: TgSession, settledPeriod: string): void {
+  clearHash2BetDelayTimer(session.userId);
+  hash2BetDelayTimers.set(session.userId, setTimeout(() => {
+    hash2BetDelayTimers.delete(session.userId);
+    void (async () => {
+      const config = loadConfig(session.userId);
+      const runtime = loadRuntime(session.userId, config);
+      const nextPeriod = String((Number(settledPeriod) || 0) + 1);
+      const targetPeriod = runtime.activePeriod ?? nextPeriod;
+      runtime.activePeriod = targetPeriod;
+      for (const plan of config.plans.filter(plan => plan.enabled)) {
+        const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
+        runtime.plans[plan.id] = state;
+        await triggerPlanForPeriod(session, session.userId, plan, state, runtime, targetPeriod);
+      }
+      runtime.updatedAt = Date.now();
+      saveRuntime(session.userId, runtime);
+    })();
+  }, 50_000));
 }
 
 function startHash2Loop(): void {

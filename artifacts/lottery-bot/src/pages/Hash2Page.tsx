@@ -21,6 +21,50 @@ const HASH2_BET_OPTIONS: Array<{ key: string; label: string; group: "玩法1" | 
   ...Array.from({ length: 28 }, (_, i) => ({ key: `num:${i}`, label: String(i), group: "玩法2" as const })),
 ];
 
+function NumericDraftInput({
+  value,
+  min = 0,
+  max,
+  className,
+  onCommit,
+}: {
+  value: number;
+  min?: number;
+  max?: number;
+  className?: string;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = () => {
+    const raw = draft.trim();
+    if (raw === "") {
+      onCommit(min);
+      return;
+    }
+    let next = Number(raw);
+    if (!Number.isFinite(next)) next = min;
+    next = Math.max(min, next);
+    if (typeof max === "number") next = Math.min(max, next);
+    onCommit(next);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      className={className}
+    />
+  );
+}
+
 function makeDefaultLevels(): number[] {
   return Array.from({ length: 60 }, (_, i) => i + 1);
 }
@@ -361,42 +405,38 @@ export default function Hash2Page() {
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">基础金额</label>
-                <input
-                  type="number"
-                  min="0"
+                <NumericDraftInput
                   value={currentPlan.baseAmount}
-                  onChange={e => updatePlan(activePlan, { baseAmount: Math.max(0, Number(e.target.value) || 0) })}
+                  min={0}
+                  onCommit={value => updatePlan(activePlan, { baseAmount: value })}
                   className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
                 />
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">手数上限</label>
-                <input
-                  type="number"
-                  min="1"
-                  max="60"
+                <NumericDraftInput
                   value={currentPlan.handCount}
-                  onChange={e => updatePlan(activePlan, { handCount: Math.min(60, Math.max(1, Number(e.target.value) || 1)) })}
+                  min={1}
+                  max={60}
+                  onCommit={value => updatePlan(activePlan, { handCount: value })}
                   className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
                 />
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">止损</label>
-                <input
-                  type="number"
-                  min="0"
+                <NumericDraftInput
                   value={currentPlan.stopLoss}
-                  onChange={e => updatePlan(activePlan, { stopLoss: Math.max(0, Number(e.target.value) || 0) })}
+                  min={0}
+                  onCommit={value => updatePlan(activePlan, { stopLoss: value })}
                   className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
                 />
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">止盈</label>
-                <input
-                  type="number"
-                  min="0"
+                <NumericDraftInput
                   value={currentPlan.targetProfit}
-                  onChange={e => updatePlan(activePlan, { targetProfit: Math.max(0, Number(e.target.value) || 0) })}
+                  min={0}
+                  onCommit={value => updatePlan(activePlan, { targetProfit: value })}
                   className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
                 />
               </div>
@@ -488,11 +528,10 @@ export default function Hash2Page() {
                   {Array.from({ length: 60 }, (_, i) => (
                     <div key={i}>
                       <label className="block text-[10px] text-slate-600 mb-1">第{i + 1}手</label>
-                      <input
-                        type="number"
-                        min="0"
+                      <NumericDraftInput
                         value={currentPlan.amountLevels[i] ?? 0}
-                        onChange={e => setLevel(i, e.target.value)}
+                        min={0}
+                        onCommit={value => setLevel(i, String(value))}
                         className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
                       />
                     </div>
@@ -516,11 +555,10 @@ export default function Hash2Page() {
                   {Array.from({ length: 28 }, (_, i) => (
                     <div key={i}>
                       <label className="block text-[10px] text-slate-600 mb-1">{i}号赔率</label>
-                      <input
-                        type="number"
-                        min="0"
+                      <NumericDraftInput
                         value={currentPlan.numberOdds[String(i)] ?? 0}
-                        onChange={e => setNumberOdd(i, e.target.value)}
+                        min={0}
+                        onCommit={value => setNumberOdd(i, String(value))}
                         className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
                       />
                     </div>
