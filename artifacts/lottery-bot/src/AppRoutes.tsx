@@ -5,6 +5,7 @@ import RegisterPage from "./pages/RegisterPage";
 import CardKeyPage from "./pages/CardKeyPage";
 import Dashboard from "./pages/Dashboard";
 import Hash2Page from "./pages/Hash2Page";
+import Hash2SettlePage from "./pages/Hash2SettlePage";
 import AdminPage from "./pages/AdminPage";
 import TrendPage from "./pages/TrendPage";
 import TutorialPage from "./pages/TutorialPage";
@@ -94,14 +95,19 @@ export default function AppRoutes() {
           <TutorialPage />
         </ProtectedRoute>
       </Route>
-      <Route path="/">
+      <Route path="/hash2/settle">
         <ProtectedRoute>
-          <Dashboard />
+          <Hash2SettlePage />
         </ProtectedRoute>
       </Route>
       <Route path="/hash2">
         <ProtectedRoute>
           <Hash2Page />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/">
+        <ProtectedRoute>
+          <Dashboard />
         </ProtectedRoute>
       </Route>
       <Route>

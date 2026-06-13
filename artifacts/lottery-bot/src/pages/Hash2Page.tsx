@@ -363,20 +363,26 @@ export default function Hash2Page() {
               <div className="text-white mt-1 truncate">{runtime?.lastAlert?.message ?? "暂无"}</div>
             </div>
           </div>
-          <div className="mt-3 flex gap-2">
+          <div className="mt-3 grid grid-cols-3 gap-2">
             <button
               onClick={() => void testAlert()}
               disabled={testingAlert}
-              className="flex-1 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm py-2 rounded-xl transition"
+              className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm py-2 rounded-xl transition"
             >
               {testingAlert ? "测试中..." : "测试网页提醒"}
             </button>
             <button
               onClick={() => void saveConfig()}
               disabled={saving}
-              className="flex-1 bg-[#252a3d] hover:bg-[#30375a] disabled:opacity-50 text-slate-200 text-sm py-2 rounded-xl transition"
+              className="bg-[#252a3d] hover:bg-[#30375a] disabled:opacity-50 text-slate-200 text-sm py-2 rounded-xl transition"
             >
               {saving ? "保存中..." : "保存哈希2"}
+            </button>
+            <button
+              onClick={() => setLocation("/hash2/settle")}
+              className="bg-[#1f4fd1] hover:bg-[#2a5ee9] text-white text-sm py-2 rounded-xl transition"
+            >
+              结算页面
             </button>
           </div>
         </div>

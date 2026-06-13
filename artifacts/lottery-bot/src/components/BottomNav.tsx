@@ -26,7 +26,7 @@ export default function BottomNav() {
     <div className="fixed bottom-0 left-0 right-0 z-50 bg-[#0b0e1a]/95 border-t border-[#1e2235] backdrop-blur">
       <div className="max-w-lg mx-auto flex">
         {items.map(item => {
-          const active = location === item.path;
+          const active = location === item.path || (item.path === "/hash2" && location.startsWith("/hash2/"));
           const badge = item.path === "/card-key" ? cardBadge : null;
           return (
             <button
