@@ -76,7 +76,7 @@ function makeDefaultPlan(index: number): Hash2Plan {
     enabled: false,
     bets: [],
     baseAmount: 0,
-    handCount: 1,
+    handCount: 60,
     amountLevels: makeDefaultLevels(),
     stopLoss: 0,
     targetProfit: 0,
@@ -589,6 +589,9 @@ export default function Hash2Page() {
                   {expandedLevels[currentPlan.id] ? "收起" : `展开 · 第1手 ${currentPlan.amountLevels[0] ?? 0}`}
                 </span>
               </button>
+              <div className="px-4 pt-3 text-[10px] text-slate-500 bg-[#111526]">
+                未中自动进下一手，命中任意下注项后回到第 1 手
+              </div>
               {expandedLevels[currentPlan.id] && (
                 <div className="grid grid-cols-4 gap-2 p-3">
                   {Array.from({ length: 60 }, (_, i) => (

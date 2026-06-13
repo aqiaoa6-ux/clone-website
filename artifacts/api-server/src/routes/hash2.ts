@@ -133,7 +133,7 @@ function defaultPlan(index: number): Hash2Plan {
     enabled: false,
     bets: [],
     baseAmount: 0,
-    handCount: 1,
+    handCount: HASH2_MAX_HANDS,
     amountLevels: [...HASH2_DEFAULT_LEVELS],
     stopLoss: 0,
     targetProfit: 0,
@@ -264,10 +264,11 @@ function normalizeRuntime(input: Partial<Hash2Runtime> | undefined, config: Hash
   const plans: Record<string, Hash2PlanRuntime> = {};
   for (const plan of config.plans) {
     const existing = input?.plans?.[plan.id];
+    const maxLevel = Math.max(planLevelCount(plan) - 1, 0);
     plans[plan.id] = {
       ...defaultPlanRuntime(),
       ...existing,
-      currentLevel: Math.min(Math.max(Number(existing?.currentLevel ?? 0) || 0, 0), Math.max(plan.handCount - 1, 0)),
+      currentLevel: Math.min(Math.max(Number(existing?.currentLevel ?? 0) || 0, 0), maxLevel),
       sessionPnl: Number(existing?.sessionPnl ?? 0) || 0,
       totalRounds: Number(existing?.totalRounds ?? 0) || 0,
       wins: Number(existing?.wins ?? 0) || 0,
@@ -316,6 +317,15 @@ function planStakeAmount(plan: Hash2Plan, runtime: Hash2PlanRuntime): number {
   const levelAmount = plan.amountLevels[runtime.currentLevel] ?? 0;
   if (Number.isFinite(levelAmount)) return Math.max(0, levelAmount);
   return Math.max(0, plan.baseAmount);
+}
+
+function planLevelCount(plan: Hash2Plan): number {
+  let lastConfiguredLevel = 0;
+  for (let i = 0; i < Math.min(plan.amountLevels.length, HASH2_MAX_HANDS); i++) {
+    const amount = Number(plan.amountLevels[i] ?? 0);
+    if (Number.isFinite(amount) && amount > 0) lastConfiguredLevel = i + 1;
+  }
+  return Math.min(Math.max(Math.max(plan.handCount, lastConfiguredLevel), 1), HASH2_MAX_HANDS);
 }
 
 function planRiskReason(plan: Hash2Plan, runtime: Hash2PlanRuntime): string | undefined {
@@ -487,6 +497,7 @@ function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Has
   if (state.pendingPeriod !== result.period || state.lastSettledPeriod === result.period) return;
 
   const amount = state.pendingAmount;
+  const maxLevel = Math.max(planLevelCount(plan) - 1, 0);
   let totalPnl = 0;
   const hits = plan.bets.filter(key => evaluateBetKey(key, result));
   for (const key of plan.bets) {
@@ -501,7 +512,7 @@ function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Has
     state.currentLevel = 0;
   } else {
     state.losses += 1;
-    state.currentLevel = Math.min(state.currentLevel + 1, Math.max(plan.handCount - 1, 0));
+    state.currentLevel = Math.min(state.currentLevel + 1, maxLevel);
   }
   state.lastHit = hits.map(betKeyLabel).join(" / ");
   state.lastSettledPeriod = result.period;

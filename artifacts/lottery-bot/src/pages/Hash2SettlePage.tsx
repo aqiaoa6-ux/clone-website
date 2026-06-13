@@ -68,7 +68,7 @@ function makeFallbackPlan(index: number): Hash2Plan {
     enabled: false,
     bets: [],
     baseAmount: 0,
-    handCount: 1,
+    handCount: 60,
     amountLevels: Array.from({ length: 60 }, () => 0),
     stopLoss: 0,
     targetProfit: 0,
