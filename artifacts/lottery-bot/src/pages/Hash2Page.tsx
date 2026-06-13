@@ -81,10 +81,29 @@ function makeDefaultPlan(index: number): Hash2Plan {
     stopLoss: 0,
     targetProfit: 0,
     zeroAmountRuns: true,
-    format: "amount_first",
+    format: "target_first",
     webAlertEnabled: true,
     voiceAlertEnabled: true,
+    basicOdds: {
+      big: 2,
+      small: 2,
+      odd: 2,
+      even: 2,
+    },
+    comboOdds: {
+      "big-odd": 4.2,
+      "big-even": 4.2,
+      "small-odd": 4.2,
+      "small-even": 4.2,
+    },
     numberOdds: Object.fromEntries(Array.from({ length: 28 }, (_, i) => [String(i), 0])),
+    specialOdds: {
+      "extreme-big": 15,
+      "extreme-small": 15,
+      leopard: 88,
+      pair: 3.4,
+      straight: 18,
+    },
   };
 }
 
@@ -162,6 +181,17 @@ export default function Hash2Page() {
 
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
   const currentPlanRuntime = currentPlan ? runtime?.plans?.[currentPlan.id] : undefined;
+  const currentPreview = useMemo(() => {
+    const amount = currentPlan.amountLevels[0] ?? currentPlan.baseAmount ?? 0;
+    const targetFirst = currentPlan.bets.some(key => key.startsWith("num:")) || currentPlan.format === "target_first";
+    return currentPlan.bets
+      .map(key => {
+        const label = HASH2_BET_OPTIONS.find(item => item.key === key)?.label ?? key;
+        const amt = Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
+        return targetFirst ? `${label}/${amt}` : `${amt}/${label}`;
+      })
+      .join("  ");
+  }, [currentPlan]);
   const selectedLabels = useMemo(() => {
     return currentPlan.bets
       .map(key => HASH2_BET_OPTIONS.find(item => item.key === key)?.label ?? key)
@@ -196,6 +226,33 @@ export default function Hash2Page() {
       numberOdds: {
         ...currentPlan.numberOdds,
         [String(num)]: Math.max(0, Number(value) || 0),
+      },
+    });
+  };
+
+  const setBasicOdd = (key: keyof Hash2Plan["basicOdds"], value: string) => {
+    updatePlan(activePlan, {
+      basicOdds: {
+        ...currentPlan.basicOdds,
+        [key]: Math.max(0, Number(value) || 0),
+      },
+    });
+  };
+
+  const setComboOdd = (key: keyof Hash2Plan["comboOdds"], value: string) => {
+    updatePlan(activePlan, {
+      comboOdds: {
+        ...currentPlan.comboOdds,
+        [key]: Math.max(0, Number(value) || 0),
+      },
+    });
+  };
+
+  const setSpecialOdd = (key: keyof Hash2Plan["specialOdds"], value: string) => {
+    updatePlan(activePlan, {
+      specialOdds: {
+        ...currentPlan.specialOdds,
+        [key]: Math.max(0, Number(value) || 0),
       },
     });
   };
@@ -351,6 +408,9 @@ export default function Hash2Page() {
                 <div className="text-xs text-slate-500 mt-1">
                   已选下注项：{selectedLabels || "暂无"}
                 </div>
+                <div className="text-[10px] text-slate-600 mt-1 break-all">
+                  发送预览：{currentPreview || "暂无"}
+                </div>
               </div>
               <button
                 onClick={() => updatePlan(activePlan, { enabled: !currentPlan.enabled })}
@@ -399,8 +459,8 @@ export default function Hash2Page() {
                   onChange={e => updatePlan(activePlan, { format: e.target.value as Hash2Plan["format"] })}
                   className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
                 >
-                  <option value="amount_first">金额 + 目标</option>
-                  <option value="target_first">目标 + 金额</option>
+                  <option value="amount_first">金额/目标</option>
+                  <option value="target_first">目标/金额</option>
                 </select>
               </div>
               <div>
@@ -541,6 +601,94 @@ export default function Hash2Page() {
             </div>
 
             <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
+              <div className="w-full px-4 py-3 text-left bg-[#111526]">
+                <span className="text-white font-semibold text-sm">大小单双自定义赔率</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 p-3">
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">大赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.basicOdds.big ?? 2}
+                    min={0}
+                    onCommit={value => setBasicOdd("big", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">小赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.basicOdds.small ?? 2}
+                    min={0}
+                    onCommit={value => setBasicOdd("small", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">单赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.basicOdds.odd ?? 2}
+                    min={0}
+                    onCommit={value => setBasicOdd("odd", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">双赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.basicOdds.even ?? 2}
+                    min={0}
+                    onCommit={value => setBasicOdd("even", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
+              <div className="w-full px-4 py-3 text-left bg-[#111526]">
+                <span className="text-white font-semibold text-sm">组合自定义赔率</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 p-3">
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">大单赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.comboOdds["big-odd"] ?? 4.2}
+                    min={0}
+                    onCommit={value => setComboOdd("big-odd", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">大双赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.comboOdds["big-even"] ?? 4.2}
+                    min={0}
+                    onCommit={value => setComboOdd("big-even", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">小单赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.comboOdds["small-odd"] ?? 4.2}
+                    min={0}
+                    onCommit={value => setComboOdd("small-odd", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">小双赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.comboOdds["small-even"] ?? 4.2}
+                    min={0}
+                    onCommit={value => setComboOdd("small-even", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
               <button
                 onClick={() => setExpandedOdds(prev => ({ ...prev, [currentPlan.id]: !prev[currentPlan.id] }))}
                 className="w-full px-4 py-3 flex items-center justify-between text-left bg-[#111526]"
@@ -565,6 +713,59 @@ export default function Hash2Page() {
                   ))}
                 </div>
               )}
+            </div>
+
+            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
+              <div className="w-full px-4 py-3 text-left bg-[#111526]">
+                <span className="text-white font-semibold text-sm">特殊玩法自定义赔率</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 p-3">
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">极大赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.specialOdds["extreme-big"] ?? 15}
+                    min={0}
+                    onCommit={value => setSpecialOdd("extreme-big", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">极小赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.specialOdds["extreme-small"] ?? 15}
+                    min={0}
+                    onCommit={value => setSpecialOdd("extreme-small", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">豹子赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.specialOdds.leopard ?? 88}
+                    min={0}
+                    onCommit={value => setSpecialOdd("leopard", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">对子赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.specialOdds.pair ?? 3.4}
+                    min={0}
+                    onCommit={value => setSpecialOdd("pair", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-600 mb-1">顺子赔率</label>
+                  <NumericDraftInput
+                    value={currentPlan.specialOdds.straight ?? 18}
+                    min={0}
+                    onCommit={value => setSpecialOdd("straight", String(value))}
+                    className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         )}

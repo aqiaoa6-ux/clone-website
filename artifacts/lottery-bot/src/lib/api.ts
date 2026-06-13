@@ -250,7 +250,10 @@ export interface Hash2Plan {
   format: Hash2Format;
   webAlertEnabled: boolean;
   voiceAlertEnabled: boolean;
+  basicOdds: Record<string, number>;
+  comboOdds: Record<string, number>;
   numberOdds: Record<string, number>;
+  specialOdds: Record<string, number>;
 }
 
 export interface Hash2Config {

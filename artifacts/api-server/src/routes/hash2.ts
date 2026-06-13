@@ -24,7 +24,10 @@ interface Hash2Plan {
   format: Hash2Format;
   webAlertEnabled: boolean;
   voiceAlertEnabled: boolean;
+  basicOdds: Record<string, number>;
+  comboOdds: Record<string, number>;
   numberOdds: Record<string, number>;
+  specialOdds: Record<string, number>;
 }
 
 interface Hash2Config {
@@ -91,6 +94,25 @@ const HASH2_DEFAULT_NUMBER_ODDS: Record<string, number> = {
   "16": 14, "17": 15, "18": 17, "19": 20, "20": 26, "21": 32, "22": 38, "23": 48,
   "24": 86, "25": 136, "26": 288, "27": 888,
 };
+const HASH2_DEFAULT_BASIC_ODDS: Record<string, number> = {
+  big: 2,
+  small: 2,
+  odd: 2,
+  even: 2,
+};
+const HASH2_DEFAULT_COMBO_ODDS: Record<string, number> = {
+  "big-odd": 4.2,
+  "big-even": 4.2,
+  "small-odd": 4.2,
+  "small-even": 4.2,
+};
+const HASH2_DEFAULT_SPECIAL_ODDS: Record<string, number> = {
+  "extreme-big": 15,
+  "extreme-small": 15,
+  leopard: 88,
+  pair: 3.4,
+  straight: 18,
+};
 const hash2LoopInFlight = new Set<number>();
 const hash2BetDelayTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -116,10 +138,13 @@ function defaultPlan(index: number): Hash2Plan {
     stopLoss: 0,
     targetProfit: 0,
     zeroAmountRuns: true,
-    format: "amount_first",
+    format: "target_first",
     webAlertEnabled: true,
     voiceAlertEnabled: true,
+    basicOdds: { ...HASH2_DEFAULT_BASIC_ODDS },
+    comboOdds: { ...HASH2_DEFAULT_COMBO_ODDS },
     numberOdds: { ...HASH2_DEFAULT_NUMBER_ODDS },
+    specialOdds: { ...HASH2_DEFAULT_SPECIAL_ODDS },
   };
 }
 
@@ -149,6 +174,19 @@ function normalizeNumberOdds(input: Record<string, number> | undefined): Record<
   return next;
 }
 
+function normalizeNamedOdds(defaults: Record<string, number>, input: Record<string, number> | undefined): Record<string, number> {
+  const next: Record<string, number> = {};
+  for (const key of Object.keys(defaults)) {
+    const raw = Number(input?.[key] ?? defaults[key]!);
+    next[key] = Number.isFinite(raw) && raw >= 0 ? raw : defaults[key]!;
+  }
+  return next;
+}
+
+function normalizeSpecialOdds(input: Record<string, number> | undefined): Record<string, number> {
+  return normalizeNamedOdds(HASH2_DEFAULT_SPECIAL_ODDS, input);
+}
+
 function normalizePlan(input: Partial<Hash2Plan> | undefined, index: number): Hash2Plan {
   const fallback = defaultPlan(index);
   const handCountRaw = Number(input?.handCount ?? fallback.handCount);
@@ -169,10 +207,13 @@ function normalizePlan(input: Partial<Hash2Plan> | undefined, index: number): Ha
     stopLoss: Math.max(0, Number(input?.stopLoss ?? fallback.stopLoss) || 0),
     targetProfit: Math.max(0, Number(input?.targetProfit ?? fallback.targetProfit) || 0),
     zeroAmountRuns: input?.zeroAmountRuns !== undefined ? !!input.zeroAmountRuns : fallback.zeroAmountRuns,
-    format: input?.format === "target_first" ? "target_first" : "amount_first",
+    format: input?.format === "amount_first" ? "amount_first" : "target_first",
     webAlertEnabled: input?.webAlertEnabled !== undefined ? !!input.webAlertEnabled : fallback.webAlertEnabled,
     voiceAlertEnabled: input?.voiceAlertEnabled !== undefined ? !!input.voiceAlertEnabled : fallback.voiceAlertEnabled,
+    basicOdds: normalizeNamedOdds(HASH2_DEFAULT_BASIC_ODDS, input?.basicOdds),
+    comboOdds: normalizeNamedOdds(HASH2_DEFAULT_COMBO_ODDS, input?.comboOdds),
     numberOdds: normalizeNumberOdds(input?.numberOdds),
+    specialOdds: normalizeSpecialOdds(input?.specialOdds),
   };
 }
 
@@ -310,9 +351,11 @@ function formatStake(amount: number): string {
 }
 
 function buildPlanMessage(plan: Hash2Plan, amount: number): string {
+  const forceTargetFirst = plan.bets.some(key => key.startsWith("num:"));
   const parts = plan.bets.map(key => {
     const label = betKeyLabel(key);
-    return plan.format === "amount_first" ? `${formatStake(amount)} ${label}` : `${label} ${formatStake(amount)}`;
+    const targetFirst = forceTargetFirst || plan.format === "target_first";
+    return targetFirst ? `${label}/${formatStake(amount)}` : `${formatStake(amount)}/${label}`;
   });
   return parts.join("  ");
 }
@@ -353,12 +396,15 @@ function evaluateBetKey(key: string, result: ParsedHash2Result): boolean {
 }
 
 function payoutOdds(key: string, plan: Hash2Plan): number {
-  if (key === "big" || key === "small" || key === "odd" || key === "even") return 2;
-  if (key === "big-odd" || key === "big-even" || key === "small-odd" || key === "small-even") return 4.2;
-  if (key === "extreme-big" || key === "extreme-small") return 15;
-  if (key === "pair") return 3.4;
-  if (key === "straight") return 18;
-  if (key === "leopard") return 88;
+  if (key === "big" || key === "small" || key === "odd" || key === "even") {
+    return plan.basicOdds[key] ?? HASH2_DEFAULT_BASIC_ODDS[key] ?? 0;
+  }
+  if (key === "big-odd" || key === "big-even" || key === "small-odd" || key === "small-even") {
+    return plan.comboOdds[key] ?? HASH2_DEFAULT_COMBO_ODDS[key] ?? 0;
+  }
+  if (key === "extreme-big" || key === "extreme-small" || key === "pair" || key === "straight" || key === "leopard") {
+    return plan.specialOdds[key] ?? HASH2_DEFAULT_SPECIAL_ODDS[key] ?? 0;
+  }
   if (key.startsWith("num:")) return plan.numberOdds[key.slice(4)] ?? 0;
   return 0;
 }
