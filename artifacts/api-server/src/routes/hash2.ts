@@ -39,6 +39,7 @@ type Hash2AlertLevel = "info" | "warn" | "success" | "error";
 
 interface Hash2PlanRuntime {
   currentLevel: number;
+  betLevels: Record<string, number>;
   sessionPnl: number;
   totalRounds: number;
   wins: number;
@@ -47,6 +48,7 @@ interface Hash2PlanRuntime {
   lastSentPeriod: string | null;
   lastSettledPeriod: string | null;
   pendingAmount: number;
+  pendingAmounts: Record<string, number>;
   lastMessage: string;
   blockedReason?: string;
   lastHit?: string;
@@ -247,6 +249,7 @@ function runtimeFile(userId: number): string {
 function defaultPlanRuntime(): Hash2PlanRuntime {
   return {
     currentLevel: 0,
+    betLevels: {},
     sessionPnl: 0,
     totalRounds: 0,
     wins: 0,
@@ -255,6 +258,7 @@ function defaultPlanRuntime(): Hash2PlanRuntime {
     lastSentPeriod: null,
     lastSettledPeriod: null,
     pendingAmount: 0,
+    pendingAmounts: {},
     lastMessage: "",
     updatedAt: Date.now(),
   };
@@ -264,16 +268,23 @@ function normalizeRuntime(input: Partial<Hash2Runtime> | undefined, config: Hash
   const plans: Record<string, Hash2PlanRuntime> = {};
   for (const plan of config.plans) {
     const existing = input?.plans?.[plan.id];
-    const maxLevel = Math.max(planLevelCount(plan) - 1, 0);
+    const legacyLevel = Math.max(Number(existing?.currentLevel ?? 0) || 0, 0);
+    const legacyPendingAmount = Math.max(Number(existing?.pendingAmount ?? 0) || 0, 0);
+    const levelState = normalizePlanLevelState(
+      plan,
+      existing?.betLevels,
+      existing?.pendingAmounts,
+      legacyLevel,
+      legacyPendingAmount,
+    );
     plans[plan.id] = {
       ...defaultPlanRuntime(),
       ...existing,
-      currentLevel: Math.min(Math.max(Number(existing?.currentLevel ?? 0) || 0, 0), maxLevel),
+      ...levelState,
       sessionPnl: Number(existing?.sessionPnl ?? 0) || 0,
       totalRounds: Number(existing?.totalRounds ?? 0) || 0,
       wins: Number(existing?.wins ?? 0) || 0,
       losses: Number(existing?.losses ?? 0) || 0,
-      pendingAmount: Number(existing?.pendingAmount ?? 0) || 0,
       updatedAt: Date.now(),
     };
   }
@@ -313,10 +324,10 @@ function makeAlert(plan: Hash2Plan, message: string, level: Hash2AlertLevel): Ha
   };
 }
 
-function planStakeAmount(plan: Hash2Plan, runtime: Hash2PlanRuntime): number {
-  const levelAmount = plan.amountLevels[runtime.currentLevel] ?? 0;
-  if (Number.isFinite(levelAmount)) return Math.max(0, levelAmount);
-  return Math.max(0, plan.baseAmount);
+function derivePlanCurrentLevel(levels: Record<string, number>): number {
+  const values = Object.values(levels).filter(value => Number.isFinite(value));
+  if (!values.length) return 0;
+  return Math.max(...values.map(value => Math.max(0, Math.floor(value))));
 }
 
 function planLevelCount(plan: Hash2Plan): number {
@@ -326,6 +337,40 @@ function planLevelCount(plan: Hash2Plan): number {
     if (Number.isFinite(amount) && amount > 0) lastConfiguredLevel = i + 1;
   }
   return Math.min(Math.max(Math.max(plan.handCount, lastConfiguredLevel), 1), HASH2_MAX_HANDS);
+}
+
+function normalizePlanLevelState(
+  plan: Hash2Plan,
+  existingLevels: Record<string, number> | undefined,
+  existingPendingAmounts: Record<string, number> | undefined,
+  legacyLevel: number,
+  legacyPendingAmount: number,
+): Pick<Hash2PlanRuntime, "betLevels" | "pendingAmounts" | "currentLevel" | "pendingAmount"> {
+  const maxLevel = Math.max(planLevelCount(plan) - 1, 0);
+  const betLevels: Record<string, number> = {};
+  const pendingAmounts: Record<string, number> = {};
+  for (const key of plan.bets) {
+    const rawLevel = Number(existingLevels?.[key] ?? legacyLevel);
+    betLevels[key] = Math.min(Math.max(Number.isFinite(rawLevel) ? rawLevel : legacyLevel, 0), maxLevel);
+    const rawPendingAmount = Number(existingPendingAmounts?.[key] ?? legacyPendingAmount);
+    pendingAmounts[key] = Number.isFinite(rawPendingAmount) && rawPendingAmount >= 0 ? rawPendingAmount : 0;
+  }
+  return {
+    betLevels,
+    pendingAmounts,
+    currentLevel: derivePlanCurrentLevel(betLevels),
+    pendingAmount: Object.values(pendingAmounts).reduce((sum, amount) => sum + amount, 0),
+  };
+}
+
+function levelStakeAmount(plan: Hash2Plan, level: number): number {
+  const levelAmount = plan.amountLevels[level] ?? plan.baseAmount;
+  if (Number.isFinite(levelAmount)) return Math.max(0, levelAmount);
+  return Math.max(0, plan.baseAmount);
+}
+
+function stakeAmountForBet(plan: Hash2Plan, runtime: Hash2PlanRuntime, key: string): number {
+  return levelStakeAmount(plan, runtime.betLevels[key] ?? runtime.currentLevel ?? 0);
 }
 
 function planRiskReason(plan: Hash2Plan, runtime: Hash2PlanRuntime): string | undefined {
@@ -360,9 +405,9 @@ function formatStake(amount: number): string {
   return Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
 }
 
-function buildPlanMessage(plan: Hash2Plan, amount: number): string {
-  const forceTargetFirst = plan.bets.some(key => key.startsWith("num:"));
-  const parts = plan.bets.map(key => {
+function buildPlanMessage(plan: Hash2Plan, entries: Array<{ key: string; amount: number }>): string {
+  const forceTargetFirst = entries.some(entry => entry.key.startsWith("num:"));
+  const parts = entries.map(({ key, amount }) => {
     const label = betKeyLabel(key);
     const targetFirst = forceTargetFirst || plan.format === "target_first";
     return targetFirst ? `${label}/${formatStake(amount)}` : `${formatStake(amount)}/${label}`;
@@ -452,6 +497,10 @@ function parseChannelText(text: string): { type: "open"; period: string } | { ty
 
 async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime, period: string): Promise<void> {
   if (!plan.enabled || state.lastSentPeriod === period) return;
+  Object.assign(
+    state,
+    normalizePlanLevelState(plan, state.betLevels, state.pendingAmounts, state.currentLevel, state.pendingAmount),
+  );
   const riskReason = planRiskReason(plan, state);
   if (riskReason) {
     state.blockedReason = riskReason;
@@ -467,21 +516,24 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ha
     state.blockedReason = "未选择下注项";
     return;
   }
-  const amount = planStakeAmount(plan, state);
-  state.pendingAmount = amount;
+  const entries = plan.bets.map(key => ({ key, amount: stakeAmountForBet(plan, state, key) }));
+  state.pendingAmounts = Object.fromEntries(entries.map(entry => [entry.key, entry.amount]));
+  state.pendingAmount = entries.reduce((sum, entry) => sum + entry.amount, 0);
   state.pendingPeriod = period;
   state.lastSentPeriod = period;
   state.updatedAt = Date.now();
   state.blockedReason = undefined;
-  if (amount <= 0 && plan.zeroAmountRuns) {
-    state.lastMessage = "[虚拟运行] 金额为0，未实际下注";
+  const sendableEntries = entries.filter(entry => entry.amount > 0);
+  if (sendableEntries.length === 0 && plan.zeroAmountRuns) {
+    state.lastMessage = `[虚拟运行] ${buildPlanMessage(plan, entries.map(entry => ({ ...entry, amount: 0 })))}`
+      .trim();
     return;
   }
-  if (amount <= 0) {
-    state.blockedReason = "当前手数金额为0";
+  if (sendableEntries.length === 0) {
+    state.blockedReason = "当前所有下注项金额都为0";
     return;
   }
-  const message = buildPlanMessage(plan, amount);
+  const message = buildPlanMessage(plan, sendableEntries);
   try {
     await session.client.sendMessage(session.watchGroupId, { message });
     state.lastMessage = message;
@@ -496,27 +548,38 @@ function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Has
   if (!plan.enabled) return;
   if (state.pendingPeriod !== result.period || state.lastSettledPeriod === result.period) return;
 
-  const amount = state.pendingAmount;
+  Object.assign(
+    state,
+    normalizePlanLevelState(plan, state.betLevels, state.pendingAmounts, state.currentLevel, state.pendingAmount),
+  );
   const maxLevel = Math.max(planLevelCount(plan) - 1, 0);
   let totalPnl = 0;
-  const hits = plan.bets.filter(key => evaluateBetKey(key, result));
+  const hits: string[] = [];
   for (const key of plan.bets) {
-    if (evaluateBetKey(key, result)) totalPnl += amount * (payoutOdds(key, plan) - 1);
-    else totalPnl -= amount;
+    const amount = Number(state.pendingAmounts[key] ?? 0) || 0;
+    const won = evaluateBetKey(key, result);
+    if (won) {
+      totalPnl += amount * (payoutOdds(key, plan) - 1);
+      hits.push(key);
+      state.betLevels[key] = 0;
+    } else {
+      totalPnl -= amount;
+      state.betLevels[key] = Math.min((state.betLevels[key] ?? 0) + 1, maxLevel);
+    }
   }
 
   state.sessionPnl += totalPnl;
   state.totalRounds += 1;
   if (hits.length > 0) {
     state.wins += 1;
-    state.currentLevel = 0;
   } else {
     state.losses += 1;
-    state.currentLevel = Math.min(state.currentLevel + 1, maxLevel);
   }
+  state.currentLevel = derivePlanCurrentLevel(state.betLevels);
   state.lastHit = hits.map(betKeyLabel).join(" / ");
   state.lastSettledPeriod = result.period;
   state.pendingPeriod = null;
+  state.pendingAmounts = {};
   state.pendingAmount = 0;
   state.updatedAt = Date.now();
 

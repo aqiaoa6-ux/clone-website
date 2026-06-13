@@ -273,6 +273,7 @@ export interface Hash2Alert {
 
 export interface Hash2PlanRuntime {
   currentLevel: number;
+  betLevels: Record<string, number>;
   sessionPnl: number;
   totalRounds: number;
   wins: number;
@@ -281,6 +282,7 @@ export interface Hash2PlanRuntime {
   lastSentPeriod: string | null;
   lastSettledPeriod: string | null;
   pendingAmount: number;
+  pendingAmounts: Record<string, number>;
   lastMessage: string;
   blockedReason?: string;
   lastHit?: string;

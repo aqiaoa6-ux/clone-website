@@ -181,6 +181,16 @@ export default function Hash2Page() {
 
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
   const currentPlanRuntime = currentPlan ? runtime?.plans?.[currentPlan.id] : undefined;
+  const currentLevelSummary = useMemo(() => {
+    const betLevels = currentPlanRuntime?.betLevels ?? {};
+    return currentPlan.bets
+      .map(key => {
+        const label = HASH2_BET_OPTIONS.find(item => item.key === key)?.label ?? key;
+        const level = (betLevels[key] ?? 0) + 1;
+        return `${label}${level}`;
+      })
+      .join(" / ");
+  }, [currentPlan.bets, currentPlanRuntime?.betLevels]);
   const currentPreview = useMemo(() => {
     const amount = currentPlan.amountLevels[0] ?? currentPlan.baseAmount ?? 0;
     const targetFirst = currentPlan.bets.some(key => key.startsWith("num:")) || currentPlan.format === "target_first";
@@ -430,6 +440,9 @@ export default function Hash2Page() {
               <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
                 <div className="text-slate-500">当前层级</div>
                 <div className="text-white mt-1">第{(currentPlanRuntime?.currentLevel ?? 0) + 1}手</div>
+                <div className="text-[10px] text-slate-500 mt-1 truncate">
+                  {currentLevelSummary || "暂无"}
+                </div>
               </div>
               <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
                 <div className="text-slate-500">累计盈亏</div>
