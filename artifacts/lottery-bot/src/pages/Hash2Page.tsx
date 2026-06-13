@@ -182,15 +182,9 @@ export default function Hash2Page() {
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
   const currentPlanRuntime = currentPlan ? runtime?.plans?.[currentPlan.id] : undefined;
   const currentLevelSummary = useMemo(() => {
-    const betLevels = currentPlanRuntime?.betLevels ?? {};
-    return currentPlan.bets
-      .map(key => {
-        const label = HASH2_BET_OPTIONS.find(item => item.key === key)?.label ?? key;
-        const level = (betLevels[key] ?? 0) + 1;
-        return `${label}${level}`;
-      })
-      .join(" / ");
-  }, [currentPlan.bets, currentPlanRuntime?.betLevels]);
+    if (!currentPlan.bets.length) return "";
+    return `同方案共用层级 · 任意命中回第1手 · 全部未中才进下一手`;
+  }, [currentPlan.bets.length]);
   const currentPreview = useMemo(() => {
     const amount = currentPlan.amountLevels[0] ?? currentPlan.baseAmount ?? 0;
     const targetFirst = currentPlan.bets.some(key => key.startsWith("num:")) || currentPlan.format === "target_first";
