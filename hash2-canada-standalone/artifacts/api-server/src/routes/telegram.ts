@@ -790,14 +790,24 @@ function saveSession(session: TgSession): void {
 async function fetchGroups(client: TelegramClient): Promise<GroupInfo[]> {
   try {
     const dialogs = await client.getDialogs({ limit: 100 });
-    return dialogs
-      .filter((d) => d.isGroup || d.isChannel)
-      .map((d) => ({
-        id: String(d.id),
-        title: d.title ?? "Unknown",
-        type: d.isChannel ? "channel" : "group",
-        membersCount: (d.entity as Api.Chat)?.participantsCount ?? undefined,
-      }));
+    const map = new Map<string, GroupInfo>();
+    for (const d of dialogs) {
+      if (d.isGroup || d.isChannel) {
+        map.set(String(d.id), {
+          id: String(d.id),
+          title: d.title ?? "Unknown",
+          type: d.isChannel ? "channel" : "group",
+          membersCount: (d.entity as Api.Chat)?.participantsCount ?? undefined,
+        });
+        continue;
+      }
+
+      const entity = d.entity as unknown as { className?: string; bot?: boolean; firstName?: string; lastName?: string; username?: string };
+      if (entity?.className !== "User" || !entity.bot) continue;
+      const title = [entity.firstName, entity.lastName].filter(Boolean).join(" ") || (entity.username ? `@${entity.username}` : String(d.id));
+      map.set(String(d.id), { id: String(d.id), title, type: "bot" });
+    }
+    return Array.from(map.values());
   } catch {
     return [];
   }

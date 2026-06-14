@@ -150,7 +150,7 @@ function TgGroupCard({
     <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">💬</span>
-        <h3 className="text-white font-semibold">选择投注群组</h3>
+        <h3 className="text-white font-semibold">选择投注目标</h3>
       </div>
 
       {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-lg px-3 py-2 mb-3">{error}</div>}
@@ -158,7 +158,7 @@ function TgGroupCard({
       <div className="flex gap-2 mb-3">
         <input
           type="text" value={link} onChange={e => setLink(e.target.value)}
-          placeholder="粘贴群链接 t.me/..."
+          placeholder="粘贴群/频道链接 t.me/..."
           className="flex-1 bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500"
         />
         <button
@@ -187,14 +187,14 @@ function TgGroupCard({
         <>
           <input
             type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="搜索已加入的群..."
+            placeholder="搜索已加入的群/机器人..."
             className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500 mb-2"
           />
           <div className="space-y-1 max-h-48 overflow-y-auto">
             {filteredGroups.map(group => (
               <button key={group.id} onClick={() => void selectGroup(group.id)}
                 className="w-full text-left flex items-center gap-3 bg-[#0f1220] hover:bg-[#1a1f35] border border-transparent hover:border-blue-500/30 rounded-xl px-3 py-2 transition">
-                <span className="text-slate-400">{group.type === "channel" ? "📢" : "💬"}</span>
+                <span className="text-slate-400">{group.type === "bot" ? "🤖" : group.type === "channel" ? "📢" : "💬"}</span>
                 <div>
                   <div className="text-white text-sm">{group.title}</div>
                   {group.membersCount && <div className="text-slate-600 text-[10px]">{group.membersCount} 成员</div>}
@@ -202,7 +202,7 @@ function TgGroupCard({
               </button>
             ))}
             {filteredGroups.length === 0 && (
-              <div className="text-center text-slate-600 text-xs py-3">暂无匹配群组</div>
+              <div className="text-center text-slate-600 text-xs py-3">暂无匹配目标</div>
             )}
           </div>
         </>
@@ -210,7 +210,7 @@ function TgGroupCard({
 
       {groups.length === 0 && (
         <div className="rounded-xl border border-dashed border-[#252a3d] px-3 py-4 text-center text-xs text-slate-500">
-          暂无可选群组，请先把 TG 账号加入目标群
+          暂无可选目标，请先把 TG 账号加入目标群，或先和投注机器人发起对话
         </div>
       )}
 
@@ -305,7 +305,7 @@ export default function TgAccessPanel({
             {tgStatus?.me?.firstName ?? ""} {tgStatus?.me?.username ? `@${tgStatus.me.username}` : ""}
           </div>
           <div className="mt-1 text-xs text-slate-500">
-            当前群组：{tgStatus?.watchGroupTitle ?? "未选择"}
+            当前目标：{tgStatus?.watchGroupTitle ?? "未选择"}
           </div>
         </div>
         <div className="flex gap-2">
@@ -317,7 +317,7 @@ export default function TgAccessPanel({
             disabled={loadingGroups}
             className="rounded-lg border border-[#252a3d] px-3 py-1.5 text-xs text-slate-300 hover:text-white disabled:opacity-40"
           >
-            换群
+            换目标
           </button>
           <button
             onClick={() =>

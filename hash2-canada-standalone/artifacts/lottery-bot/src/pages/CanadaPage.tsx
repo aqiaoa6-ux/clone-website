@@ -405,12 +405,6 @@ export default function CanadaPage() {
             >
               {saving ? "保存中..." : "保存加拿大"}
             </button>
-            <button
-              onClick={() => setLocation("/canada/settle")}
-              className="bg-[#1f4fd1] hover:bg-[#2a5ee9] text-white text-sm py-2 rounded-xl transition"
-            >
-              结算页面
-            </button>
           </div>
         </div>
 

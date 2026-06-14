@@ -405,12 +405,6 @@ export default function Hash2Page() {
             >
               {saving ? "保存中..." : "保存哈希2"}
             </button>
-            <button
-              onClick={() => setLocation("/hash2/settle")}
-              className="bg-[#1f4fd1] hover:bg-[#2a5ee9] text-white text-sm py-2 rounded-xl transition"
-            >
-              结算页面
-            </button>
           </div>
         </div>
 

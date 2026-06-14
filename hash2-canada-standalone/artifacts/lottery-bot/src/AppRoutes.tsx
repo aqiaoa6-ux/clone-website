@@ -4,9 +4,7 @@ import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import CardKeyPage from "./pages/CardKeyPage";
 import Hash2Page from "./pages/Hash2Page";
-import Hash2SettlePage from "./pages/Hash2SettlePage";
 import CanadaPage from "./pages/CanadaPage";
-import CanadaSettlePage from "./pages/CanadaSettlePage";
 import AdminPage from "./pages/AdminPage";
 
 function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: {
@@ -71,19 +69,9 @@ export default function AppRoutes() {
           <AdminPage />
         </ProtectedRoute>
       </Route>
-      <Route path="/hash2/settle">
-        <ProtectedRoute>
-          <Hash2SettlePage />
-        </ProtectedRoute>
-      </Route>
       <Route path="/hash2">
         <ProtectedRoute>
           <Hash2Page />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/canada/settle">
-        <ProtectedRoute>
-          <CanadaSettlePage />
         </ProtectedRoute>
       </Route>
       <Route path="/canada">

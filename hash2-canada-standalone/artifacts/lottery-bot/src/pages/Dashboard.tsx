@@ -242,7 +242,7 @@ function GroupSetupCard({ groups, onDone, onRelogin }: { groups: TgGroup[]; onDo
     <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 mb-4">
       <div className="flex items-center gap-2 mb-4">
         <span className="text-lg">💬</span>
-        <h3 className="text-white font-semibold">选择投注群组</h3>
+        <h3 className="text-white font-semibold">选择投注目标</h3>
       </div>
 
       {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-lg px-3 py-2 mb-3">{error}</div>}
@@ -250,7 +250,7 @@ function GroupSetupCard({ groups, onDone, onRelogin }: { groups: TgGroup[]; onDo
       <div className="flex gap-2 mb-3">
         <input
           type="text" value={link} onChange={e => setLink(e.target.value)}
-          placeholder="粘贴群链接 t.me/..."
+          placeholder="粘贴群/频道链接 t.me/..."
           className="flex-1 bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500"
         />
         <button onClick={() => void resolveLink()} disabled={loading || !link.trim()}
@@ -263,14 +263,14 @@ function GroupSetupCard({ groups, onDone, onRelogin }: { groups: TgGroup[]; onDo
         <>
           <input
             type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="搜索已加入的群..."
+            placeholder="搜索已加入的群/机器人..."
             className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500 mb-2"
           />
           <div className="space-y-1 max-h-48 overflow-y-auto">
             {filtered.map(g => (
               <button key={g.id} onClick={() => void selectGroup(g.id)}
                 className="w-full text-left flex items-center gap-3 bg-[#0f1220] hover:bg-[#1a1f35] border border-transparent hover:border-blue-500/30 rounded-xl px-3 py-2 transition">
-                <span className="text-slate-400">{g.type === "channel" ? "📢" : "💬"}</span>
+                <span className="text-slate-400">{g.type === "bot" ? "🤖" : g.type === "channel" ? "📢" : "💬"}</span>
                 <div>
                   <div className="text-white text-sm">{g.title}</div>
                   {g.membersCount && <div className="text-slate-600 text-[10px]">{g.membersCount} 成员</div>}
@@ -1540,7 +1540,7 @@ export default function Dashboard() {
                 </button>
                 <button onClick={() => { setShowGroupSetup(true); void api.tg.groups().then(r => setGroups(r.groups)); }}
                   className="flex-1 bg-[#252a3d] hover:bg-[#30375a] text-slate-300 text-sm py-2 rounded-xl transition">
-                  💬 {status.watchGroupTitle ? status.watchGroupTitle.slice(0, 8) + "..." : "换群"}
+                  💬 {status.watchGroupTitle ? status.watchGroupTitle.slice(0, 8) + "..." : "换目标"}
                 </button>
               </div>
             </div>
