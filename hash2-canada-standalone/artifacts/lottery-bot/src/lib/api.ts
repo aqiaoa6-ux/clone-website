@@ -7,6 +7,12 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/json")) {
+    const text = await res.text().catch(() => "");
+    const snippet = text.replace(/\s+/g, " ").slice(0, 120);
+    throw new Error(`接口异常(${res.status})：返回非JSON。${snippet ? ` ${snippet}` : ""}`);
+  }
   const data = await res.json() as T & { error?: string };
   if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
   return data;
