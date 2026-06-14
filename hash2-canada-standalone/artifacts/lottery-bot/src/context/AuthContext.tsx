@@ -54,7 +54,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const status = await api.card.status();
       setCard(status);
     } catch {
-      setCard(prev => prev);
+      setCard(null);
     } finally {
       setCardLoading(false);
     }
@@ -137,11 +137,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (username: string, password: string) => {
     const { user: me } = await api.auth.login(username, password);
     setUser(me);
+    try {
+      await api.auth.me();
+    } catch {
+      setUser(null);
+      throw new Error("登录态未保存，请用 https 打开页面，或检查浏览器是否禁用 Cookie");
+    }
   };
 
   const register = async (username: string, password: string) => {
     const { user: me } = await api.auth.register(username, password);
     setUser(me);
+    try {
+      await api.auth.me();
+    } catch {
+      setUser(null);
+      throw new Error("注册成功但登录态未保存，请用 https 打开页面，或检查浏览器是否禁用 Cookie");
+    }
   };
 
   return (

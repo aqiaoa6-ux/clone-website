@@ -1,4 +1,4 @@
-import { type Response, Router } from "express";
+import { type Request, type Response, Router } from "express";
 import { db } from "@workspace/db";
 import { users } from "@workspace/db";
 import { eq, count, sql } from "drizzle-orm";
@@ -44,9 +44,14 @@ function validateCredentials(username: string | undefined, password: string | un
   return { username: normalizedUsername, password };
 }
 
-function issueAuthCookie(res: Response, user: { id: number; username: string; isAdmin: boolean }) {
+function cookieSecure(req: Request): boolean {
+  const xfProto = String(req.headers["x-forwarded-proto"] ?? "");
+  return req.secure || xfProto === "https";
+}
+
+function issueAuthCookie(req: Request, res: Response, user: { id: number; username: string; isAdmin: boolean }) {
   const token = createToken({ userId: user.id, username: user.username, isAdmin: user.isAdmin });
-  res.cookie(COOKIE_NAME, token, COOKIE_OPTS);
+  res.cookie(COOKIE_NAME, token, { ...COOKIE_OPTS, secure: cookieSecure(req) });
 }
 
 router.post("/auth/register", async (req, res) => {
@@ -69,7 +74,7 @@ router.post("/auth/register", async (req, res) => {
     const [newUser] = await db.insert(users).values({ username: validated.username, passwordHash, isAdmin }).returning();
     if (!newUser) throw new Error("insert failed");
 
-    issueAuthCookie(res, { id: newUser.id, username: newUser.username, isAdmin: newUser.isAdmin });
+    issueAuthCookie(req, res, { id: newUser.id, username: newUser.username, isAdmin: newUser.isAdmin });
     res.json({ ok: true, user: { id: newUser.id, username: newUser.username, isAdmin: newUser.isAdmin } });
   } catch (err) {
     req.log.error(err, "register failed");
@@ -92,7 +97,7 @@ router.post("/auth/login", async (req, res) => {
     const ok = await verifyPassword(validated.password, user.passwordHash);
     if (!ok) { res.status(401).json({ error: "用户名或密码错误" }); return; }
 
-    issueAuthCookie(res, { id: user.id, username: user.username, isAdmin: user.isAdmin });
+    issueAuthCookie(req, res, { id: user.id, username: user.username, isAdmin: user.isAdmin });
     res.json({ ok: true, user: { id: user.id, username: user.username, isAdmin: user.isAdmin } });
   } catch (err) {
     req.log.error(err, "login failed");
@@ -107,7 +112,7 @@ router.post("/auth/logout", (req, res) => {
     const payload = verifyToken(token);
     if (payload) stopUserAutoBet(payload.userId);
   }
-  res.clearCookie(COOKIE_NAME, CLEAR_COOKIE_OPTS);
+  res.clearCookie(COOKIE_NAME, { ...CLEAR_COOKIE_OPTS, secure: cookieSecure(req) });
   res.json({ ok: true });
 });
 

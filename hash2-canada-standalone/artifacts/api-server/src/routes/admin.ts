@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { type Request, Router } from "express";
 import { db } from "@workspace/db";
 import { cardKeys, users } from "@workspace/db";
 import { eq, desc, inArray } from "drizzle-orm";
@@ -15,6 +15,11 @@ import {
 } from "../lib/auth";
 
 const router = Router();
+
+function cookieSecure(req: Request): boolean {
+  const xfProto = String(req.headers["x-forwarded-proto"] ?? "");
+  return req.secure || xfProto === "https";
+}
 
 // ── 后台二级密码接口（无需 adminSecret，只需 admin 身份） ─────────────────
 
@@ -39,7 +44,7 @@ router.post("/admin/auth/verify", requireAdmin, async (req, res) => {
     const hash = await hashPassword(password);
     await db.update(users).set({ adminSecretHash: hash }).where(eq(users.id, req.user!.userId));
     const token = createAdminSecretToken(req.user!.userId);
-    res.cookie(ADMIN_SECRET_COOKIE, token, ADMIN_SECRET_COOKIE_OPTS);
+    res.cookie(ADMIN_SECRET_COOKIE, token, { ...ADMIN_SECRET_COOKIE_OPTS, secure: cookieSecure(req) });
     res.json({ ok: true, firstTime: true });
     return;
   }
@@ -48,7 +53,7 @@ router.post("/admin/auth/verify", requireAdmin, async (req, res) => {
   if (!ok) { res.status(401).json({ error: "后台密码错误" }); return; }
 
   const token = createAdminSecretToken(req.user!.userId);
-  res.cookie(ADMIN_SECRET_COOKIE, token, ADMIN_SECRET_COOKIE_OPTS);
+  res.cookie(ADMIN_SECRET_COOKIE, token, { ...ADMIN_SECRET_COOKIE_OPTS, secure: cookieSecure(req) });
   res.json({ ok: true });
 });
 
@@ -70,13 +75,13 @@ router.post("/admin/auth/change", requireAdminSecret, async (req, res) => {
   await db.update(users).set({ adminSecretHash: hash }).where(eq(users.id, req.user!.userId));
   // 重新签发 token
   const token = createAdminSecretToken(req.user!.userId);
-  res.cookie(ADMIN_SECRET_COOKIE, token, ADMIN_SECRET_COOKIE_OPTS);
+  res.cookie(ADMIN_SECRET_COOKIE, token, { ...ADMIN_SECRET_COOKIE_OPTS, secure: cookieSecure(req) });
   res.json({ ok: true });
 });
 
 /** 退出后台验证（清除 admin_secret cookie） */
-router.post("/admin/auth/logout", requireAdmin, (_req, res) => {
-  res.clearCookie(ADMIN_SECRET_COOKIE, CLEAR_ADMIN_SECRET_COOKIE_OPTS);
+router.post("/admin/auth/logout", requireAdmin, (req, res) => {
+  res.clearCookie(ADMIN_SECRET_COOKIE, { ...CLEAR_ADMIN_SECRET_COOKIE_OPTS, secure: cookieSecure(req) });
   res.json({ ok: true });
 });
 
