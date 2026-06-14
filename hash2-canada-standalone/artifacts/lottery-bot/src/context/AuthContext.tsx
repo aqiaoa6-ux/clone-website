@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
-import { api, type AuthUser, type CardStatus } from "../lib/api";
+import { api, setAuthToken, type AuthUser, type CardStatus } from "../lib/api";
 
 function calcCountdown(expiresAt: string): string | null {
   const remaining = new Date(expiresAt).getTime() - Date.now();
@@ -37,6 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     await api.auth.logout();
+    setAuthToken(null);
     setUser(null);
     setCard(null);
     setCardLoading(false);
@@ -135,22 +136,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [card, logout]);
 
   const login = async (username: string, password: string) => {
-    const { user: me } = await api.auth.login(username, password);
+    const { user: me, token } = await api.auth.login(username, password);
+    setAuthToken(token);
     setUser(me);
     try {
       await api.auth.me();
     } catch {
+      setAuthToken(null);
       setUser(null);
       throw new Error("登录态未保存，请用 https 打开页面，或检查浏览器是否禁用 Cookie");
     }
   };
 
   const register = async (username: string, password: string) => {
-    const { user: me } = await api.auth.register(username, password);
+    const { user: me, token } = await api.auth.register(username, password);
+    setAuthToken(token);
     setUser(me);
     try {
       await api.auth.me();
     } catch {
+      setAuthToken(null);
       setUser(null);
       throw new Error("注册成功但登录态未保存，请用 https 打开页面，或检查浏览器是否禁用 Cookie");
     }

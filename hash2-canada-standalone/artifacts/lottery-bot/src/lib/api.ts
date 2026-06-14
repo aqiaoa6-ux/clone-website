@@ -1,10 +1,28 @@
 const BASE = "/api";
 
+const AUTH_TOKEN_KEY = "auth_token_local";
+
+function getAuthToken(): string {
+  try { return localStorage.getItem(AUTH_TOKEN_KEY) ?? ""; } catch { return ""; }
+}
+
+export function setAuthToken(token: string | null) {
+  try {
+    if (!token) localStorage.removeItem(AUTH_TOKEN_KEY);
+    else localStorage.setItem(AUTH_TOKEN_KEY, token);
+  } catch {}
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const token = getAuthToken();
+  const headers: Record<string, string> = {};
+  if (body) headers["Content-Type"] = "application/json";
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+
   const res = await fetch(`${BASE}${path}`, {
     method,
     credentials: "include",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
+    headers: Object.keys(headers).length ? headers : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
   const contentType = res.headers.get("content-type") ?? "";
@@ -28,8 +46,8 @@ export const api = {
   del: <T>(path: string) => req<T>("DELETE", path),
 
   auth: {
-    register: (username: string, password: string) => api.post<{ ok: boolean; user: AuthUser }>("/auth/register", { username, password }),
-    login: (username: string, password: string) => api.post<{ ok: boolean; user: AuthUser }>("/auth/login", { username, password }),
+    register: (username: string, password: string) => api.post<{ ok: boolean; token: string; user: AuthUser }>("/auth/register", { username, password }),
+    login: (username: string, password: string) => api.post<{ ok: boolean; token: string; user: AuthUser }>("/auth/login", { username, password }),
     logout: () => api.post<{ ok: boolean }>("/auth/logout"),
     me: () => api.get<{ user: AuthUser }>("/auth/me"),
   },

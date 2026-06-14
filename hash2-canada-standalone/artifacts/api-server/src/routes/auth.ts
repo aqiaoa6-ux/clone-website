@@ -49,9 +49,10 @@ function cookieSecure(req: Request): boolean {
   return req.secure || xfProto === "https";
 }
 
-function issueAuthCookie(req: Request, res: Response, user: { id: number; username: string; isAdmin: boolean }) {
+function issueAuthCookie(req: Request, res: Response, user: { id: number; username: string; isAdmin: boolean }): string {
   const token = createToken({ userId: user.id, username: user.username, isAdmin: user.isAdmin });
   res.cookie(COOKIE_NAME, token, { ...COOKIE_OPTS, secure: cookieSecure(req) });
+  return token;
 }
 
 router.post("/auth/register", async (req, res) => {
@@ -74,8 +75,8 @@ router.post("/auth/register", async (req, res) => {
     const [newUser] = await db.insert(users).values({ username: validated.username, passwordHash, isAdmin }).returning();
     if (!newUser) throw new Error("insert failed");
 
-    issueAuthCookie(req, res, { id: newUser.id, username: newUser.username, isAdmin: newUser.isAdmin });
-    res.json({ ok: true, user: { id: newUser.id, username: newUser.username, isAdmin: newUser.isAdmin } });
+    const token = issueAuthCookie(req, res, { id: newUser.id, username: newUser.username, isAdmin: newUser.isAdmin });
+    res.json({ ok: true, token, user: { id: newUser.id, username: newUser.username, isAdmin: newUser.isAdmin } });
   } catch (err) {
     req.log.error(err, "register failed");
     res.status(500).json({ error: "注册失败，请检查数据库连接" });
@@ -97,8 +98,8 @@ router.post("/auth/login", async (req, res) => {
     const ok = await verifyPassword(validated.password, user.passwordHash);
     if (!ok) { res.status(401).json({ error: "用户名或密码错误" }); return; }
 
-    issueAuthCookie(req, res, { id: user.id, username: user.username, isAdmin: user.isAdmin });
-    res.json({ ok: true, user: { id: user.id, username: user.username, isAdmin: user.isAdmin } });
+    const token = issueAuthCookie(req, res, { id: user.id, username: user.username, isAdmin: user.isAdmin });
+    res.json({ ok: true, token, user: { id: user.id, username: user.username, isAdmin: user.isAdmin } });
   } catch (err) {
     req.log.error(err, "login failed");
     res.status(500).json({ error: "登录失败，请检查数据库连接" });
@@ -107,7 +108,10 @@ router.post("/auth/login", async (req, res) => {
 
 router.post("/auth/logout", (req, res) => {
   // 登出前停止该用户的自动投注
-  const token = (req.cookies as Record<string, string>)?.[COOKIE_NAME];
+  const cookieToken = (req.cookies as Record<string, string>)?.[COOKIE_NAME];
+  const authHeader = String(req.headers.authorization ?? "");
+  const bearerToken = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+  const token = cookieToken || bearerToken;
   if (token) {
     const payload = verifyToken(token);
     if (payload) stopUserAutoBet(payload.userId);

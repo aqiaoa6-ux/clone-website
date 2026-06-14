@@ -14,7 +14,10 @@ declare global {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const token = (req.cookies as Record<string, string>)?.[COOKIE_NAME];
+  const cookieToken = (req.cookies as Record<string, string>)?.[COOKIE_NAME];
+  const authHeader = String(req.headers.authorization ?? "");
+  const bearerToken = authHeader.toLowerCase().startsWith("bearer ") ? authHeader.slice(7).trim() : "";
+  const token = cookieToken || bearerToken;
   if (!token) { res.status(401).json({ error: "未登录", code: "UNAUTHENTICATED" }); return; }
   const payload = verifyToken(token);
   if (!payload) { res.status(401).json({ error: "登录已过期，请重新登录", code: "TOKEN_EXPIRED" }); return; }
