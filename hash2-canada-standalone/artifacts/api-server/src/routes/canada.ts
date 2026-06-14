@@ -632,14 +632,28 @@ async function processUserCanada(session: TgSession): Promise<void> {
   if (enabledPlans.length === 0) return;
   const runtime = loadRuntime(userId, config);
   const channel = HASH2_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
+  let changed = false;
+  const prevMsgId = runtime.lastChannelMsgId;
+  const prevActive = runtime.activePeriod;
   try {
     const msgs = await session.client.getMessages(channel, {
       limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
       ...(runtime.lastChannelMsgId > 0 ? { minId: runtime.lastChannelMsgId } : {}),
     }) as Api.Message[];
     if (!msgs.length) {
-      saveRuntime(userId, runtime);
-      return;
+      if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "canada_channel_empty") {
+        const plan = enabledPlans[0]!;
+        runtime.lastAlert = {
+          id: "canada_channel_empty",
+          planId: plan.id,
+          planName: plan.name,
+          message: "未读取到开奖频道 @pc28 的消息：请用当前 TG 账号先加入频道 @pc28（加入后等下一期开奖即可）。",
+          at: Date.now(),
+          level: "warn",
+          voice: false,
+        };
+        changed = true;
+      }
     }
     const sorted = [...msgs].sort((a, b) => a.id - b.id);
     for (const msg of sorted) {
@@ -652,6 +666,7 @@ async function processUserCanada(session: TgSession): Promise<void> {
       if (parsed.type === "open") {
         runtime.activePeriod = parsed.period;
       } else {
+        runtime.activePeriod = String((Number(parsed.result.period) || 0) + 1);
         for (const plan of enabledPlans) {
           const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
           runtime.plans[plan.id] = state;
@@ -663,8 +678,12 @@ async function processUserCanada(session: TgSession): Promise<void> {
   } catch (err) {
     logger.warn({ userId, err }, "[canada] loop failed");
   }
-  runtime.updatedAt = Date.now();
-  saveRuntime(userId, runtime);
+  if (runtime.lastChannelMsgId !== prevMsgId) changed = true;
+  if (runtime.activePeriod !== prevActive) changed = true;
+  if (changed) {
+    runtime.updatedAt = Date.now();
+    saveRuntime(userId, runtime);
+  }
 }
 
 function clearCanadaBetDelayTimer(userId: number): void {

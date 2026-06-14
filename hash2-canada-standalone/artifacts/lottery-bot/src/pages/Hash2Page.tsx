@@ -155,7 +155,12 @@ export default function Hash2Page() {
       void (async () => {
         try {
           const rt = await api.hash2.runtime();
-          setRuntime(rt.runtime);
+          setRuntime(prev => {
+            const next = rt.runtime;
+            if (!prev) return next;
+            if (prev.updatedAt === next.updatedAt) return prev;
+            return next;
+          });
         } catch {
           // ignore poll errors
         }
@@ -559,6 +564,12 @@ export default function Hash2Page() {
                 />
               </label>
             </div>
+
+            {currentPlan.enabled && currentPlan.bets.length > 0 && (currentPlan.amountLevels[0] ?? currentPlan.baseAmount ?? 0) === 0 && (
+              <div className="mt-2 text-xs rounded-xl border border-yellow-500/30 bg-yellow-500/10 text-yellow-300 px-3 py-2">
+                当前金额为 0：只会虚拟运行，不会往群里发投注。把第1手金额/基础金额改成大于 0 才会下注。
+              </div>
+            )}
 
             <div>
               <div className="text-white font-semibold text-sm mb-2">玩法1</div>
