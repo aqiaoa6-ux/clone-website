@@ -134,6 +134,7 @@ export default function CanadaPage() {
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
   const [testingAlert, setTestingAlert] = useState(false);
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
+  const [liveRefreshTick, setLiveRefreshTick] = useState(0);
   const [sectionOpen, setSectionOpen] = useState<Record<string, boolean>>({
     intro: false,
     tg: false,
@@ -278,7 +279,7 @@ export default function CanadaPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0e1a] text-white">
+    <div className="min-h-screen bg-[#0b0e1a] text-white" style={{ overflowAnchor: "none" }}>
       {alertMessage && (
         <div className="fixed top-3 left-1/2 z-50 flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 items-start gap-3 rounded-2xl border border-purple-700 bg-purple-900/95 px-4 py-3 shadow-2xl backdrop-blur">
           <span className="text-purple-300 text-lg leading-none mt-0.5">#</span>
@@ -366,6 +367,7 @@ export default function CanadaPage() {
           <CanadaLiveOverview
           tgStatus={tgStatus}
           onAlert={message => setAlertMessage(message)}
+          refreshTick={liveRefreshTick}
           />
         </CollapseSection>
 
@@ -424,6 +426,7 @@ export default function CanadaPage() {
               <CanadaPlanRuntimeSummary
                 activePlanId={currentPlan.id}
                 currentLevelSummary={currentLevelSummary}
+                refreshTick={liveRefreshTick}
               />
             </CollapseSection>
 
@@ -522,13 +525,19 @@ export default function CanadaPage() {
               </div>
             </CollapseSection>
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 onClick={() => void testAlert()}
                 disabled={testingAlert}
                 className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm py-2 rounded-xl transition"
               >
                 {testingAlert ? "测试中..." : "测试网页提醒"}
+              </button>
+              <button
+                onClick={() => setLiveRefreshTick(v => v + 1)}
+                className="bg-[#1f6feb] hover:bg-[#2b7fff] text-white text-sm py-2 rounded-xl transition"
+              >
+                刷新数据
               </button>
               <button
                 onClick={() => void saveConfig()}
@@ -799,9 +808,11 @@ export default function CanadaPage() {
 function CanadaLiveOverview({
   tgStatus,
   onAlert,
+  refreshTick,
 }: {
   tgStatus: TgStatus | null;
   onAlert: (message: string) => void;
+  refreshTick: number;
 }) {
   const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
   const [draw, setDraw] = useState<DrawState | null>(null);
@@ -855,15 +866,10 @@ function CanadaLiveOverview({
   }, []);
 
   useEffect(() => {
+    setNowMs(Date.now());
     void fetchRuntime();
     void fetchDraw();
-    const runtimeId = window.setInterval(() => { void fetchRuntime(); }, 4000);
-    const drawId = window.setInterval(() => { void fetchDraw(); }, 15000);
-    return () => {
-      window.clearInterval(runtimeId);
-      window.clearInterval(drawId);
-    };
-  }, [fetchDraw, fetchRuntime]);
+  }, [fetchDraw, fetchRuntime, refreshTick]);
 
   useEffect(() => {
     const latest = runtime?.lastAlert;
@@ -882,12 +888,6 @@ function CanadaLiveOverview({
       // ignore browser voice failures
     }
   }, [onAlert, runtime?.lastAlert, seenAlertId]);
-
-  useEffect(() => {
-    if (!draw?.nextCloseTime) return;
-    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [draw?.nextCloseTime]);
 
   const periodLabel = draw?.term ? `${draw.term}期` : (runtime?.activePeriod ? `${runtime.activePeriod}期` : "等待中");
   const countdown = draw?.nextCloseTime ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
@@ -927,7 +927,7 @@ function CanadaLiveOverview({
         </div>
 
         <div className="text-center py-2">
-          <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"}`}>
+          <div className={`text-5xl font-bold font-mono tracking-tight ${countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"}`}>
             {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
           </div>
           <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
@@ -937,7 +937,7 @@ function CanadaLiveOverview({
           <div className="relative h-2 bg-[#0f1220] rounded-full overflow-hidden">
             <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
             <div
-              className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"}`}
+              className={`absolute left-0 top-0 h-full rounded-full ${countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"}`}
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -982,9 +982,11 @@ function CanadaLiveOverview({
 function CanadaPlanRuntimeSummary({
   activePlanId,
   currentLevelSummary,
+  refreshTick,
 }: {
   activePlanId: string;
   currentLevelSummary: string;
+  refreshTick: number;
 }) {
   const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
 
@@ -1004,9 +1006,7 @@ function CanadaPlanRuntimeSummary({
 
   useEffect(() => {
     void fetchRuntime();
-    const id = window.setInterval(() => { void fetchRuntime(); }, 4000);
-    return () => window.clearInterval(id);
-  }, [fetchRuntime]);
+  }, [activePlanId, fetchRuntime, refreshTick]);
 
   const currentPlanRuntime = runtime?.plans?.[activePlanId];
 
