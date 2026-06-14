@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { BottomNavStatic } from "../components/BottomNav";
@@ -127,19 +127,15 @@ export default function Hash2Page() {
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
   const [testingAlert, setTestingAlert] = useState(false);
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
-  const [runtime, setRuntime] = useState<Hash2Runtime | null>(null);
-  const seenAlertStorageKey = "hash2_seen_alert_id";
-  const [seenAlertId, setSeenAlertId] = useState<string>(() => sessionStorage.getItem(seenAlertStorageKey) ?? "");
 
   useEffect(() => {
     let mounted = true;
     void (async () => {
       try {
-        const [cfg, tg, rt] = await Promise.all([api.hash2.config(), api.tg.status(), api.hash2.runtime()]);
+        const [cfg, tg] = await Promise.all([api.hash2.config(), api.tg.status()]);
         if (!mounted) return;
         setConfig(cfg.plans?.length ? cfg : makeDefaultConfig());
         setTgStatus(tg);
-        setRuntime(rt.runtime);
       } catch {
         if (!mounted) return;
         setConfig(makeDefaultConfig());
@@ -150,45 +146,7 @@ export default function Hash2Page() {
     return () => { mounted = false; };
   }, []);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void (async () => {
-        try {
-          const rt = await api.hash2.runtime();
-          setRuntime(prev => {
-            const next = rt.runtime;
-            if (!prev) return next;
-            if (prev.updatedAt === next.updatedAt) return prev;
-            return next;
-          });
-        } catch {
-          // ignore poll errors
-        }
-      })();
-    }, 4000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    const latest = runtime?.lastAlert;
-    if (!latest || latest.id === seenAlertId) return;
-    setSeenAlertId(latest.id);
-    sessionStorage.setItem(seenAlertStorageKey, latest.id);
-    setAlertMessage(latest.message);
-    if (!latest.voice) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    try {
-      const utterance = new SpeechSynthesisUtterance(latest.message);
-      utterance.lang = "zh-CN";
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      // ignore browser voice failures
-    }
-  }, [runtime?.lastAlert, seenAlertId]);
-
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
-  const currentPlanRuntime = currentPlan ? runtime?.plans?.[currentPlan.id] : undefined;
   const currentLevelSummary = useMemo(() => {
     if (!currentPlan.bets.length) return "";
     return `同方案共用层级 · 任意命中回第1手 · 全部未中才进下一手`;
@@ -274,8 +232,6 @@ export default function Hash2Page() {
     try {
       const { config: saved } = await api.hash2.saveConfig(config);
       setConfig(saved);
-      const rt = await api.hash2.runtime();
-      setRuntime(rt.runtime);
       setAlertMessage("哈希2配置已保存");
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "保存失败");
@@ -289,8 +245,6 @@ export default function Hash2Page() {
     try {
       const res = await api.hash2.testAlert("哈希2提醒测试：网页提醒已触发");
       setAlertMessage(res.message);
-      const rt = await api.hash2.runtime();
-      setRuntime(rt.runtime);
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "提醒测试失败");
     } finally {
@@ -364,49 +318,14 @@ export default function Hash2Page() {
           onStatusChange={status => setTgStatus(status)}
         />
 
-        <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
-          <div className="text-white font-semibold text-sm mb-2">运行环境</div>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">TG 连接</div>
-              <div className={tgStatus?.connected ? "text-emerald-400 mt-1" : "text-red-400 mt-1"}>
-                {tgStatus?.connected ? "已连接" : "未连接"}
-              </div>
-            </div>
-            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">投注群组</div>
-              <div className="text-white mt-1 truncate">
-                {tgStatus?.watchGroupTitle ?? "未选择"}
-              </div>
-            </div>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-            <div className="min-h-[58px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">当前期号</div>
-              <div className="text-white mt-1 truncate">{runtime?.activePeriod ?? "等待中"}</div>
-            </div>
-            <div className="min-h-[58px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">最近提醒</div>
-              <div className="text-white mt-1 truncate">{runtime?.lastAlert?.message ?? "暂无"}</div>
-            </div>
-          </div>
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <button
-              onClick={() => void testAlert()}
-              disabled={testingAlert}
-              className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm py-2 rounded-xl transition"
-            >
-              {testingAlert ? "测试中..." : "测试网页提醒"}
-            </button>
-            <button
-              onClick={() => void saveConfig()}
-              disabled={saving}
-              className="bg-[#252a3d] hover:bg-[#30375a] disabled:opacity-50 text-slate-200 text-sm py-2 rounded-xl transition"
-            >
-              {saving ? "保存中..." : "保存哈希2"}
-            </button>
-          </div>
-        </div>
+        <Hash2LiveOverview
+          tgStatus={tgStatus}
+          onAlert={message => setAlertMessage(message)}
+          onTestAlert={() => void testAlert()}
+          testingAlert={testingAlert}
+          onSave={() => void saveConfig()}
+          saving={saving}
+        />
 
         <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
           <div className="text-white font-semibold text-sm mb-3">方案列表</div>
@@ -447,31 +366,10 @@ export default function Hash2Page() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <div className="text-slate-500">当前层级</div>
-                <div className="text-white mt-1">第{(currentPlanRuntime?.currentLevel ?? 0) + 1}手</div>
-                <div className="text-[10px] text-slate-500 mt-1 truncate">
-                  {currentLevelSummary || "暂无"}
-                </div>
-              </div>
-              <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <div className="text-slate-500">累计盈亏</div>
-                <div className={`${(currentPlanRuntime?.sessionPnl ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"} mt-1`}>
-                  {(currentPlanRuntime?.sessionPnl ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
-                </div>
-              </div>
-              <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <div className="text-slate-500">最近发单</div>
-                <div className="text-white mt-1 truncate">{currentPlanRuntime?.lastMessage || "暂无"}</div>
-              </div>
-              <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <div className="text-slate-500">状态</div>
-                <div className={`${currentPlanRuntime?.blockedReason ? "text-red-400" : "text-emerald-400"} mt-1 truncate`}>
-                  {currentPlanRuntime?.blockedReason ?? "运行中/待触发"}
-                </div>
-              </div>
-            </div>
+            <Hash2PlanRuntimeSummary
+              activePlanId={currentPlan.id}
+              currentLevelSummary={currentLevelSummary}
+            />
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -810,6 +708,168 @@ export default function Hash2Page() {
         )}
       </div>
       <BottomNavStatic />
+    </div>
+  );
+}
+
+function Hash2LiveOverview({
+  tgStatus,
+  onAlert,
+  onTestAlert,
+  testingAlert,
+  onSave,
+  saving,
+}: {
+  tgStatus: TgStatus | null;
+  onAlert: (message: string) => void;
+  onTestAlert: () => void;
+  testingAlert: boolean;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  const [runtime, setRuntime] = useState<Hash2Runtime | null>(null);
+  const seenAlertStorageKey = "hash2_seen_alert_id";
+  const [seenAlertId, setSeenAlertId] = useState<string>(() => sessionStorage.getItem(seenAlertStorageKey) ?? "");
+
+  const fetchRuntime = useCallback(async () => {
+    try {
+      const rt = await api.hash2.runtime();
+      setRuntime(prev => {
+        const next = rt.runtime;
+        if (!prev) return next;
+        if (prev.updatedAt === next.updatedAt) return prev;
+        return next;
+      });
+    } catch {
+      // ignore runtime poll errors
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchRuntime();
+    const id = window.setInterval(() => { void fetchRuntime(); }, 4000);
+    return () => window.clearInterval(id);
+  }, [fetchRuntime]);
+
+  useEffect(() => {
+    const latest = runtime?.lastAlert;
+    if (!latest || latest.id === seenAlertId) return;
+    setSeenAlertId(latest.id);
+    sessionStorage.setItem(seenAlertStorageKey, latest.id);
+    onAlert(latest.message);
+    if (!latest.voice) return;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    try {
+      const utterance = new SpeechSynthesisUtterance(latest.message);
+      utterance.lang = "zh-CN";
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // ignore browser voice failures
+    }
+  }, [onAlert, runtime?.lastAlert, seenAlertId]);
+
+  return (
+    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+      <div className="text-white font-semibold text-sm mb-2">运行环境</div>
+      <div className="grid grid-cols-2 gap-3 text-xs">
+        <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+          <div className="text-slate-500">TG 连接</div>
+          <div className={tgStatus?.connected ? "text-emerald-400 mt-1" : "text-red-400 mt-1"}>
+            {tgStatus?.connected ? "已连接" : "未连接"}
+          </div>
+        </div>
+        <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+          <div className="text-slate-500">投注群组</div>
+          <div className="text-white mt-1 truncate">{tgStatus?.watchGroupTitle ?? "未选择"}</div>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+        <div className="min-h-[58px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+          <div className="text-slate-500">当前期号</div>
+          <div className="text-white mt-1 truncate">{runtime?.activePeriod ?? "等待中"}</div>
+        </div>
+        <div className="min-h-[58px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+          <div className="text-slate-500">最近提醒</div>
+          <div className="text-white mt-1 truncate">{runtime?.lastAlert?.message ?? "暂无"}</div>
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <button
+          onClick={onTestAlert}
+          disabled={testingAlert}
+          className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm py-2 rounded-xl transition"
+        >
+          {testingAlert ? "测试中..." : "测试网页提醒"}
+        </button>
+        <button
+          onClick={onSave}
+          disabled={saving}
+          className="bg-[#252a3d] hover:bg-[#30375a] disabled:opacity-50 text-slate-200 text-sm py-2 rounded-xl transition"
+        >
+          {saving ? "保存中..." : "保存哈希2"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function Hash2PlanRuntimeSummary({
+  activePlanId,
+  currentLevelSummary,
+}: {
+  activePlanId: string;
+  currentLevelSummary: string;
+}) {
+  const [runtime, setRuntime] = useState<Hash2Runtime | null>(null);
+
+  const fetchRuntime = useCallback(async () => {
+    try {
+      const rt = await api.hash2.runtime();
+      setRuntime(prev => {
+        const next = rt.runtime;
+        if (!prev) return next;
+        if (prev.updatedAt === next.updatedAt) return prev;
+        return next;
+      });
+    } catch {
+      // ignore runtime poll errors
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchRuntime();
+    const id = window.setInterval(() => { void fetchRuntime(); }, 4000);
+    return () => window.clearInterval(id);
+  }, [fetchRuntime]);
+
+  const currentPlanRuntime = runtime?.plans?.[activePlanId];
+
+  return (
+    <div className="grid grid-cols-2 gap-3 text-xs">
+      <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+        <div className="text-slate-500">当前层级</div>
+        <div className="text-white mt-1">第{(currentPlanRuntime?.currentLevel ?? 0) + 1}手</div>
+        <div className="text-[10px] text-slate-500 mt-1 truncate">
+          {currentLevelSummary || "暂无"}
+        </div>
+      </div>
+      <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+        <div className="text-slate-500">累计盈亏</div>
+        <div className={`${(currentPlanRuntime?.sessionPnl ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"} mt-1`}>
+          {(currentPlanRuntime?.sessionPnl ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+        </div>
+      </div>
+      <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+        <div className="text-slate-500">最近发单</div>
+        <div className="text-white mt-1 truncate">{currentPlanRuntime?.lastMessage || "暂无"}</div>
+      </div>
+      <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+        <div className="text-slate-500">状态</div>
+        <div className={`${currentPlanRuntime?.blockedReason ? "text-red-400" : "text-emerald-400"} mt-1 truncate`}>
+          {currentPlanRuntime?.blockedReason ?? "运行中/待触发"}
+        </div>
+      </div>
     </div>
   );
 }

@@ -134,7 +134,6 @@ export default function CanadaPage() {
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
   const [testingAlert, setTestingAlert] = useState(false);
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
-  const [liveRefreshTick, setLiveRefreshTick] = useState(0);
   const [sectionOpen, setSectionOpen] = useState<Record<string, boolean>>({
     intro: false,
     tg: false,
@@ -367,7 +366,6 @@ export default function CanadaPage() {
           <CanadaLiveOverview
           tgStatus={tgStatus}
           onAlert={message => setAlertMessage(message)}
-          refreshTick={liveRefreshTick}
           />
         </CollapseSection>
 
@@ -426,7 +424,6 @@ export default function CanadaPage() {
               <CanadaPlanRuntimeSummary
                 activePlanId={currentPlan.id}
                 currentLevelSummary={currentLevelSummary}
-                refreshTick={liveRefreshTick}
               />
             </CollapseSection>
 
@@ -525,19 +522,13 @@ export default function CanadaPage() {
               </div>
             </CollapseSection>
 
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={() => void testAlert()}
                 disabled={testingAlert}
                 className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm py-2 rounded-xl transition"
               >
                 {testingAlert ? "测试中..." : "测试网页提醒"}
-              </button>
-              <button
-                onClick={() => setLiveRefreshTick(v => v + 1)}
-                className="bg-[#1f6feb] hover:bg-[#2b7fff] text-white text-sm py-2 rounded-xl transition"
-              >
-                刷新数据
               </button>
               <button
                 onClick={() => void saveConfig()}
@@ -808,11 +799,9 @@ export default function CanadaPage() {
 function CanadaLiveOverview({
   tgStatus,
   onAlert,
-  refreshTick,
 }: {
   tgStatus: TgStatus | null;
   onAlert: (message: string) => void;
-  refreshTick: number;
 }) {
   const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
   const [draw, setDraw] = useState<DrawState | null>(null);
@@ -869,7 +858,13 @@ function CanadaLiveOverview({
     setNowMs(Date.now());
     void fetchRuntime();
     void fetchDraw();
-  }, [fetchDraw, fetchRuntime, refreshTick]);
+    const runtimeId = window.setInterval(() => { void fetchRuntime(); }, 4000);
+    const drawId = window.setInterval(() => { void fetchDraw(); }, 15000);
+    return () => {
+      window.clearInterval(runtimeId);
+      window.clearInterval(drawId);
+    };
+  }, [fetchDraw, fetchRuntime]);
 
   useEffect(() => {
     if (!draw?.nextCloseTime) return;
@@ -988,11 +983,9 @@ function CanadaLiveOverview({
 function CanadaPlanRuntimeSummary({
   activePlanId,
   currentLevelSummary,
-  refreshTick,
 }: {
   activePlanId: string;
   currentLevelSummary: string;
-  refreshTick: number;
 }) {
   const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
 
@@ -1012,7 +1005,9 @@ function CanadaPlanRuntimeSummary({
 
   useEffect(() => {
     void fetchRuntime();
-  }, [activePlanId, fetchRuntime, refreshTick]);
+    const id = window.setInterval(() => { void fetchRuntime(); }, 4000);
+    return () => window.clearInterval(id);
+  }, [activePlanId, fetchRuntime]);
 
   const currentPlanRuntime = runtime?.plans?.[activePlanId];
 

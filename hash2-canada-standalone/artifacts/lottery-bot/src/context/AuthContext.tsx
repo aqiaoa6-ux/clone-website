@@ -24,6 +24,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const expiredFiredRef = useRef(false);
   const expiryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const cardSignature = useCallback((status: CardStatus | null) => {
+    if (!status) return "";
+    return [
+      status.active ? "1" : "0",
+      status.expired ? "1" : "0",
+      status.type ?? "",
+      status.expiresAt ?? "",
+      status.key ?? "",
+      status.serverNow ?? "",
+    ].join("|");
+  }, []);
+
+  const applyCardStatus = useCallback((status: CardStatus | null) => {
+    if (status?.serverNow) {
+      const nextOffset = new Date(status.serverNow).getTime() - Date.now();
+      setServerOffsetMs(prev => (Math.abs(prev - nextOffset) > 1000 ? nextOffset : prev));
+    }
+    setCard(prev => (cardSignature(prev) === cardSignature(status) ? prev : status));
+  }, [cardSignature]);
+
   const logout = useCallback(async () => {
     await api.auth.logout();
     setAuthToken(null);
@@ -35,23 +55,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshCard = useCallback(async () => {
     if (!user) {
-      setCard(null);
+      setCard(prev => (prev ? null : prev));
       setCardLoading(false);
       return;
     }
     setCardLoading(true);
     try {
       const status = await api.card.status();
-      if (status.serverNow) {
-        setServerOffsetMs(new Date(status.serverNow).getTime() - Date.now());
-      }
-      setCard(status);
+      applyCardStatus(status);
     } catch {
-      setCard(null);
+      setCard(prev => (prev ? null : prev));
     } finally {
       setCardLoading(false);
     }
-  }, [user]);
+  }, [applyCardStatus, user]);
+
+  const refreshCardSilently = useCallback(async () => {
+    if (!user) {
+      setCard(prev => (prev ? null : prev));
+      return;
+    }
+    try {
+      const status = await api.card.status();
+      applyCardStatus(status);
+    } catch {
+      setCard(prev => (prev ? null : prev));
+    }
+  }, [applyCardStatus, user]);
 
   // Bootstrap
   useEffect(() => {
@@ -78,9 +108,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Poll card status every 60s to stay in sync with server
   useEffect(() => {
     if (!user) return;
-    const id = setInterval(() => { void refreshCard(); }, 60_000);
+    const id = setInterval(() => { void refreshCardSilently(); }, 60_000);
     return () => clearInterval(id);
-  }, [user, refreshCard]);
+  }, [user, refreshCardSilently]);
 
   useEffect(() => {
     if (expiryTimerRef.current) {
@@ -102,10 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       expiredFiredRef.current = true;
       try {
         const status = await api.card.status();
-        if (status.serverNow) {
-          setServerOffsetMs(new Date(status.serverNow).getTime() - Date.now());
-        }
-        setCard(status);
+        applyCardStatus(status);
         if (!status.active && status.expired) {
           try { await api.tg.disconnect(); } catch {}
         }
@@ -123,7 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         expiryTimerRef.current = null;
       }
     };
-  }, [card?.active, card?.expiresAt, serverOffsetMs, refreshCard]);
+  }, [applyCardStatus, card?.active, card?.expiresAt, serverOffsetMs, refreshCard]);
 
   const login = async (username: string, password: string) => {
     const { user: me, token } = await api.auth.login(username, password);
