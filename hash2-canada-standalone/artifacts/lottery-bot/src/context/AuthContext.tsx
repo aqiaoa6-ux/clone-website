@@ -33,6 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [countdown, setCountdown] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const expiredFiredRef = useRef(false);
+  const expiryTimeoutRef = useRef<number | null>(null);
 
   const logout = useCallback(async () => {
     await api.auth.logout();
@@ -98,6 +99,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     expiredFiredRef.current = false;
 
+    const expiresMs = new Date(card.expiresAt!).getTime();
+    if (expiryTimeoutRef.current !== null) window.clearTimeout(expiryTimeoutRef.current);
+    expiryTimeoutRef.current = window.setTimeout(() => {
+      if (expiredFiredRef.current) return;
+      expiredFiredRef.current = true;
+      setCountdown("已到期");
+      void (async () => {
+        try { await api.tg.disconnect(); } catch {}
+        await logout();
+      })();
+    }, Math.max(0, expiresMs - Date.now()) + 1000);
+
     const tick = () => {
       if (expiredFiredRef.current) return;
       const cd = calcCountdown(card.expiresAt!);
@@ -110,12 +123,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         })();
         return;
       }
-      setCountdown(cd);
+      setCountdown(prev => (prev === cd ? prev : cd));
     };
 
     tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
+    const id = window.setInterval(tick, 10_000);
+    return () => {
+      window.clearInterval(id);
+      if (expiryTimeoutRef.current !== null) window.clearTimeout(expiryTimeoutRef.current);
+      expiryTimeoutRef.current = null;
+    };
   }, [card, logout]);
 
   const login = async (username: string, password: string) => {

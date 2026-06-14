@@ -128,7 +128,8 @@ export default function Hash2Page() {
   const [testingAlert, setTestingAlert] = useState(false);
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
   const [runtime, setRuntime] = useState<Hash2Runtime | null>(null);
-  const [seenAlertId, setSeenAlertId] = useState<string>("");
+  const seenAlertStorageKey = "hash2_seen_alert_id";
+  const [seenAlertId, setSeenAlertId] = useState<string>(() => sessionStorage.getItem(seenAlertStorageKey) ?? "");
 
   useEffect(() => {
     let mounted = true;
@@ -167,6 +168,7 @@ export default function Hash2Page() {
     const latest = runtime?.lastAlert;
     if (!latest || latest.id === seenAlertId) return;
     setSeenAlertId(latest.id);
+    sessionStorage.setItem(seenAlertStorageKey, latest.id);
     setAlertMessage(latest.message);
     if (!latest.voice) return;
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
@@ -280,7 +282,7 @@ export default function Hash2Page() {
   const testAlert = async () => {
     setTestingAlert(true);
     try {
-      const res = await api.hash2.testAlert("哈希2提醒测试：止盈止损网页提醒已触发");
+      const res = await api.hash2.testAlert("哈希2提醒测试：网页提醒已触发");
       setAlertMessage(res.message);
       const rt = await api.hash2.runtime();
       setRuntime(rt.runtime);
