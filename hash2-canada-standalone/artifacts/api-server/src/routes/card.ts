@@ -1,14 +1,39 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { cardKeys } from "@workspace/db";
-import { eq, and, gt } from "drizzle-orm";
+import { eq, and, gt, sql } from "drizzle-orm";
 import { requireAuth } from "../middleware/requireAuth";
 import { cardTypeDurationMs, type CardType } from "../lib/auth";
 
 const router = Router();
 
+async function ensureCardKeysTable(): Promise<void> {
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS "card_keys" (
+      "id" serial PRIMARY KEY,
+      "key" text NOT NULL,
+      "type" text NOT NULL,
+      "user_id" integer,
+      "expires_at" timestamp,
+      "activated_at" timestamp,
+      "created_at" timestamp NOT NULL DEFAULT now(),
+      "note" text
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "card_keys_key_unique_idx"
+    ON "card_keys" ("key")
+  `));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "user_id" integer`));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "expires_at" timestamp`));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "activated_at" timestamp`));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp NOT NULL DEFAULT now()`));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "note" text`));
+}
+
 router.get("/card/status", requireAuth, async (req, res) => {
   try {
+    await ensureCardKeysTable();
     const now = new Date();
     const rows = await db.select().from(cardKeys)
       .where(eq(cardKeys.userId, req.user!.userId));
@@ -36,6 +61,7 @@ router.post("/card/activate", requireAuth, async (req, res) => {
 
   const normalizedKey = key.trim().toUpperCase();
   try {
+    await ensureCardKeysTable();
     const [card] = await db.select().from(cardKeys).where(eq(cardKeys.key, normalizedKey)).limit(1);
     if (!card) { res.status(400).json({ error: "卡密不存在" }); return; }
     if (card.userId !== null && card.userId !== req.user!.userId) {

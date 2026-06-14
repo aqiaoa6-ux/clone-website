@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { cardKeys, users } from "@workspace/db";
-import { eq, desc, inArray } from "drizzle-orm";
+import { eq, desc, inArray, sql } from "drizzle-orm";
 import { requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import {
   generateCardKey,
@@ -14,6 +14,30 @@ import {
 } from "../lib/auth";
 
 const router = Router();
+
+async function ensureCardKeysTable(): Promise<void> {
+  await db.execute(sql.raw(`
+    CREATE TABLE IF NOT EXISTS "card_keys" (
+      "id" serial PRIMARY KEY,
+      "key" text NOT NULL,
+      "type" text NOT NULL,
+      "user_id" integer,
+      "expires_at" timestamp,
+      "activated_at" timestamp,
+      "created_at" timestamp NOT NULL DEFAULT now(),
+      "note" text
+    )
+  `));
+  await db.execute(sql.raw(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "card_keys_key_unique_idx"
+    ON "card_keys" ("key")
+  `));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "user_id" integer`));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "expires_at" timestamp`));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "activated_at" timestamp`));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "created_at" timestamp NOT NULL DEFAULT now()`));
+  await db.execute(sql.raw(`ALTER TABLE "card_keys" ADD COLUMN IF NOT EXISTS "note" text`));
+}
 
 // ── 后台二级密码接口（无需 adminSecret，只需 admin 身份） ─────────────────
 
@@ -88,6 +112,7 @@ router.post("/admin/cards/generate", requireAdminSecret, async (req, res) => {
   }
   const qty = Math.min(Math.max(1, Number(count) || 1), 100);
   try {
+    await ensureCardKeysTable();
     const generated: string[] = [];
     for (let i = 0; i < qty; i++) {
       let key = generateCardKey();
@@ -110,6 +135,7 @@ router.post("/admin/cards/generate", requireAdminSecret, async (req, res) => {
 
 router.get("/admin/cards", requireAdminSecret, async (req, res) => {
   try {
+    await ensureCardKeysTable();
     const cards = await db.select().from(cardKeys).orderBy(desc(cardKeys.createdAt)).limit(500);
     const userIds = [...new Set(cards.filter(c => c.userId !== null).map(c => c.userId!))];
     const userMap: Record<number, string> = {};
@@ -137,6 +163,7 @@ router.delete("/admin/cards/:id", requireAdminSecret, async (req, res) => {
   const id = parseInt(String(req.params["id"] ?? ""));
   if (isNaN(id)) { res.status(400).json({ error: "无效 ID" }); return; }
   try {
+    await ensureCardKeysTable();
     await db.delete(cardKeys).where(eq(cardKeys.id, id));
     res.json({ ok: true });
   } catch (err) {
