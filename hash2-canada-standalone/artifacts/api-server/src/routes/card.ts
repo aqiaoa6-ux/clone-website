@@ -22,10 +22,10 @@ router.get("/card/status", requireAuth, async (req, res) => {
 
     if (!active) {
       const anyExpired = rows.find(c => c.expiresAt && c.expiresAt <= now);
-      res.json({ active: false, expired: !!anyExpired });
+      res.json({ active: false, expired: !!anyExpired, serverNow: now.toISOString() });
       return;
     }
-    res.json({ active: true, type: active.type, expiresAt: active.expiresAt!.toISOString(), key: active.key });
+    res.json({ active: true, type: active.type, expiresAt: active.expiresAt!.toISOString(), key: active.key, serverNow: now.toISOString() });
   } catch (err) {
     req.log.error(err, "card status failed");
     res.status(500).json({ error: "查询失败" });

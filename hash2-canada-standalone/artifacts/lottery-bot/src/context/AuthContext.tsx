@@ -1,8 +1,8 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { api, setAuthToken, type AuthUser, type CardStatus } from "../lib/api";
 
-function calcCountdown(expiresAt: string): string | null {
-  const remaining = new Date(expiresAt).getTime() - Date.now();
+function calcCountdown(expiresAt: string, nowMs: number): string | null {
+  const remaining = new Date(expiresAt).getTime() - nowMs;
   if (remaining <= 0) return null;
   const d = Math.floor(remaining / 86400000);
   const h = Math.floor((remaining % 86400000) / 3600000);
@@ -33,7 +33,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [countdown, setCountdown] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const expiredFiredRef = useRef(false);
-  const expiryTimeoutRef = useRef<number | null>(null);
+  const serverOffsetRef = useRef(0);
 
   const logout = useCallback(async () => {
     await api.auth.logout();
@@ -53,6 +53,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCardLoading(true);
     try {
       const status = await api.card.status();
+      if (status.serverNow) {
+        serverOffsetRef.current = new Date(status.serverNow).getTime() - Date.now();
+      }
       setCard(status);
     } catch {
       setCard(null);
@@ -99,27 +102,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     expiredFiredRef.current = false;
 
-    const expiresMs = new Date(card.expiresAt!).getTime();
-    if (expiryTimeoutRef.current !== null) window.clearTimeout(expiryTimeoutRef.current);
-    expiryTimeoutRef.current = window.setTimeout(() => {
-      if (expiredFiredRef.current) return;
-      expiredFiredRef.current = true;
-      setCountdown("已到期");
-      void (async () => {
-        try { await api.tg.disconnect(); } catch {}
-        await logout();
-      })();
-    }, Math.max(0, expiresMs - Date.now()) + 1000);
-
     const tick = () => {
       if (expiredFiredRef.current) return;
-      const cd = calcCountdown(card.expiresAt!);
+      const nowMs = Date.now() + serverOffsetRef.current;
+      const cd = calcCountdown(card.expiresAt!, nowMs);
       if (cd === null) {
-        expiredFiredRef.current = true;
-        setCountdown("已到期");
         void (async () => {
-          try { await api.tg.disconnect(); } catch { /* may already be gone */ }
-          await logout();
+          try {
+            const status = await api.card.status();
+            if (status.serverNow) {
+              serverOffsetRef.current = new Date(status.serverNow).getTime() - Date.now();
+            }
+            setCard(status);
+            if (!status.active) {
+              setCountdown(null);
+              if (status.expired) {
+                try { await api.tg.disconnect(); } catch {}
+              }
+              return;
+            }
+            const cd2 = status.expiresAt ? calcCountdown(status.expiresAt, Date.now() + serverOffsetRef.current) : null;
+            setCountdown(cd2 ?? "00:00:00");
+          } catch {
+            setCountdown(null);
+          }
         })();
         return;
       }
@@ -130,8 +136,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const id = window.setInterval(tick, 10_000);
     return () => {
       window.clearInterval(id);
-      if (expiryTimeoutRef.current !== null) window.clearTimeout(expiryTimeoutRef.current);
-      expiryTimeoutRef.current = null;
     };
   }, [card, logout]);
 

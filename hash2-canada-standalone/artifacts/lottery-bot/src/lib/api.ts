@@ -142,6 +142,7 @@ export interface CardStatus {
   type?: string;
   expiresAt?: string;
   key?: string;
+  serverNow?: string;
 }
 
 export interface AdminCard {
