@@ -873,6 +873,88 @@ function SettingsDrawer({ status, onClose, onSave }: {
   );
 }
 
+function LiveCountdown({ nextCloseTime }: { nextCloseTime: number }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const countdown = Math.max(0, Math.floor((nextCloseTime - nowMs) / 1000));
+  const cycleSec = 210;
+  const pct = Math.min(100, Math.max(0, (countdown / cycleSec) * 100));
+  const betZonePct = Math.min(100, (80 / cycleSec) * 100);
+
+  return (
+    <>
+      <div className="text-center py-2">
+        <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${
+          countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"
+        }`}>
+          {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
+        </div>
+        <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
+      </div>
+
+      <div className="mt-1 mb-2">
+        <div className="relative h-2 bg-[#0f1220] rounded-full overflow-hidden">
+          <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
+          <div
+            className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${
+              countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"
+            }`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[10px] text-slate-600 mt-0.5">
+          <span>开奖</span>
+          <span className="text-yellow-600/70">←投注区间 01:20→</span>
+          <span>封盘</span>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function NextBetTimer({ nextBetAt, nextCloseTime }: { nextBetAt: number | null; nextCloseTime: number }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    if (!nextBetAt) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [nextBetAt]);
+  
+  const countdown = Math.max(0, Math.floor((nextCloseTime - nowMs) / 1000));
+  const nextBetIn = nextBetAt && nextBetAt > nowMs ? Math.ceil((nextBetAt - nowMs) / 1000) : null;
+  
+  if (nextBetIn === null || countdown <= 80) return null;
+  return (
+    <div className="mt-2 bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-2.5 text-center">
+      <span className="text-blue-400 text-sm">
+        距投注还有 <span className="font-bold">{nextBetIn}s</span>
+        <span className="text-blue-300/50 text-xs ml-1">（封盘前 01:20 下注）</span>
+      </span>
+    </div>
+  );
+}
+
+function BetWindowAlert({ nextCloseTime }: { nextCloseTime: number }) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const countdown = Math.max(0, Math.floor((nextCloseTime - nowMs) / 1000));
+  
+  if (countdown <= 0 || countdown > 80) return null;
+  return (
+    <div className="mt-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-2.5 text-center">
+      <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse mr-2 align-middle" />
+      <span className="text-yellow-400 text-sm font-semibold">投注窗口开启中</span>
+      <span className="text-yellow-400/50 text-xs ml-2">剩余 {countdown}s</span>
+    </div>
+  );
+}
+
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function Dashboard() {
@@ -883,7 +965,6 @@ export default function Dashboard() {
   const [status, setStatus] = useState<TgStatus | null>(null);
   const [bets, setBets] = useState<BetRecord[]>([]);
   const [draw, setDraw] = useState<DrawState | null>(null);
-  const [nowMs, setNowMs] = useState(Date.now());
   const [nextBetAt, setNextBetAt] = useState<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showGroupSetup, setShowGroupSetup] = useState(false);
@@ -936,7 +1017,7 @@ export default function Dashboard() {
 
   // ─── Fetch status ────────────────────────────────────────────────────────
 
-  const fetchStatus = useCallback(async () => {
+  const fetchStatus = useCallback(async (isInitial = false) => {
     try {
       const s = await api.tg.status();
       const sig = JSON.stringify(s);
@@ -981,15 +1062,15 @@ export default function Dashboard() {
         return;
       }
       setTgStep("ready");
-    } catch { setTgStep("login"); }
+    } catch {
+      if (isInitial) setTgStep("login");
+    }
   }, []);
 
   const fetchBets = useCallback(async () => {
     try {
       const { bets: b } = await api.tg.bets();
-      const first = b[0];
-      const last = b[b.length - 1];
-      const sig = `${b.length}|${first?.id ?? ""}|${first?.status ?? ""}|${first?.timestamp ?? ""}|${last?.id ?? ""}|${last?.status ?? ""}`;
+      const sig = b.map(x => `${x.id}:${x.status}`).join(",");
       if (sig === betsSigRef.current) return;
       betsSigRef.current = sig;
       setBets(b);
@@ -1100,22 +1181,16 @@ export default function Dashboard() {
   // ─── Init & polling ──────────────────────────────────────────────────────
 
   useEffect(() => {
-    void fetchStatus();
+    void fetchStatus(true);
     void fetchBets();
     void fetchDraw();
-    const statusInterval = setInterval(() => void fetchStatus(), 10_000);
+    const statusInterval = setInterval(() => void fetchStatus(false), 10_000);
     const drawInterval = setInterval(() => void fetchDraw(), 15_000);
-    const tickInterval = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      setNowMs(Date.now());
-    }, 3000);
-    return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
+    return () => { clearInterval(statusInterval); clearInterval(drawInterval); };
   }, [fetchStatus, fetchBets, fetchDraw]);
 
   // ─── Derived state ───────────────────────────────────────────────────────
 
-  const countdown = draw ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
-  const nextBetIn = nextBetAt && nextBetAt > nowMs ? Math.ceil((nextBetAt - nowMs) / 1000) : null;
   const cardExpiry = card?.expiresAt ? new Date(card.expiresAt) : null;
   const cardDaysLeft = cardExpiry ? Math.ceil((cardExpiry.getTime() - Date.now()) / 86400000) : 0;
 
@@ -1496,60 +1571,13 @@ export default function Dashboard() {
               </div>
 
               {/* Countdown display */}
-              <div className="text-center py-2">
-                <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${
-                  countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"
-                }`}>
-                  {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
-                </div>
-                <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
-              </div>
-
-              {/* Progress bar showing 80s bet zone */}
-              {draw && (() => {
-                const cycleSec = 210;
-                const pct = Math.min(100, Math.max(0, (countdown / cycleSec) * 100));
-                const betZonePct = Math.min(100, (80 / cycleSec) * 100);
-                return (
-                  <div className="mt-1 mb-2">
-                    <div className="relative h-2 bg-[#0f1220] rounded-full overflow-hidden">
-                      {/* bet zone highlight (last 80s) */}
-                      <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
-                      {/* time remaining bar */}
-                      <div
-                        className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${
-                          countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"
-                        }`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-[10px] text-slate-600 mt-0.5">
-                      <span>开奖</span>
-                      <span className="text-yellow-600/70">←投注区间 01:20→</span>
-                      <span>封盘</span>
-                    </div>
-                  </div>
-                );
-              })()}
+              {draw && <LiveCountdown nextCloseTime={draw.nextCloseTime} />}
 
               {/* Bet window active */}
-              {status.autoBet && countdown > 0 && countdown <= 80 && (
-                <div className="mt-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-2.5 text-center">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse mr-2 align-middle" />
-                  <span className="text-yellow-400 text-sm font-semibold">投注窗口开启中</span>
-                  <span className="text-yellow-400/50 text-xs ml-2">剩余 {countdown}s</span>
-                </div>
-              )}
+              {status.autoBet && draw && <BetWindowAlert nextCloseTime={draw.nextCloseTime} />}
 
               {/* Next bet countdown (outside bet window) */}
-              {nextBetIn !== null && status.autoBet && countdown > 80 && (
-                <div className="mt-2 bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-2.5 text-center">
-                  <span className="text-blue-400 text-sm">
-                    距投注还有 <span className="font-bold">{nextBetIn}s</span>
-                    <span className="text-blue-300/50 text-xs ml-1">（封盘前 01:20 下注）</span>
-                  </span>
-                </div>
-              )}
+              {status.autoBet && draw && <NextBetTimer nextBetAt={nextBetAt} nextCloseTime={draw.nextCloseTime} />}
 
               {status.riskBlocked && (
                 <div className="mt-2 bg-orange-500/10 border border-orange-500/20 rounded-xl px-4 py-2.5 text-center">

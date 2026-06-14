@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import BottomNav from "../components/BottomNav";
@@ -21,6 +21,15 @@ const HASH2_BET_OPTIONS: Array<{ key: string; label: string; group: "玩法1" | 
   { key: "straight", label: "顺子", group: "玩法2" },
   ...Array.from({ length: 28 }, (_, i) => ({ key: `num:${i}`, label: String(i), group: "玩法2" as const })),
 ];
+
+interface DrawState {
+  term: number;
+  sum1?: number;
+  sum2?: number;
+  sum3?: number;
+  result?: number;
+  nextCloseTime: number;
+}
 
 function NumericDraftInput({
   value,
@@ -128,8 +137,40 @@ export default function CanadaPage() {
   const [testingAlert, setTestingAlert] = useState(false);
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
   const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
+  const [draw, setDraw] = useState<DrawState | null>(null);
   const seenAlertStorageKey = "canada_seen_alert_id";
   const [seenAlertId, setSeenAlertId] = useState<string>(() => sessionStorage.getItem(seenAlertStorageKey) ?? "");
+  const drawSigRef = useRef("");
+  const nextCloseRef = useRef(0);
+
+  const fetchDraw = useCallback(async () => {
+    try {
+      const data = await api.lottery.fengpan();
+      const items = data?.message?.all?.keno28?.data ?? [];
+      if (!items.length) return;
+      const latest = items[0]!;
+      const closeMs = latest.closeTime ?? 0;
+      const openMs = latest.openTime ?? 0;
+      const now = Date.now();
+      const cycleMs = closeMs > openMs && closeMs - openMs < 600_000 ? closeMs - openMs : 210_000;
+      const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
+      nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
+      const next = {
+        term: latest.term + (closeMs < now ? 1 : 0),
+        sum1: latest.sum1,
+        sum2: latest.sum2,
+        sum3: latest.sum3,
+        result: latest.result,
+        nextCloseTime: nextCloseRef.current,
+      };
+      const sig = `${next.term}|${next.sum1}|${next.sum2}|${next.sum3}|${next.result}|${next.nextCloseTime}`;
+      if (sig === drawSigRef.current) return;
+      drawSigRef.current = sig;
+      setDraw(next);
+    } catch {
+      // ignore draw poll errors
+    }
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -147,11 +188,12 @@ export default function CanadaPage() {
         if (mounted) setLoading(false);
       }
     })();
+    void fetchDraw();
     return () => { mounted = false; };
-  }, []);
+  }, [fetchDraw]);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
+    const runtimeTimer = window.setInterval(() => {
       void (async () => {
         try {
           const rt = await api.canada.runtime();
@@ -166,8 +208,14 @@ export default function CanadaPage() {
         }
       })();
     }, 4000);
-    return () => window.clearInterval(timer);
-  }, []);
+    const drawTimer = window.setInterval(() => {
+      void fetchDraw();
+    }, 15000);
+    return () => {
+      window.clearInterval(runtimeTimer);
+      window.clearInterval(drawTimer);
+    };
+  }, [fetchDraw]);
 
   useEffect(() => {
     const latest = runtime?.lastAlert;
@@ -362,6 +410,11 @@ export default function CanadaPage() {
         <TgAccessPanel
           tgStatus={tgStatus}
           onStatusChange={status => setTgStatus(status)}
+        />
+
+        <CanadaCountdownCard
+          draw={draw}
+          activePeriod={runtime?.activePeriod ?? null}
         />
 
         <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
@@ -810,6 +863,82 @@ export default function CanadaPage() {
         )}
       </div>
       <BottomNav />
+    </div>
+  );
+}
+
+function CanadaCountdownCard({
+  draw,
+  activePeriod,
+}: {
+  draw: DrawState | null;
+  activePeriod: string | null;
+}) {
+  const [nowMs, setNowMs] = useState(Date.now());
+
+  useEffect(() => {
+    if (!draw?.nextCloseTime) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [draw?.nextCloseTime]);
+
+  const periodLabel = draw?.term ? `${draw.term}期` : (activePeriod ? `${activePeriod}期` : "等待中");
+  const countdown = draw?.nextCloseTime ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
+  const cycleSec = 210;
+  const pct = Math.min(100, Math.max(0, (countdown / cycleSec) * 100));
+  const betZonePct = Math.min(100, (80 / cycleSec) * 100);
+  const balls = [draw?.sum1, draw?.sum2, draw?.sum3].filter((value): value is number => typeof value === "number");
+  const total = typeof draw?.result === "number" ? draw.result : balls.reduce((sum, value) => sum + value, 0);
+  const sizeLabel = total >= 14 ? "大" : "小";
+  const parityLabel = total % 2 === 0 ? "双" : "单";
+
+  return (
+    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5">
+      <div className="flex justify-between items-start gap-3 mb-4">
+        <div>
+          <div className="text-slate-400 text-sm">当前期号</div>
+          <div className="text-white text-3xl font-bold mt-1">{periodLabel}</div>
+        </div>
+        {balls.length === 3 && (
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            {balls.map((value, index) => {
+              const isAccent = index === 1;
+              return (
+                <div key={`${index}-${value}`} className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${isAccent ? "bg-orange-500 text-white" : "bg-slate-600 text-white"}`}>
+                  {value}
+                </div>
+              );
+            })}
+            <span className="text-slate-500 text-lg">=</span>
+            <div className="w-10 h-10 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold">
+              {total}
+            </div>
+            <div className="text-slate-300 text-sm">{sizeLabel}{parityLabel}</div>
+          </div>
+        )}
+      </div>
+
+      <div className="text-center py-2">
+        <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"}`}>
+          {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
+        </div>
+        <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
+      </div>
+
+      <div className="mt-2">
+        <div className="relative h-2 bg-[#0f1220] rounded-full overflow-hidden">
+          <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
+          <div
+            className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+          <span>开奖</span>
+          <span className="text-yellow-600/70">←投注区间 01:20→</span>
+          <span>封盘</span>
+        </div>
+      </div>
     </div>
   );
 }
