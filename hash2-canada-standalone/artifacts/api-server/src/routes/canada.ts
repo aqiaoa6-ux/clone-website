@@ -501,7 +501,7 @@ function parseChannelText(text: string): { type: "open"; period: string } | { ty
   if (openMatch) {
     return { type: "open", period: openMatch[1]! };
   }
-  const full = text.match(/(\d{4,})期\s*(\d+)\+(\d+)\+(\d+)=(\d{1,2})\s*(大单|大双|小单|小双)/);
+  const full = text.match(/(\d{4,})期\s*(\d+)[+＋](\d+)[+＋](\d+)[=＝](\d{1,2})\s*(大单|大双|小单|小双)/);
   if (full) {
     return {
       type: "result",
@@ -635,6 +635,8 @@ async function processUserCanada(session: TgSession): Promise<void> {
   let changed = false;
   const prevMsgId = runtime.lastChannelMsgId;
   const prevActive = runtime.activePeriod;
+  let parsedAny = false;
+  let lastUnparsed = "";
   try {
     const msgs = await session.client.getMessages(channel, {
       limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
@@ -662,7 +664,11 @@ async function processUserCanada(session: TgSession): Promise<void> {
       const text = msg.message ?? "";
       if (!text) continue;
       const parsed = parseChannelText(text);
-      if (!parsed) continue;
+      if (!parsed) {
+        lastUnparsed = text.replace(/\s+/g, " ").slice(0, 80);
+        continue;
+      }
+      parsedAny = true;
       if (parsed.type === "open") {
         runtime.activePeriod = parsed.period;
       } else {
@@ -677,6 +683,33 @@ async function processUserCanada(session: TgSession): Promise<void> {
     }
   } catch (err) {
     logger.warn({ userId, err }, "[canada] loop failed");
+    if (runtime.lastAlert?.id !== "canada_channel_error") {
+      const plan = enabledPlans[0]!;
+      const msg = err instanceof Error ? err.message : String(err);
+      runtime.lastAlert = {
+        id: "canada_channel_error",
+        planId: plan.id,
+        planName: plan.name,
+        message: `读取开奖频道 @pc28 失败：${msg.slice(0, 120)}`,
+        at: Date.now(),
+        level: "warn",
+        voice: false,
+      };
+      changed = true;
+    }
+  }
+  if (runtime.lastChannelMsgId !== prevMsgId && !parsedAny && runtime.lastAlert?.id !== "canada_parse_failed") {
+    const plan = enabledPlans[0]!;
+    runtime.lastAlert = {
+      id: "canada_parse_failed",
+      planId: plan.id,
+      planName: plan.name,
+      message: `已拉取到开奖频道消息，但格式未识别。示例：${lastUnparsed || "(无文字)"}。需要调整解析规则。`,
+      at: Date.now(),
+      level: "warn",
+      voice: false,
+    };
+    changed = true;
   }
   if (runtime.lastChannelMsgId !== prevMsgId) changed = true;
   if (runtime.activePeriod !== prevActive) changed = true;
