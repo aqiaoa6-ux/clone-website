@@ -294,6 +294,61 @@ function GroupSetupCard({ groups, onDone, onRelogin }: { groups: TgGroup[]; onDo
   );
 }
 
+function AlertGroupSetupCard({ groups, onDone }: { groups: TgGroup[]; onDone: () => void }) {
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const filtered = groups
+    .filter(g => g.type !== "bot")
+    .filter(g => g.title.toLowerCase().includes(search.toLowerCase()));
+
+  const selectGroup = async (gid: string) => {
+    setError(""); setLoading(true);
+    try {
+      await api.tg.setAlertGroup(gid);
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "设置失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 mb-4">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-lg">🔔</span>
+        <h3 className="text-white font-semibold">选择提醒群</h3>
+      </div>
+
+      {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-lg px-3 py-2 mb-3">{error}</div>}
+
+      <input
+        type="text" value={search} onChange={e => setSearch(e.target.value)}
+        placeholder="搜索已加入的群/频道..."
+        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500 mb-2"
+      />
+
+      <div className="space-y-1 max-h-56 overflow-y-auto">
+        {filtered.map(g => (
+          <button key={g.id} onClick={() => void selectGroup(g.id)} disabled={loading}
+            className="w-full text-left flex items-center gap-3 bg-[#0f1220] hover:bg-[#1a1f35] border border-transparent hover:border-blue-500/30 rounded-xl px-3 py-2 transition disabled:opacity-50">
+            <span className="text-slate-400">{g.type === "channel" ? "📢" : "💬"}</span>
+            <div>
+              <div className="text-white text-sm">{g.title}</div>
+              {g.membersCount && <div className="text-slate-600 text-[10px]">{g.membersCount} 成员</div>}
+            </div>
+          </button>
+        ))}
+        {filtered.length === 0 && (
+          <div className="text-center text-slate-600 text-sm py-8">没有可选群/频道</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Settings Drawer ──────────────────────────────────────────────────────────
 
 function SettingsDrawer({ status, onClose, onSave }: {
@@ -832,6 +887,7 @@ export default function Dashboard() {
   const [nextBetAt, setNextBetAt] = useState<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showGroupSetup, setShowGroupSetup] = useState(false);
+  const [showAlertGroupSetup, setShowAlertGroupSetup] = useState(false);
   const [groups, setGroups] = useState<TgGroup[]>([]);
   const [tgStep, setTgStep] = useState<"checking" | "login" | "group" | "ready">("checking");
   const [toggleLoading, setToggleLoading] = useState(false);
@@ -1566,6 +1622,13 @@ export default function Dashboard() {
                   💬 {status.watchGroupTitle ? status.watchGroupTitle.slice(0, 8) + "..." : "换目标"}
                 </button>
               </div>
+
+              <div className="mt-2">
+                <button onClick={() => { setShowAlertGroupSetup(true); void api.tg.groups().then(r => setGroups(r.groups)); }}
+                  className="w-full bg-[#252a3d] hover:bg-[#30375a] text-slate-300 text-sm py-2 rounded-xl transition">
+                  🔔 {status.alertGroupTitle ? `提醒群：${status.alertGroupTitle.slice(0, 12)}...` : "设置提醒群"}
+                </button>
+              </div>
             </div>
 
             {/* Bet History */}
@@ -1646,6 +1709,15 @@ export default function Dashboard() {
           <div className="flex-1 bg-black/60 absolute inset-0" onClick={() => setShowGroupSetup(false)} />
           <div className="relative w-full bg-[#0f1220] border-t border-[#252a3d] rounded-t-2xl p-4 pb-8 max-h-[80vh] overflow-y-auto z-50">
             <GroupSetupCard groups={groups} onDone={() => { setShowGroupSetup(false); void fetchStatus(); }} onRelogin={() => { setShowGroupSetup(false); setTgStep("login"); }} />
+          </div>
+        </div>
+      )}
+
+      {showAlertGroupSetup && (
+        <div className="fixed inset-0 z-50 flex items-end">
+          <div className="flex-1 bg-black/60 absolute inset-0" onClick={() => setShowAlertGroupSetup(false)} />
+          <div className="relative w-full bg-[#0f1220] border-t border-[#252a3d] rounded-t-2xl p-4 pb-8 max-h-[80vh] overflow-y-auto z-50">
+            <AlertGroupSetupCard groups={groups} onDone={() => { setShowAlertGroupSetup(false); void fetchStatus(); }} />
           </div>
         </div>
       )}

@@ -100,6 +100,7 @@ export const api = {
     groups: () => api.get<{ groups: TgGroup[] }>("/tg/groups"),
     resolveGroup: (link: string) => api.post<{ ok: boolean; group: TgGroup }>("/tg/resolve-group", { link }),
     setGroup: (groupId: string) => api.post<{ ok: boolean }>("/tg/set-group", { groupId }),
+    setAlertGroup: (groupId: string) => api.post<{ ok: boolean }>("/tg/set-alert-group", { groupId }),
     config: (cfg: Record<string, unknown>) => api.post<{ ok: boolean; cfg: BetCfg }>("/tg/config", cfg),
     bets: () => api.get<{ bets: BetRecord[] }>("/tg/bets"),
     clearBets: () => api.del<{ ok: boolean }>("/tg/bets"),
@@ -220,6 +221,8 @@ export interface TgStatus {
   me?: TgMe;
   watchGroupId?: string;
   watchGroupTitle?: string;
+  alertGroupId?: string;
+  alertGroupTitle?: string;
   autoBet?: boolean;
   betAmount?: number;
   strategy?: string;

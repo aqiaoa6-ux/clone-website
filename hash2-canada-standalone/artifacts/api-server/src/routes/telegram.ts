@@ -298,6 +298,7 @@ export interface TgSession {
   me?: Api.User;
   groups: GroupInfo[];
   watchGroupId?: string;
+  alertGroupId?: string;
   cfg: BetCfg;
   // per-session state
   betLog: BetRecord[];
@@ -402,6 +403,7 @@ interface PersistedData {
   kkpayUsername: string;
   balanceSource: "manual" | "kkpay";
   watchGroupId?: string;
+  alertGroupId?: string;
   canadaMonitorGroupIds?: string[];
   privateMonitorGroupIds?: string[];
   cfg?: Partial<BetCfg>;
@@ -765,6 +767,7 @@ function saveSession(session: TgSession): void {
       kkpayUsername: session.kkpayUsername,
       balanceSource: session.balanceSource,
       watchGroupId: session.watchGroupId,
+      alertGroupId: session.alertGroupId,
       cfg: session.cfg,
       kuaisanResults: session.kuaisanResults.slice(0, 30),
       hashResults: (session.hashResults ?? []).slice(0, 30),
@@ -929,6 +932,7 @@ function destroySession(session: TgSession, reason: string): void {
       kkpayUsername: session.kkpayUsername,
       balanceSource: session.balanceSource,
       watchGroupId: session.watchGroupId,
+      alertGroupId: session.alertGroupId,
       cfg: session.cfg,
       kuaisanResults: [],
       hashResults: [],
@@ -1067,6 +1071,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     balanceUpdatedAt: 0,
     me: meInfo,
     watchGroupId: data.watchGroupId,
+    alertGroupId: data.alertGroupId,
   };
 
   tgSessions.set(userId, session);
@@ -4627,6 +4632,8 @@ router.get("/tg/status", requireCard, (req, res) => {
     me: { id: session.me.id, firstName: session.me.firstName, lastName: session.me.lastName, username: session.me.username, phone: session.me.phone },
     watchGroupId: session.watchGroupId,
     watchGroupTitle: (() => { const wgid = session.watchGroupId; return session.groups.find(g => g.id === wgid || `-100${g.id}` === wgid)?.title; })(),
+    alertGroupId: session.alertGroupId,
+    alertGroupTitle: (() => { const gid = session.alertGroupId; return session.groups.find(g => g.id === gid || `-100${g.id}` === gid)?.title; })(),
     ...session.cfg,
     consecutiveLosses: session.consecutiveLosses,
     consecutiveAlgoLosses: session.consecutiveAlgoLosses,
@@ -4712,6 +4719,28 @@ router.post("/tg/set-group", requireCard, (req, res) => {
   const { groupId } = req.body as { groupId?: string };
   if (groupId !== undefined) session.watchGroupId = groupId;
   if (session.watchGroupId) startGroupListener(session);
+  saveSession(session);
+  res.json({ ok: true });
+});
+
+router.post("/tg/set-alert-group", requireCard, (req, res) => {
+  const session = tgSessions.get(req.user!.userId);
+  if (!session) { res.status(401).json({ error: "未连接 Telegram" }); return; }
+  const { groupId } = req.body as { groupId?: string };
+  if (groupId === undefined) { res.json({ ok: true }); return; }
+  const next = groupId.trim();
+  if (!next) {
+    session.alertGroupId = undefined;
+    saveSession(session);
+    res.json({ ok: true });
+    return;
+  }
+  const info = findGroupInSession(session, next);
+  if (info && info.type === "bot") {
+    res.status(400).json({ error: "提醒目标必须是群/频道" });
+    return;
+  }
+  session.alertGroupId = canonicalGroupId(session, next);
   saveSession(session);
   res.json({ ok: true });
 });

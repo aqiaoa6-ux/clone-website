@@ -439,9 +439,10 @@ async function sendRiskAlert(session: TgSession, userId: number, plan: Hash2Plan
   const pnl = fmtMoney(state.sessionPnl);
   const title = `【风控提醒】哈希2 ${plan.name}`;
   const text = `${title}\n${riskReason}\n当前盈亏：${pnl}\n期号：${period}\n来源：${source}`;
-  if (session.watchGroupId) {
+  const targetId = session.alertGroupId ?? session.watchGroupId;
+  if (targetId) {
     try {
-      await session.client.sendMessage(session.watchGroupId, { message: text });
+      await session.client.sendMessage(targetId, { message: text });
     } catch (err) {
       logger.warn({ userId, err }, "[hash2] risk tg alert failed");
     }
