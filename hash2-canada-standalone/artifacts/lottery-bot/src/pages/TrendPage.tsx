@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { api, type LotteryData } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
@@ -85,11 +85,16 @@ export default function TrendPage() {
   const [items,       setItems]       = useState<DrawItem[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const lastTermRef = useRef<number>(0);
 
   const refresh = useCallback(async () => {
     try {
       const data = await api.lottery.fengpan();
-      setItems(parseData(data));
+      const next = parseData(data);
+      const term = next[0]?.term ?? 0;
+      if (term && term === lastTermRef.current) return;
+      lastTermRef.current = term;
+      setItems(next);
       setLastUpdated(new Date());
     } catch { /* ignore */ }
     finally { setLoading(false); }

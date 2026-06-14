@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api, type TgStatus, type BetRecord, type TgGroup } from "../lib/api";
 import BottomNav from "../components/BottomNav";
+import { useCardCountdown } from "../hooks/use-card-countdown";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 type TgStep = "phone" | "code" | "password" | "done";
@@ -820,7 +821,8 @@ function SettingsDrawer({ status, onClose, onSave }: {
 // ─── Main Dashboard ───────────────────────────────────────────────────────────
 
 export default function Dashboard() {
-  const { user, card, countdown: cardCountdown, logout } = useAuth();
+  const { user, card, serverOffsetMs, logout } = useAuth();
+  const cardCountdown = useCardCountdown(card?.active ? card.expiresAt : undefined, serverOffsetMs);
   const [, setLocation] = useLocation();
 
   const [status, setStatus] = useState<TgStatus | null>(null);
@@ -848,6 +850,11 @@ export default function Dashboard() {
   const [debugLoading, setDebugLoading] = useState(false);
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
+  const statusSigRef = useRef<string>("");
+  const betsSigRef = useRef<string>("");
+  const drawSigRef = useRef<string>("");
+  const groupsLoadedRef = useRef(false);
+  const groupsRef = useRef<TgGroup[]>([]);
 
   // ─── Fetch lottery draw data ─────────────────────────────────────────────
 
@@ -863,7 +870,11 @@ export default function Dashboard() {
       const cycleMs = closeMs > openMs && closeMs - openMs < 600000 ? closeMs - openMs : 210000;
       const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
       nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
-      setDraw({ term: latest.term + (closeMs < now ? 1 : 0), sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3, r3: latest.r3, nextCloseTime: nextCloseRef.current });
+      const next = { term: latest.term + (closeMs < now ? 1 : 0), sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3, r3: latest.r3, nextCloseTime: nextCloseRef.current };
+      const sig = `${next.term}|${next.sum1}|${next.sum2}|${next.sum3}|${next.r3}|${next.nextCloseTime}`;
+      if (sig === drawSigRef.current) return;
+      drawSigRef.current = sig;
+      setDraw(next);
     } catch { /* ignore */ }
   }, []);
 
@@ -872,6 +883,9 @@ export default function Dashboard() {
   const fetchStatus = useCallback(async () => {
     try {
       const s = await api.tg.status();
+      const sig = JSON.stringify(s);
+      if (sig === statusSigRef.current) return;
+      statusSigRef.current = sig;
       setStatus(s);
       if (s.kuaisanPhase) setKuaisanPhase(s.kuaisanPhase);
       if (s.kuaisanPeriod !== undefined) setKuaisanPeriod(s.kuaisanPeriod ?? null);
@@ -887,8 +901,13 @@ export default function Dashboard() {
         try { localStorage.setItem(TG_LAST_GROUP_KEY, s.watchGroupId); } catch {}
       }
       if (!s.watchGroupId) {
-        const { groups: g } = await api.tg.groups();
-        setGroups(g);
+        if (!groupsLoadedRef.current) {
+          const { groups: g } = await api.tg.groups();
+          setGroups(g);
+          groupsRef.current = g;
+          groupsLoadedRef.current = true;
+        }
+        const g = groupsRef.current;
         const savedGroupId = (() => {
           try { return localStorage.getItem(TG_LAST_GROUP_KEY) ?? ""; } catch { return ""; }
         })();
@@ -902,20 +921,21 @@ export default function Dashboard() {
           setTgStep("ready");
           return;
         }
-        if (status?.watchGroupId) {
-          setTgStep("ready");
-          return;
-        }
         setTgStep("group");
         return;
       }
       setTgStep("ready");
     } catch { setTgStep("login"); }
-  }, [status?.watchGroupId]);
+  }, []);
 
   const fetchBets = useCallback(async () => {
     try {
       const { bets: b } = await api.tg.bets();
+      const first = b[0];
+      const last = b[b.length - 1];
+      const sig = `${b.length}|${first?.id ?? ""}|${first?.status ?? ""}|${first?.timestamp ?? ""}|${last?.id ?? ""}|${last?.status ?? ""}`;
+      if (sig === betsSigRef.current) return;
+      betsSigRef.current = sig;
       setBets(b);
     } catch { /* ignore */ }
   }, []);
@@ -1029,7 +1049,10 @@ export default function Dashboard() {
     void fetchDraw();
     const statusInterval = setInterval(() => void fetchStatus(), 10_000);
     const drawInterval = setInterval(() => void fetchDraw(), 15_000);
-    const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
+    const tickInterval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      setNowMs(Date.now());
+    }, 3000);
     return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
   }, [fetchStatus, fetchBets, fetchDraw]);
 

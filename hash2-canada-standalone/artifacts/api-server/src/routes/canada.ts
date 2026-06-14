@@ -52,6 +52,7 @@ interface CanadaPlanRuntime {
   lastMessage: string;
   blockedReason?: string;
   lastHit?: string;
+  lastRiskNotified?: string;
   updatedAt: number;
 }
 
@@ -416,6 +417,43 @@ function planRiskReason(plan: CanadaPlan, runtime: CanadaPlanRuntime): string | 
   return undefined;
 }
 
+function fmtMoney(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  const fixed = Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(2);
+  return fixed;
+}
+
+async function sendEmailWebhook(subject: string, text: string): Promise<void> {
+  const url = process.env.ALERT_EMAIL_WEBHOOK_URL;
+  if (!url) return;
+  const fetchFn = globalThis.fetch;
+  if (!fetchFn) return;
+  const to = process.env.ALERT_EMAIL_TO ?? "";
+  await fetchFn(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to, subject, text }),
+  });
+}
+
+async function sendRiskAlert(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, riskReason: string, period: string, source: "trigger" | "settle"): Promise<void> {
+  const pnl = fmtMoney(state.sessionPnl);
+  const title = `【风控提醒】加拿大 ${plan.name}`;
+  const text = `${title}\n${riskReason}\n当前盈亏：${pnl}\n期号：${period}\n来源：${source}`;
+  if (session.watchGroupId) {
+    try {
+      await session.client.sendMessage(session.watchGroupId, { message: text });
+    } catch (err) {
+      logger.warn({ userId, err }, "[canada] risk tg alert failed");
+    }
+  }
+  try {
+    await sendEmailWebhook(`风控提醒 加拿大 ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
+  } catch (err) {
+    logger.warn({ userId, err }, "[canada] risk email alert failed");
+  }
+}
+
 function betKeyLabel(key: string): string {
   if (key === "big") return "大";
   if (key === "small") return "小";
@@ -559,9 +597,15 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
   if (riskReason) {
     state.blockedReason = riskReason;
     state.lastSentPeriod = period;
+    if (state.lastRiskNotified !== riskReason) {
+      state.lastRiskNotified = riskReason;
+      state.updatedAt = Date.now();
+      await sendRiskAlert(session, userId, plan, state, riskReason, period, "trigger");
+    }
     if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} ${riskReason}`, riskReason.includes("止损") ? "error" : "success");
     return;
   }
+  state.lastRiskNotified = undefined;
   if (!session.watchGroupId || !session.me) {
     state.blockedReason = "TG未连接或未选择群组";
     return;
@@ -599,7 +643,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
   }
 }
 
-function settlePlanResult(plan: CanadaPlan, state: CanadaPlanRuntime, runtime: CanadaRuntime, result: ParsedCanadaResult): void {
+async function settlePlanResult(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, runtime: CanadaRuntime, result: ParsedCanadaResult): Promise<void> {
   if (!plan.enabled) return;
   if (state.pendingPeriod !== result.period || state.lastSettledPeriod === result.period) return;
 
@@ -641,9 +685,14 @@ function settlePlanResult(plan: CanadaPlan, state: CanadaPlanRuntime, runtime: C
   const riskReason = planRiskReason(plan, state);
   if (riskReason) {
     state.blockedReason = riskReason;
+    if (state.lastRiskNotified !== riskReason) {
+      state.lastRiskNotified = riskReason;
+      await sendRiskAlert(session, userId, plan, state, riskReason, result.period, "settle");
+    }
     if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} ${riskReason}`, riskReason.includes("止损") ? "error" : "success");
   } else {
     state.blockedReason = undefined;
+    state.lastRiskNotified = undefined;
   }
 }
 
@@ -711,7 +760,7 @@ async function processUserCanada(session: TgSession): Promise<void> {
           for (const plan of enabledPlans) {
             const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
             runtime.plans[plan.id] = state;
-            settlePlanResult(plan, state, runtime, parsed);
+            await settlePlanResult(session, userId, plan, state, runtime, parsed);
           }
           scheduleCanadaAutoBet(session, parsed.period);
         }

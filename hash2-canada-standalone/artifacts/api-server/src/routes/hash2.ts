@@ -53,6 +53,7 @@ interface Hash2PlanRuntime {
   lastMessage: string;
   blockedReason?: string;
   lastHit?: string;
+  lastRiskNotified?: string;
   updatedAt: number;
 }
 
@@ -415,6 +416,43 @@ function planRiskReason(plan: Hash2Plan, runtime: Hash2PlanRuntime): string | un
   return undefined;
 }
 
+function fmtMoney(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  const fixed = Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(2);
+  return fixed;
+}
+
+async function sendEmailWebhook(subject: string, text: string): Promise<void> {
+  const url = process.env.ALERT_EMAIL_WEBHOOK_URL;
+  if (!url) return;
+  const fetchFn = globalThis.fetch;
+  if (!fetchFn) return;
+  const to = process.env.ALERT_EMAIL_TO ?? "";
+  await fetchFn(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ to, subject, text }),
+  });
+}
+
+async function sendRiskAlert(session: TgSession, userId: number, plan: Hash2Plan, state: Hash2PlanRuntime, riskReason: string, period: string, source: "trigger" | "settle"): Promise<void> {
+  const pnl = fmtMoney(state.sessionPnl);
+  const title = `【风控提醒】哈希2 ${plan.name}`;
+  const text = `${title}\n${riskReason}\n当前盈亏：${pnl}\n期号：${period}\n来源：${source}`;
+  if (session.watchGroupId) {
+    try {
+      await session.client.sendMessage(session.watchGroupId, { message: text });
+    } catch (err) {
+      logger.warn({ userId, err }, "[hash2] risk tg alert failed");
+    }
+  }
+  try {
+    await sendEmailWebhook(`风控提醒 哈希2 ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
+  } catch (err) {
+    logger.warn({ userId, err }, "[hash2] risk email alert failed");
+  }
+}
+
 function betKeyLabel(key: string): string {
   if (key === "big") return "大";
   if (key === "small") return "小";
@@ -537,9 +575,15 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ha
   if (riskReason) {
     state.blockedReason = riskReason;
     state.lastSentPeriod = period;
+    if (state.lastRiskNotified !== riskReason) {
+      state.lastRiskNotified = riskReason;
+      state.updatedAt = Date.now();
+      await sendRiskAlert(session, userId, plan, state, riskReason, period, "trigger");
+    }
     if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} ${riskReason}`, riskReason.includes("止损") ? "error" : "success");
     return;
   }
+  state.lastRiskNotified = undefined;
   if (!session.watchGroupId || !session.me) {
     state.blockedReason = "TG未连接或未选择群组";
     return;
@@ -577,7 +621,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ha
   }
 }
 
-function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime, result: ParsedHash2Result): void {
+async function settlePlanResult(session: TgSession, userId: number, plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime, result: ParsedHash2Result): Promise<void> {
   if (!plan.enabled) return;
   if (state.pendingPeriod !== result.period || state.lastSettledPeriod === result.period) return;
 
@@ -619,9 +663,14 @@ function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Has
   const riskReason = planRiskReason(plan, state);
   if (riskReason) {
     state.blockedReason = riskReason;
+    if (state.lastRiskNotified !== riskReason) {
+      state.lastRiskNotified = riskReason;
+      await sendRiskAlert(session, userId, plan, state, riskReason, result.period, "settle");
+    }
     if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} ${riskReason}`, riskReason.includes("止损") ? "error" : "success");
   } else {
     state.blockedReason = undefined;
+    state.lastRiskNotified = undefined;
   }
 }
 
@@ -670,7 +719,7 @@ async function processUserHash2(session: TgSession): Promise<void> {
         for (const plan of enabledPlans) {
           const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
           runtime.plans[plan.id] = state;
-          settlePlanResult(plan, state, runtime, parsed.result);
+          await settlePlanResult(session, userId, plan, state, runtime, parsed.result);
         }
         scheduleHash2AutoBet(session, parsed.result.period);
       }

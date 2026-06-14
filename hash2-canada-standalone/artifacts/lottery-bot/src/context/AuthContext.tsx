@@ -1,22 +1,11 @@
 import { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
 import { api, setAuthToken, type AuthUser, type CardStatus } from "../lib/api";
 
-function calcCountdown(expiresAt: string, nowMs: number): string | null {
-  const remaining = new Date(expiresAt).getTime() - nowMs;
-  if (remaining <= 0) return null;
-  const d = Math.floor(remaining / 86400000);
-  const h = Math.floor((remaining % 86400000) / 3600000);
-  const m = Math.floor((remaining % 3600000) / 60000);
-  const s = Math.floor((remaining % 60000) / 1000);
-  if (d > 0) return `${d}天 ${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
 interface AuthContextValue {
   user: AuthUser | null;
   card: CardStatus | null;
   cardLoading: boolean;
-  countdown: string | null;
+  serverOffsetMs: number;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string) => Promise<void>;
@@ -30,10 +19,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [card, setCard] = useState<CardStatus | null>(null);
   const [cardLoading, setCardLoading] = useState(false);
-  const [countdown, setCountdown] = useState<string | null>(null);
+  const [serverOffsetMs, setServerOffsetMs] = useState(0);
   const [loading, setLoading] = useState(true);
   const expiredFiredRef = useRef(false);
-  const serverOffsetRef = useRef(0);
+  const expiryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const logout = useCallback(async () => {
     await api.auth.logout();
@@ -41,7 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
     setCard(null);
     setCardLoading(false);
-    setCountdown(null);
+    setServerOffsetMs(0);
   }, []);
 
   const refreshCard = useCallback(async () => {
@@ -54,7 +43,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const status = await api.card.status();
       if (status.serverNow) {
-        serverOffsetRef.current = new Date(status.serverNow).getTime() - Date.now();
+        setServerOffsetMs(new Date(status.serverNow).getTime() - Date.now());
       }
       setCard(status);
     } catch {
@@ -93,51 +82,48 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id);
   }, [user, refreshCard]);
 
-  // Countdown ticker — updates every second; enforces expiry automatically
   useEffect(() => {
+    if (expiryTimerRef.current) {
+      clearTimeout(expiryTimerRef.current);
+      expiryTimerRef.current = null;
+    }
     if (!card?.active || !card.expiresAt) {
-      setCountdown(null);
       expiredFiredRef.current = false;
       return;
     }
     expiredFiredRef.current = false;
 
-    const tick = () => {
+    const expiresAtMs = new Date(card.expiresAt!).getTime();
+    const remaining = expiresAtMs - (Date.now() + serverOffsetMs);
+    const ms = remaining <= 0 ? 0 : Math.min(remaining + 500, 2147483647);
+
+    const onExpired = async () => {
       if (expiredFiredRef.current) return;
-      const nowMs = Date.now() + serverOffsetRef.current;
-      const cd = calcCountdown(card.expiresAt!, nowMs);
-      if (cd === null) {
-        void (async () => {
-          try {
-            const status = await api.card.status();
-            if (status.serverNow) {
-              serverOffsetRef.current = new Date(status.serverNow).getTime() - Date.now();
-            }
-            setCard(status);
-            if (!status.active) {
-              setCountdown(null);
-              if (status.expired) {
-                try { await api.tg.disconnect(); } catch {}
-              }
-              return;
-            }
-            const cd2 = status.expiresAt ? calcCountdown(status.expiresAt, Date.now() + serverOffsetRef.current) : null;
-            setCountdown(cd2 ?? "00:00:00");
-          } catch {
-            setCountdown(null);
-          }
-        })();
-        return;
-      }
-      setCountdown(prev => (prev === cd ? prev : cd));
+      expiredFiredRef.current = true;
+      try {
+        const status = await api.card.status();
+        if (status.serverNow) {
+          setServerOffsetMs(new Date(status.serverNow).getTime() - Date.now());
+        }
+        setCard(status);
+        if (!status.active && status.expired) {
+          try { await api.tg.disconnect(); } catch {}
+        }
+      } catch {}
     };
 
-    tick();
-    const id = window.setInterval(tick, 10_000);
+    if (ms === 0) {
+      void onExpired();
+      return;
+    }
+    expiryTimerRef.current = setTimeout(() => { void onExpired(); }, ms);
     return () => {
-      window.clearInterval(id);
+      if (expiryTimerRef.current) {
+        clearTimeout(expiryTimerRef.current);
+        expiryTimerRef.current = null;
+      }
     };
-  }, [card, logout]);
+  }, [card?.active, card?.expiresAt, serverOffsetMs, refreshCard]);
 
   const login = async (username: string, password: string) => {
     const { user: me, token } = await api.auth.login(username, password);
@@ -166,7 +152,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, card, cardLoading, countdown, loading, login, register, logout, refreshCard }}>
+    <AuthContext.Provider value={{ user, card, cardLoading, serverOffsetMs, loading, login, register, logout, refreshCard }}>
       {children}
     </AuthContext.Provider>
   );

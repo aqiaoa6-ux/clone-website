@@ -3,6 +3,7 @@ import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api } from "../lib/api";
 import BottomNav from "../components/BottomNav";
+import { useCardCountdown } from "../hooks/use-card-countdown";
 
 const CARD_TYPES = [
   { key: "daily", label: "天卡", desc: "有效期 1 天", color: "from-green-600 to-emerald-500", icon: "☀️" },
@@ -13,7 +14,8 @@ const CARD_TYPES = [
 interface ShopStatus { enabled: boolean; productName?: string; priceDailyUsdt?: string; priceWeeklyUsdt?: string; priceMonthlyUsdt?: string }
 
 export default function CardKeyPage() {
-  const { user, card, countdown, logout, refreshCard } = useAuth();
+  const { user, card, serverOffsetMs, logout, refreshCard } = useAuth();
+  const countdown = useCardCountdown(card?.active ? card.expiresAt : undefined, serverOffsetMs);
   const [, setLocation] = useLocation();
   const [key, setKey] = useState("");
   const [error, setError] = useState("");
