@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
@@ -10,7 +11,17 @@ globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
+function run(command, args, cwd) {
+  const res = spawnSync(command, args, { cwd, stdio: "inherit", env: process.env });
+  if (res.status !== 0) {
+    throw new Error(`Command failed: ${command} ${args.join(" ")}`);
+  }
+}
+
 async function buildAll() {
+  const webDir = path.resolve(artifactDir, "..", "lottery-bot");
+  run("pnpm", ["-C", webDir, "build"], webDir);
+
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
 

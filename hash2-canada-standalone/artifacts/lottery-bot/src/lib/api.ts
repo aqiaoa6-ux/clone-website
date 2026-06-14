@@ -11,10 +11,14 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   if (!contentType.includes("application/json")) {
     const text = await res.text().catch(() => "");
     const snippet = text.replace(/\s+/g, " ").slice(0, 120);
-    throw new Error(`接口异常(${res.status})：返回非JSON。${snippet ? ` ${snippet}` : ""}`);
+    throw new Error(`${method} ${path} 接口异常(${res.status})：返回非JSON。${snippet ? ` ${snippet}` : ""}`);
   }
   const data = await res.json() as T & { error?: string };
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    const anyData = data as { error?: string; message?: string; code?: string };
+    const msg = anyData.message ?? anyData.error ?? `HTTP ${res.status}`;
+    throw new Error(`${method} ${path}：${msg}`);
+  }
   return data;
 }
 

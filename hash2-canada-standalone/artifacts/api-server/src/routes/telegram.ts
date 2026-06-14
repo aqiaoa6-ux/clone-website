@@ -864,8 +864,7 @@ function startGlobalListener(session: TgSession): void {
 function isFatalAuthError(e: unknown): boolean {
   if (!e) return false;
   const msg = (e instanceof Error ? e.message : String(e)).toUpperCase();
-  return msg.includes("AUTH_KEY_DUPLICATED") ||
-         msg.includes("AUTH_KEY_UNREGISTERED") ||
+  return msg.includes("AUTH_KEY_UNREGISTERED") ||
          msg.includes("SESSION_REVOKED") ||
          msg.includes("USER_DEACTIVATED");
 }

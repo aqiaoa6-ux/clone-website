@@ -19,6 +19,15 @@ app.use(pinoHttp({
   },
 }));
 
+app.get("/healthz", (_req, res) => {
+  res.json({
+    status: "ok",
+    commit: process.env.RENDER_GIT_COMMIT ?? process.env.SOURCE_VERSION ?? null,
+    build: process.env.RENDER_SERVICE_ID ?? null,
+    nodeEnv: process.env.NODE_ENV ?? null,
+  });
+});
+
 app.use(cors({ origin: true, credentials: true }));
 app.use(cookieParser());
 app.use(express.json());
@@ -34,13 +43,13 @@ app.use((err: unknown, req: express.Request, res: express.Response, next: expres
   logger.error({ err }, "Unhandled error");
   const url = req.originalUrl ?? "";
   if (url.startsWith("/api")) {
-    res.status(500).json({ error: "服务器错误" });
+    res.status(500).json({ error: "服务器错误", message: err instanceof Error ? err.message : "unknown" });
     return;
   }
   next(err);
 });
 
-if (process.env.NODE_ENV === "production") {
+{
   const dirname = path.dirname(fileURLToPath(import.meta.url));
   const publicDir = path.resolve(dirname, "..", "..", "lottery-bot", "dist", "public");
 
