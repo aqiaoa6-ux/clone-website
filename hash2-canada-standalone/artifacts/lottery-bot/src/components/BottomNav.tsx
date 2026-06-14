@@ -34,3 +34,37 @@ export default function BottomNav() {
     </div>
   );
 }
+
+export function BottomNavStatic() {
+  const [location, setLocation] = useLocation();
+
+  const items = [
+    { path: "/hash2", icon: "#️⃣", label: "哈希2", show: true },
+    { path: "/canada", icon: "🍁", label: "加拿大", show: true },
+  ].filter(i => i.show);
+
+  return (
+    <div className="border-t border-[#1e2235] bg-[#0b0e1a]">
+      <div className="mx-auto flex max-w-lg">
+        {items.map(item => {
+          const active = location === item.path
+            || (item.path === "/hash2" && location.startsWith("/hash2/"))
+            || (item.path === "/canada" && location.startsWith("/canada/"));
+          return (
+            <button
+              key={item.path}
+              onClick={() => setLocation(item.path)}
+              className={`relative flex flex-1 flex-col items-center gap-1 py-3 transition ${
+                active ? "text-blue-400" : "text-slate-500 hover:text-slate-300"
+              }`}
+            >
+              <span className="text-xl leading-none">{item.icon}</span>
+              <span className="text-[11px] font-medium">{item.label}</span>
+              {active && <span className="absolute bottom-0 left-1/2 h-0.5 w-6 -translate-x-1/2 rounded-full bg-blue-400" />}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

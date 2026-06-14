@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import BottomNav from "../components/BottomNav";
+import { BottomNavStatic } from "../components/BottomNav";
 import TgAccessPanel from "../components/TgAccessPanel";
 import { api, type CanadaConfig, type CanadaPlan, type CanadaRuntime, type TgStatus } from "../lib/api";
 
@@ -800,7 +800,7 @@ export default function CanadaPage() {
           </div>
         )}
       </div>
-      <BottomNav />
+      <BottomNavStatic />
     </div>
   );
 }
@@ -872,6 +872,12 @@ function CanadaLiveOverview({
   }, [fetchDraw, fetchRuntime, refreshTick]);
 
   useEffect(() => {
+    if (!draw?.nextCloseTime) return;
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [draw?.nextCloseTime]);
+
+  useEffect(() => {
     const latest = runtime?.lastAlert;
     if (!latest || latest.id === seenAlertId) return;
     setSeenAlertId(latest.id);
@@ -927,7 +933,7 @@ function CanadaLiveOverview({
         </div>
 
         <div className="text-center py-2">
-          <div className={`text-5xl font-bold font-mono tracking-tight ${countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"}`}>
+          <div className={`text-5xl font-bold font-mono tabular-nums tracking-tight ${countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"}`}>
             {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
           </div>
           <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import BottomNav from "../components/BottomNav";
+import { BottomNavStatic } from "../components/BottomNav";
 import TgAccessPanel from "../components/TgAccessPanel";
 import { api, type Hash2Config, type Hash2Plan, type Hash2Runtime, type TgStatus } from "../lib/api";
 
@@ -299,16 +299,16 @@ export default function Hash2Page() {
   };
 
   return (
-    <div className="min-h-screen bg-[#0b0e1a] text-white">
+    <div className="min-h-screen bg-[#0b0e1a] text-white" style={{ overflowAnchor: "none" }}>
       {alertMessage && (
-        <div className="sticky top-0 z-50 bg-purple-900/90 border-b border-purple-700 px-4 py-3 flex items-start gap-3 backdrop-blur">
+        <div className="fixed top-3 left-1/2 z-50 flex w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 items-start gap-3 rounded-2xl border border-purple-700 bg-purple-900/95 px-4 py-3 shadow-2xl backdrop-blur">
           <span className="text-purple-300 text-lg leading-none mt-0.5">#</span>
           <span className="flex-1 text-sm text-purple-100 leading-snug">{alertMessage}</span>
           <button onClick={() => setAlertMessage(null)} className="text-purple-300 hover:text-white text-lg leading-none flex-shrink-0">×</button>
         </div>
       )}
 
-      <div className="sticky top-0 z-40 bg-[#0b0e1a]/95 border-b border-[#1e2235] backdrop-blur">
+      <div className="bg-[#0b0e1a] border-b border-[#1e2235]">
         <div className="max-w-lg mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <button
@@ -381,11 +381,11 @@ export default function Hash2Page() {
             </div>
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+            <div className="min-h-[58px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
               <div className="text-slate-500">当前期号</div>
-              <div className="text-white mt-1">{runtime?.activePeriod ?? "等待中"}</div>
+              <div className="text-white mt-1 truncate">{runtime?.activePeriod ?? "等待中"}</div>
             </div>
-            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+            <div className="min-h-[58px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
               <div className="text-slate-500">最近提醒</div>
               <div className="text-white mt-1 truncate">{runtime?.lastAlert?.message ?? "暂无"}</div>
             </div>
@@ -448,24 +448,24 @@ export default function Hash2Page() {
             </div>
 
             <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+              <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
                 <div className="text-slate-500">当前层级</div>
                 <div className="text-white mt-1">第{(currentPlanRuntime?.currentLevel ?? 0) + 1}手</div>
                 <div className="text-[10px] text-slate-500 mt-1 truncate">
                   {currentLevelSummary || "暂无"}
                 </div>
               </div>
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+              <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
                 <div className="text-slate-500">累计盈亏</div>
                 <div className={`${(currentPlanRuntime?.sessionPnl ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"} mt-1`}>
                   {(currentPlanRuntime?.sessionPnl ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
                 </div>
               </div>
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+              <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
                 <div className="text-slate-500">最近发单</div>
                 <div className="text-white mt-1 truncate">{currentPlanRuntime?.lastMessage || "暂无"}</div>
               </div>
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+              <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
                 <div className="text-slate-500">状态</div>
                 <div className={`${currentPlanRuntime?.blockedReason ? "text-red-400" : "text-emerald-400"} mt-1 truncate`}>
                   {currentPlanRuntime?.blockedReason ?? "运行中/待触发"}
@@ -809,7 +809,7 @@ export default function Hash2Page() {
           </div>
         )}
       </div>
-      <BottomNav />
+      <BottomNavStatic />
     </div>
   );
 }
