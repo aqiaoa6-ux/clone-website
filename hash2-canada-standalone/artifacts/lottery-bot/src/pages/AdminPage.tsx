@@ -41,7 +41,6 @@ const ADMIN_TAB_LABELS: Record<(typeof ADMIN_VISIBLE_TABS)[number], string> = {
   users: "账号管理",
   shop: "🛒 商店",
 };
-const GENERATED_KEYS_STORAGE = "admin_generated_keys_v1";
 
 export default function AdminPage() {
   const { user, logout } = useAuth();
@@ -77,35 +76,16 @@ export default function AdminPage() {
   const [count, setCount] = useState("1");
   const [note, setNote] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [newKeys, setNewKeys] = useState<string[]>(() => {
-    try {
-      const raw = sessionStorage.getItem(GENERATED_KEYS_STORAGE);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-    } catch {
-      return [];
-    }
-  });
+  const [newKeys, setNewKeys] = useState<string[]>([]);
   const [copied, setCopied] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "unused" | "active" | "expired">("all");
   const [showGenerate, setShowGenerate] = useState(false);
-  const [generateError, setGenerateError] = useState("");
 
   useEffect(() => {
     if (!ADMIN_VISIBLE_TABS.includes(tab as (typeof ADMIN_VISIBLE_TABS)[number])) {
       setTab("cards");
     }
   }, [tab]);
-
-  useEffect(() => {
-    try {
-      if (newKeys.length > 0) sessionStorage.setItem(GENERATED_KEYS_STORAGE, JSON.stringify(newKeys));
-      else sessionStorage.removeItem(GENERATED_KEYS_STORAGE);
-    } catch {
-      // ignore storage failure
-    }
-  }, [newKeys]);
 
   // ── monitor tab ──
   const [sessions, setSessions] = useState<AdminTgSession[]>([]);
@@ -795,36 +775,10 @@ export default function AdminPage() {
   };
 
   const generate = async () => {
-    setGenerating(true); setNewKeys([]); setShowGenerate(true); setGenerateError("");
+    setGenerating(true); setNewKeys([]);
     try {
       const { keys } = await api.admin.generateCards(type, Number(count) || 1, note || undefined);
-      setNewKeys(keys);
-      setFilter("unused");
-      if (keys.length > 0) {
-        const nowIso = new Date().toISOString();
-        const optimisticCards: AdminCard[] = keys.map((key, index) => ({
-          id: -(Date.now() + index),
-          key,
-          type,
-          userId: null,
-          username: null,
-          expiresAt: null,
-          activatedAt: null,
-          createdAt: nowIso,
-          note: note || null,
-          isActive: false,
-          isUsed: false,
-        }));
-        setCards(prev => [...optimisticCards, ...prev.filter(card => !keys.includes(card.key))]);
-      }
-      if (keys.length > 0) {
-        window.alert(`已生成 ${keys.length} 个卡密：\n\n${keys.join("\n")}`);
-      }
-      await loadCards();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "生成失败";
-      setGenerateError(message);
-      window.alert(`生成失败：${message}`);
+      setNewKeys(keys); await loadCards();
     } finally { setGenerating(false); }
   };
 
@@ -962,11 +916,6 @@ export default function AdminPage() {
               </button>
               {showGenerate && (
                 <div className="px-5 pb-5 border-t border-[#252a3d]">
-                  {generateError && (
-                    <div className="mt-4 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg px-4 py-3">
-                      {generateError}
-                    </div>
-                  )}
                   <div className="grid grid-cols-3 gap-2 mb-4 mt-4">
                     {(["daily", "weekly", "monthly"] as const).map(t => (
                       <button key={t} onClick={() => setType(t)}
@@ -991,35 +940,29 @@ export default function AdminPage() {
                     className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-xl py-3 transition">
                     {generating ? "生成中..." : "生成卡密"}
                   </button>
+                  {newKeys.length > 0 && (
+                    <div className="mt-4 bg-[#0f1220] border border-[#252a3d] rounded-xl p-4">
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="text-emerald-400 text-sm font-semibold">已生成 {newKeys.length} 个卡密</span>
+                        <button onClick={() => copyAll(newKeys)} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded transition">
+                          {copied === "all" ? "已复制！" : "复制全部"}
+                        </button>
+                      </div>
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {newKeys.map(k => (
+                          <div key={k} className="flex justify-between items-center bg-[#161929] rounded-lg px-3 py-2">
+                            <code className="text-white text-sm font-mono tracking-wider">{k}</code>
+                            <button onClick={() => copyKey(k)} className="text-xs text-blue-400 hover:text-blue-300 transition ml-2">
+                              {copied === k ? "✓" : "复制"}
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-
-            {newKeys.length > 0 && (
-              <div className="bg-[#161929] border border-emerald-500/20 rounded-2xl p-4">
-                <div className="flex justify-between items-center mb-3">
-                  <span className="text-emerald-400 text-sm font-semibold">刚生成 {newKeys.length} 个卡密</span>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => copyAll(newKeys)} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded transition">
-                      {copied === "all" ? "已复制！" : "复制全部"}
-                    </button>
-                    <button onClick={() => setNewKeys([])} className="text-xs text-slate-400 hover:text-slate-200 border border-[#252a3d] px-2 py-0.5 rounded transition">
-                      清空
-                    </button>
-                  </div>
-                </div>
-                <div className="space-y-2 max-h-48 overflow-y-auto">
-                  {newKeys.map(k => (
-                    <div key={k} className="flex justify-between items-center bg-[#0f1220] rounded-lg px-3 py-2">
-                      <code className="text-white text-sm font-mono tracking-wider">{k}</code>
-                      <button onClick={() => copyKey(k)} className="text-xs text-blue-400 hover:text-blue-300 transition ml-2">
-                        {copied === k ? "✓" : "复制"}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
               <div className="flex justify-between items-center px-5 py-3 border-b border-[#252a3d]">
