@@ -7,7 +7,8 @@
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "render:build": "pnpm install && pnpm --filter @workspace/db run push && cd artifacts/lottery-bot && pnpm build && cd ../api-server && pnpm build",
+    "render:build": "pnpm install && cd artifacts/lottery-bot && pnpm build && cd ../api-server && pnpm build",
+    "render:db:push": "cd lib/db && pnpm run push",
     "render:start": "cd artifacts/api-server && pnpm start"
   },
   "private": true,
