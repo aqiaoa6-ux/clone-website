@@ -90,6 +90,7 @@ export default function AdminPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "unused" | "active" | "expired">("all");
   const [showGenerate, setShowGenerate] = useState(false);
+  const [generateError, setGenerateError] = useState("");
 
   useEffect(() => {
     if (!ADMIN_VISIBLE_TABS.includes(tab as (typeof ADMIN_VISIBLE_TABS)[number])) {
@@ -793,15 +794,36 @@ export default function AdminPage() {
   };
 
   const generate = async () => {
-    setGenerating(true); setNewKeys([]); setShowGenerate(true);
+    setGenerating(true); setNewKeys([]); setShowGenerate(true); setGenerateError("");
     try {
       const { keys } = await api.admin.generateCards(type, Number(count) || 1, note || undefined);
       setNewKeys(keys);
       setFilter("unused");
       if (keys.length > 0) {
+        const nowIso = new Date().toISOString();
+        const optimisticCards: AdminCard[] = keys.map((key, index) => ({
+          id: -(Date.now() + index),
+          key,
+          type,
+          userId: null,
+          username: null,
+          expiresAt: null,
+          activatedAt: null,
+          createdAt: nowIso,
+          note: note || null,
+          isActive: false,
+          isUsed: false,
+        }));
+        setCards(prev => [...optimisticCards, ...prev.filter(card => !keys.includes(card.key))]);
+      }
+      if (keys.length > 0) {
         window.alert(`已生成 ${keys.length} 个卡密：\n\n${keys.join("\n")}`);
       }
       await loadCards();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "生成失败";
+      setGenerateError(message);
+      window.alert(`生成失败：${message}`);
     } finally { setGenerating(false); }
   };
 
@@ -939,6 +961,11 @@ export default function AdminPage() {
               </button>
               {showGenerate && (
                 <div className="px-5 pb-5 border-t border-[#252a3d]">
+                  {generateError && (
+                    <div className="mt-4 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg px-4 py-3">
+                      {generateError}
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-2 mb-4 mt-4">
                     {(["daily", "weekly", "monthly"] as const).map(t => (
                       <button key={t} onClick={() => setType(t)}
