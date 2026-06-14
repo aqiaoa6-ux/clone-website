@@ -271,7 +271,7 @@ export default function CanadaPage() {
         </div>
       )}
 
-      <div className="sticky top-0 z-40 bg-[#0b0e1a]/95 border-b border-[#1e2235] backdrop-blur">
+      <div className="bg-[#0b0e1a] border-b border-[#1e2235]">
         <div className="max-w-lg mx-auto px-4 py-3 flex justify-between items-center">
           <div className="flex items-center gap-2">
             <button
