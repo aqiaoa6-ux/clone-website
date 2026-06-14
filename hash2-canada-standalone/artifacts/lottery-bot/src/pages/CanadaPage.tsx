@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import BottomNav from "../components/BottomNav";
@@ -314,12 +314,22 @@ export default function CanadaPage() {
               <div className="text-[10px] text-slate-500">独立模块，不影响原哈希</div>
             </div>
           </div>
-          <button
-            onClick={() => void logout()}
-            className="text-xs px-2.5 py-0.5 rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition"
-          >
-            退出
-          </button>
+          <div className="flex items-center gap-2">
+            {user?.isAdmin && (
+              <button
+                onClick={() => setLocation("/admin")}
+                className="text-xs px-2.5 py-0.5 rounded-full border border-blue-500/40 text-blue-300 hover:bg-blue-500/20 hover:text-blue-200 transition"
+              >
+                后台
+              </button>
+            )}
+            <button
+              onClick={() => void logout()}
+              className="text-xs px-2.5 py-0.5 rounded-full border border-red-500/40 text-red-400 hover:bg-red-500/20 hover:text-red-300 transition"
+            >
+              退出
+            </button>
+          </div>
         </div>
       </div>
 
