@@ -1,6 +1,7 @@
-﻿import { Router } from "express";
+import { Router } from "express";
 import { Api } from "telegram";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { requireCard } from "../middleware/requireAuth";
 import { logger } from "../lib/logger";
@@ -117,11 +118,38 @@ const HASH2_DEFAULT_SPECIAL_ODDS: Record<string, number> = {
 };
 const canadaLoopInFlight = new Set<number>();
 const canadaBetDelayTimers = new Map<number, ReturnType<typeof setTimeout>>();
+let cachedDataDir: string | null = null;
+
+function tryEnsureWritableDir(dir: string): boolean {
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.probe-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
+    fs.writeFileSync(probe, "1", "utf-8");
+    fs.unlinkSync(probe);
+    return true;
+  } catch (err) {
+    logger.warn({ dir, err }, "[canada] data dir not writable");
+    return false;
+  }
+}
 
 function dataDir(): string {
-  const dir = process.env.DATA_DIR ?? process.cwd();
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  return dir;
+  if (cachedDataDir) return cachedDataDir;
+  const candidates = [
+    process.env.DATA_DIR,
+    process.env.RENDER_DISK_PATH,
+    path.join(process.cwd(), "data"),
+    path.join(os.tmpdir(), "hash2-canada"),
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  for (const dir of candidates) {
+    if (tryEnsureWritableDir(dir)) {
+      cachedDataDir = dir;
+      return dir;
+    }
+  }
+
+  throw new Error("数据目录不可写");
 }
 
 function canadaFile(userId: number): string {

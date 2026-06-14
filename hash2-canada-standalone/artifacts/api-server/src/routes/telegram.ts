@@ -5,6 +5,7 @@ import { Api } from "telegram";
 import bigInt from "big-integer";
 import { NewMessage, NewMessageEvent, Raw } from "telegram/events/index.js";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { logger } from "../lib/logger";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
@@ -714,10 +715,42 @@ function startKkpayRawPwdListener(session: TgSession): void {
 
 // ─── Session persistence ──────────────────────────────────────────────────────
 
+let cachedSessionDir: string | null = null;
+
+function tryEnsureWritableDir(dir: string): boolean {
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.probe-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
+    fs.writeFileSync(probe, "1", "utf-8");
+    fs.unlinkSync(probe);
+    return true;
+  } catch (err) {
+    logger.warn({ dir, err }, "[tg] session dir not writable");
+    return false;
+  }
+}
+
+function sessionDir(): string {
+  if (cachedSessionDir) return cachedSessionDir;
+  const candidates = [
+    process.env.DATA_DIR,
+    process.env.RENDER_DISK_PATH,
+    path.join(process.cwd(), "data"),
+    path.join(os.tmpdir(), "hash2-canada"),
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+
+  for (const dir of candidates) {
+    if (tryEnsureWritableDir(dir)) {
+      cachedSessionDir = dir;
+      return dir;
+    }
+  }
+
+  throw new Error("数据目录不可写");
+}
+
 function sessionFile(userId: number): string {
-  const base = process.env.DATA_DIR ?? process.cwd();
-  try { fs.mkdirSync(base, { recursive: true }); } catch {}
-  return path.join(base, `.tg-session-${userId}.json`);
+  return path.join(sessionDir(), `.tg-session-${userId}.json`);
 }
 
 function saveSession(session: TgSession): void {
@@ -1066,8 +1099,12 @@ async function restoreUserSessionFromDb(userId: number, sessionString: string): 
 }
 
 async function restoreAllSessions(): Promise<void> {
-  const cwd = process.env.DATA_DIR ?? process.cwd();
-  try { fs.mkdirSync(cwd, { recursive: true }); } catch {}
+  let cwd: string;
+  try {
+    cwd = sessionDir();
+  } catch {
+    return;
+  }
   const restoredFromFile = new Set<number>();
   try {
     const files = fs.readdirSync(cwd).filter(f => /^\.tg-session-\d+\.json$/.test(f));
