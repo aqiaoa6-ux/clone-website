@@ -15,6 +15,7 @@ function calcCountdown(expiresAt: string): string | null {
 interface AuthContextValue {
   user: AuthUser | null;
   card: CardStatus | null;
+  cardLoading: boolean;
   countdown: string | null;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
@@ -28,6 +29,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [card, setCard] = useState<CardStatus | null>(null);
+  const [cardLoading, setCardLoading] = useState(false);
   const [countdown, setCountdown] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const expiredFiredRef = useRef(false);
@@ -37,16 +39,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     sessionStorage.removeItem("session_confirmed");
     setUser(null);
     setCard(null);
+    setCardLoading(false);
     setCountdown(null);
   }, []);
 
   const refreshCard = useCallback(async () => {
-    if (!user) { setCard(null); return; }
+    if (!user) {
+      setCard(null);
+      setCardLoading(false);
+      return;
+    }
+    setCardLoading(true);
     try {
       const status = await api.card.status();
       setCard(status);
     } catch {
-      setCard({ active: false });
+      setCard(prev => prev);
+    } finally {
+      setCardLoading(false);
     }
   }, [user]);
 
@@ -66,7 +76,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (user) void refreshCard();
-    else setCard(null);
+    else {
+      setCard(null);
+      setCardLoading(false);
+    }
   }, [user, refreshCard]);
 
   // Poll card status every 60s to stay in sync with server
@@ -116,7 +129,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, card, countdown, loading, login, register, logout, refreshCard }}>
+    <AuthContext.Provider value={{ user, card, cardLoading, countdown, loading, login, register, logout, refreshCard }}>
       {children}
     </AuthContext.Provider>
   );

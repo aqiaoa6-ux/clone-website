@@ -19,9 +19,9 @@ function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: 
   requireCard?: boolean;
   requireAdmin?: boolean;
 }) {
-  const { user, card, loading } = useAuth();
+  const { user, card, loading, cardLoading } = useAuth();
 
-  if (loading) {
+  if (loading || (user && requireCard && !user.isAdmin && cardLoading)) {
     return (
       <div className="min-h-screen bg-[#0b0e1a] flex items-center justify-center">
         <div className="text-slate-500 text-sm">加载中...</div>
@@ -45,9 +45,9 @@ function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: 
 }
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
-  const { user, card, loading } = useAuth();
+  const { user, card, loading, cardLoading } = useAuth();
 
-  if (loading) {
+  if (loading || (user && !user.isAdmin && cardLoading)) {
     return (
       <div className="min-h-screen bg-[#0b0e1a] flex items-center justify-center">
         <div className="text-slate-500 text-sm">加载中...</div>
