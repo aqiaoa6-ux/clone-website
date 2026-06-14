@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type TgGroup, type TgStatus } from "../lib/api";
 
-type TgStep = "login" | "group" | "ready";
+type TgStep = "login" | "group" | "alertGroup" | "ready";
 
 const TG_LAST_GROUP_KEY = "tg_last_group_id_v1";
 
@@ -226,6 +226,89 @@ function TgGroupCard({
   );
 }
 
+function TgAlertGroupCard({
+  groups,
+  onDone,
+}: {
+  groups: TgGroup[];
+  onDone: () => Promise<unknown> | void;
+}) {
+  const [search, setSearch] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const filteredGroups = useMemo(
+    () => groups.filter(g => g.type !== "bot" && g.title.toLowerCase().includes(search.toLowerCase())),
+    [groups, search],
+  );
+
+  const selectGroup = async (groupId: string) => {
+    setError("");
+    setLoading(true);
+    try {
+      await api.tg.setAlertGroup(groupId);
+      await onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "设置提醒群失败");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5 mb-4">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-lg">🔔</span>
+        <h3 className="text-white font-semibold">设置提醒群（止盈止损）</h3>
+      </div>
+
+      {error && <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs rounded-lg px-3 py-2 mb-3">{error}</div>}
+
+      <div className="mb-3">
+        <input
+          type="text" value={search} onChange={e => setSearch(e.target.value)}
+          placeholder="搜索群组..."
+          className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm placeholder-slate-600 focus:outline-none focus:border-blue-500"
+        />
+      </div>
+
+      <div className="max-h-60 overflow-y-auto space-y-1.5 custom-scrollbar">
+        {filteredGroups.map(group => (
+          <button
+            key={group.id}
+            onClick={() => void selectGroup(group.id)}
+            disabled={loading}
+            className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl border border-transparent hover:border-[#252a3d] hover:bg-[#1e2235] text-left transition disabled:opacity-50"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-lg leading-none">{group.type === "channel" ? "📢" : "👥"}</span>
+              <div>
+                <div className="text-slate-200 text-sm font-medium">{group.title}</div>
+                {group.membersCount && <div className="text-slate-500 text-xs mt-0.5">{group.membersCount} 成员</div>}
+              </div>
+            </div>
+          </button>
+        ))}
+      </div>
+
+      {filteredGroups.length === 0 && (
+        <div className="rounded-xl border border-dashed border-[#252a3d] px-3 py-4 text-center text-xs text-slate-500">
+          没找到群或频道
+        </div>
+      )}
+
+      <div className="mt-4 pt-3 border-t border-[#1e2235]">
+        <button
+          onClick={() => { void onDone(); }}
+          className="w-full text-slate-500 hover:text-slate-300 text-xs transition py-1"
+        >
+          取消，返回
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function TgAccessPanel({
   tgStatus,
   onStatusChange,
@@ -296,6 +379,18 @@ export default function TgAccessPanel({
     );
   }
 
+  if (step === "alertGroup") {
+    return (
+      <TgAlertGroupCard
+        groups={groups}
+        onDone={async () => {
+          await refreshStatus();
+          setStep("ready");
+        }}
+      />
+    );
+  }
+
   return (
     <div className="rounded-2xl border border-[#252a3d] bg-[#161929] p-4">
       <div className="flex items-start justify-between gap-3">
@@ -332,6 +427,19 @@ export default function TgAccessPanel({
             断开TG
           </button>
         </div>
+      </div>
+      
+      <div className="mt-3 pt-3 border-t border-[#1e2235]">
+        <button
+          onClick={() => {
+            void loadGroups();
+            setStep("alertGroup");
+          }}
+          disabled={loadingGroups}
+          className="w-full rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2 text-xs text-slate-300 hover:text-white transition"
+        >
+          🔔 {tgStatus?.alertGroupTitle ? `提醒群：${tgStatus.alertGroupTitle.slice(0, 15)}...` : "设置提醒群"}
+        </button>
       </div>
     </div>
   );
