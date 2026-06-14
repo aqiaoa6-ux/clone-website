@@ -41,6 +41,7 @@ const ADMIN_TAB_LABELS: Record<(typeof ADMIN_VISIBLE_TABS)[number], string> = {
   users: "账号管理",
   shop: "🛒 商店",
 };
+const GENERATED_KEYS_STORAGE = "admin_generated_keys_v1";
 
 export default function AdminPage() {
   const { user, logout } = useAuth();
@@ -76,7 +77,16 @@ export default function AdminPage() {
   const [count, setCount] = useState("1");
   const [note, setNote] = useState("");
   const [generating, setGenerating] = useState(false);
-  const [newKeys, setNewKeys] = useState<string[]>([]);
+  const [newKeys, setNewKeys] = useState<string[]>(() => {
+    try {
+      const raw = sessionStorage.getItem(GENERATED_KEYS_STORAGE);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+    } catch {
+      return [];
+    }
+  });
   const [copied, setCopied] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "unused" | "active" | "expired">("all");
   const [showGenerate, setShowGenerate] = useState(false);
@@ -86,6 +96,15 @@ export default function AdminPage() {
       setTab("cards");
     }
   }, [tab]);
+
+  useEffect(() => {
+    try {
+      if (newKeys.length > 0) sessionStorage.setItem(GENERATED_KEYS_STORAGE, JSON.stringify(newKeys));
+      else sessionStorage.removeItem(GENERATED_KEYS_STORAGE);
+    } catch {
+      // ignore storage failure
+    }
+  }, [newKeys]);
 
   // ── monitor tab ──
   const [sessions, setSessions] = useState<AdminTgSession[]>([]);
@@ -779,6 +798,9 @@ export default function AdminPage() {
       const { keys } = await api.admin.generateCards(type, Number(count) || 1, note || undefined);
       setNewKeys(keys);
       setFilter("unused");
+      if (keys.length > 0) {
+        window.alert(`已生成 ${keys.length} 个卡密：\n\n${keys.join("\n")}`);
+      }
       await loadCards();
     } finally { setGenerating(false); }
   };
@@ -949,9 +971,14 @@ export default function AdminPage() {
               <div className="bg-[#161929] border border-emerald-500/20 rounded-2xl p-4">
                 <div className="flex justify-between items-center mb-3">
                   <span className="text-emerald-400 text-sm font-semibold">刚生成 {newKeys.length} 个卡密</span>
-                  <button onClick={() => copyAll(newKeys)} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded transition">
-                    {copied === "all" ? "已复制！" : "复制全部"}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => copyAll(newKeys)} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded transition">
+                      {copied === "all" ? "已复制！" : "复制全部"}
+                    </button>
+                    <button onClick={() => setNewKeys([])} className="text-xs text-slate-400 hover:text-slate-200 border border-[#252a3d] px-2 py-0.5 rounded transition">
+                      清空
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {newKeys.map(k => (
