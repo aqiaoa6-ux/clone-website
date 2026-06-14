@@ -84,7 +84,7 @@ export default function LoginPage() {
         <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-6 shadow-xl">
           <h2 className="text-lg font-semibold text-white mb-5">账号登录</h2>
           <div className="bg-blue-500/10 border border-blue-500/20 text-blue-200 text-xs rounded-lg px-4 py-3 mb-4 leading-relaxed">
-            登录后先进入首页，前台只保留哈希2和加拿大，管理员可直接进入后台。
+            登录后默认进入哈希2，前台保留哈希2和加拿大，管理员可从页面进入后台。
           </div>
 
           {error && (

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import BottomNav from "../components/BottomNav";
+import TgAccessPanel from "../components/TgAccessPanel";
 import { api, type CanadaConfig, type CanadaPlan, type CanadaRuntime, type TgStatus } from "../lib/api";
 
 const HASH2_BET_OPTIONS: Array<{ key: string; label: string; group: "玩法1" | "玩法2" }> = [
@@ -350,6 +351,11 @@ export default function CanadaPage() {
             </div>
           </div>
         </div>
+
+        <TgAccessPanel
+          tgStatus={tgStatus}
+          onStatusChange={status => setTgStatus(status)}
+        />
 
         <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
           <div className="text-white font-semibold text-sm mb-2">运行环境</div>

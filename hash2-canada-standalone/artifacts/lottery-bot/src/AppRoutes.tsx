@@ -3,7 +3,6 @@ import { useAuth } from "./context/AuthContext";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import CardKeyPage from "./pages/CardKeyPage";
-import HomePage from "./pages/HomePage";
 import Hash2Page from "./pages/Hash2Page";
 import Hash2SettlePage from "./pages/Hash2SettlePage";
 import CanadaPage from "./pages/CanadaPage";
@@ -107,7 +106,7 @@ export default function AppRoutes() {
       </Route>
       <Route path="/">
         <ProtectedRoute requireCard={false}>
-          <HomePage />
+          <Redirect to="/hash2" />
         </ProtectedRoute>
       </Route>
       <Route>
