@@ -84,7 +84,7 @@ interface ParsedCanadaResult {
 const HASH2_MAX_PLANS = 5;
 const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
-const HASH2_RESULT_CHANNEL = "hx28kjw";
+const HASH2_RESULT_CHANNEL = "pc28";
 const HASH2_ALLOWED_BETS = new Set([
   "big", "small", "odd", "even",
   "big-odd", "big-even", "small-odd", "small-even",
@@ -693,7 +693,7 @@ function scheduleCanadaAutoBet(session: TgSession, settledPeriod: string): void 
       runtime.updatedAt = Date.now();
       saveRuntime(session.userId, runtime);
     })();
-  }, 50_000));
+  }, 80_000));
 }
 
 function startCanadaLoop(): void {
