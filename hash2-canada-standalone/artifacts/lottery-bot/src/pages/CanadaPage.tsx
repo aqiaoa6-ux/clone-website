@@ -136,51 +136,15 @@ export default function CanadaPage() {
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
   const [testingAlert, setTestingAlert] = useState(false);
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
-  const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
-  const [draw, setDraw] = useState<DrawState | null>(null);
-  const seenAlertStorageKey = "canada_seen_alert_id";
-  const [seenAlertId, setSeenAlertId] = useState<string>(() => sessionStorage.getItem(seenAlertStorageKey) ?? "");
-  const drawSigRef = useRef("");
-  const nextCloseRef = useRef(0);
-
-  const fetchDraw = useCallback(async () => {
-    try {
-      const data = await api.lottery.fengpan();
-      const items = data?.message?.all?.keno28?.data ?? [];
-      if (!items.length) return;
-      const latest = items[0]!;
-      const closeMs = latest.closeTime ?? 0;
-      const openMs = latest.openTime ?? 0;
-      const now = Date.now();
-      const cycleMs = closeMs > openMs && closeMs - openMs < 600_000 ? closeMs - openMs : 210_000;
-      const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
-      nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
-      const next = {
-        term: latest.term + (closeMs < now ? 1 : 0),
-        sum1: latest.sum1,
-        sum2: latest.sum2,
-        sum3: latest.sum3,
-        result: latest.result,
-        nextCloseTime: nextCloseRef.current,
-      };
-      const sig = `${next.term}|${next.sum1}|${next.sum2}|${next.sum3}|${next.result}|${next.nextCloseTime}`;
-      if (sig === drawSigRef.current) return;
-      drawSigRef.current = sig;
-      setDraw(next);
-    } catch {
-      // ignore draw poll errors
-    }
-  }, []);
 
   useEffect(() => {
     let mounted = true;
     void (async () => {
       try {
-        const [cfg, tg, rt] = await Promise.all([api.canada.config(), api.tg.status(), api.canada.runtime()]);
+        const [cfg, tg] = await Promise.all([api.canada.config(), api.tg.status()]);
         if (!mounted) return;
         setConfig(cfg.plans?.length ? cfg : makeDefaultConfig());
         setTgStatus(tg);
-        setRuntime(rt.runtime);
       } catch {
         if (!mounted) return;
         setConfig(makeDefaultConfig());
@@ -188,55 +152,10 @@ export default function CanadaPage() {
         if (mounted) setLoading(false);
       }
     })();
-    void fetchDraw();
     return () => { mounted = false; };
-  }, [fetchDraw]);
-
-  useEffect(() => {
-    const runtimeTimer = window.setInterval(() => {
-      void (async () => {
-        try {
-          const rt = await api.canada.runtime();
-          setRuntime(prev => {
-            const next = rt.runtime;
-            if (!prev) return next;
-            if (prev.updatedAt === next.updatedAt) return prev;
-            return next;
-          });
-        } catch {
-          // ignore poll errors
-        }
-      })();
-    }, 4000);
-    const drawTimer = window.setInterval(() => {
-      void fetchDraw();
-    }, 15000);
-    return () => {
-      window.clearInterval(runtimeTimer);
-      window.clearInterval(drawTimer);
-    };
-  }, [fetchDraw]);
-
-  useEffect(() => {
-    const latest = runtime?.lastAlert;
-    if (!latest || latest.id === seenAlertId) return;
-    setSeenAlertId(latest.id);
-    sessionStorage.setItem(seenAlertStorageKey, latest.id);
-    setAlertMessage(latest.message);
-    if (!latest.voice) return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-    try {
-      const utterance = new SpeechSynthesisUtterance(latest.message);
-      utterance.lang = "zh-CN";
-      window.speechSynthesis.cancel();
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      // ignore browser voice failures
-    }
-  }, [runtime?.lastAlert, seenAlertId]);
+  }, []);
 
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
-  const currentPlanRuntime = currentPlan ? runtime?.plans?.[currentPlan.id] : undefined;
   const currentLevelSummary = useMemo(() => {
     if (!currentPlan.bets.length) return "";
     return `同方案共用层级 · 任意命中回第1手 · 全部未中才进下一手`;
@@ -322,8 +241,6 @@ export default function CanadaPage() {
     try {
       const { config: saved } = await api.canada.saveConfig(config);
       setConfig(saved);
-      const rt = await api.canada.runtime();
-      setRuntime(rt.runtime);
       setAlertMessage("加拿大配置已保存");
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "保存失败");
@@ -337,8 +254,6 @@ export default function CanadaPage() {
     try {
       const res = await api.canada.testAlert("加拿大提醒测试：网页提醒已触发");
       setAlertMessage(res.message);
-      const rt = await api.canada.runtime();
-      setRuntime(rt.runtime);
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "提醒测试失败");
     } finally {
@@ -412,54 +327,10 @@ export default function CanadaPage() {
           onStatusChange={status => setTgStatus(status)}
         />
 
-        <CanadaCountdownCard
-          draw={draw}
-          activePeriod={runtime?.activePeriod ?? null}
+        <CanadaLiveOverview
+          tgStatus={tgStatus}
+          onAlert={message => setAlertMessage(message)}
         />
-
-        <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
-          <div className="text-white font-semibold text-sm mb-2">运行环境</div>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">TG 连接</div>
-              <div className={tgStatus?.connected ? "text-emerald-400 mt-1" : "text-red-400 mt-1"}>
-                {tgStatus?.connected ? "已连接" : "未连接"}
-              </div>
-            </div>
-            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">投注群组</div>
-              <div className="text-white mt-1 truncate">
-                {tgStatus?.watchGroupTitle ?? "未选择"}
-              </div>
-            </div>
-          </div>
-          <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
-            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">当前期号</div>
-              <div className="text-white mt-1">{runtime?.activePeriod ?? "等待中"}</div>
-            </div>
-            <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">最近提醒</div>
-              <div className="text-white mt-1 truncate">{runtime?.lastAlert?.message ?? "暂无"}</div>
-            </div>
-          </div>
-          <div className="mt-3 grid grid-cols-3 gap-2">
-            <button
-              onClick={() => void testAlert()}
-              disabled={testingAlert}
-              className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm py-2 rounded-xl transition"
-            >
-              {testingAlert ? "测试中..." : "测试网页提醒"}
-            </button>
-            <button
-              onClick={() => void saveConfig()}
-              disabled={saving}
-              className="bg-[#252a3d] hover:bg-[#30375a] disabled:opacity-50 text-slate-200 text-sm py-2 rounded-xl transition"
-            >
-              {saving ? "保存中..." : "保存加拿大"}
-            </button>
-          </div>
-        </div>
 
         <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
           <div className="text-white font-semibold text-sm mb-3">方案列表</div>
@@ -500,31 +371,10 @@ export default function CanadaPage() {
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <div className="text-slate-500">当前层级</div>
-                <div className="text-white mt-1">第{(currentPlanRuntime?.currentLevel ?? 0) + 1}手</div>
-                <div className="text-[10px] text-slate-500 mt-1 truncate">
-                  {currentLevelSummary || "暂无"}
-                </div>
-              </div>
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <div className="text-slate-500">累计盈亏</div>
-                <div className={`${(currentPlanRuntime?.sessionPnl ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"} mt-1`}>
-                  {(currentPlanRuntime?.sessionPnl ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
-                </div>
-              </div>
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <div className="text-slate-500">最近发单</div>
-                <div className="text-white mt-1 truncate">{currentPlanRuntime?.lastMessage || "暂无"}</div>
-              </div>
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <div className="text-slate-500">状态</div>
-                <div className={`${currentPlanRuntime?.blockedReason ? "text-red-400" : "text-emerald-400"} mt-1 truncate`}>
-                  {currentPlanRuntime?.blockedReason ?? "运行中/待触发"}
-                </div>
-              </div>
-            </div>
+            <CanadaPlanRuntimeSummary
+              activePlanId={currentPlan.id}
+              currentLevelSummary={currentLevelSummary}
+            />
 
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -610,6 +460,23 @@ export default function CanadaPage() {
                   onChange={e => updatePlan(activePlan, { voiceAlertEnabled: e.target.checked })}
                 />
               </label>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => void testAlert()}
+                disabled={testingAlert}
+                className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-sm py-2 rounded-xl transition"
+              >
+                {testingAlert ? "测试中..." : "测试网页提醒"}
+              </button>
+              <button
+                onClick={() => void saveConfig()}
+                disabled={saving}
+                className="bg-[#252a3d] hover:bg-[#30375a] disabled:opacity-50 text-slate-200 text-sm py-2 rounded-xl transition"
+              >
+                {saving ? "保存中..." : "保存加拿大"}
+              </button>
             </div>
 
             {currentPlan.enabled && currentPlan.bets.length > 0 && (currentPlan.amountLevels[0] ?? currentPlan.baseAmount ?? 0) === 0 && (
@@ -867,14 +734,92 @@ export default function CanadaPage() {
   );
 }
 
-function CanadaCountdownCard({
-  draw,
-  activePeriod,
+function CanadaLiveOverview({
+  tgStatus,
+  onAlert,
 }: {
-  draw: DrawState | null;
-  activePeriod: string | null;
+  tgStatus: TgStatus | null;
+  onAlert: (message: string) => void;
 }) {
+  const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
+  const [draw, setDraw] = useState<DrawState | null>(null);
   const [nowMs, setNowMs] = useState(Date.now());
+  const seenAlertStorageKey = "canada_seen_alert_id";
+  const [seenAlertId, setSeenAlertId] = useState<string>(() => sessionStorage.getItem(seenAlertStorageKey) ?? "");
+  const drawSigRef = useRef("");
+  const nextCloseRef = useRef(0);
+
+  const fetchRuntime = useCallback(async () => {
+    try {
+      const rt = await api.canada.runtime();
+      setRuntime(prev => {
+        const next = rt.runtime;
+        if (!prev) return next;
+        if (prev.updatedAt === next.updatedAt) return prev;
+        return next;
+      });
+    } catch {
+      // ignore runtime poll errors
+    }
+  }, []);
+
+  const fetchDraw = useCallback(async () => {
+    try {
+      const data = await api.lottery.fengpan();
+      const items = data?.message?.all?.keno28?.data ?? [];
+      if (!items.length) return;
+      const latest = items[0]!;
+      const closeMs = latest.closeTime ?? 0;
+      const openMs = latest.openTime ?? 0;
+      const now = Date.now();
+      const cycleMs = closeMs > openMs && closeMs - openMs < 600_000 ? closeMs - openMs : 210_000;
+      const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
+      nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
+      const next = {
+        term: latest.term + (closeMs < now ? 1 : 0),
+        sum1: latest.sum1,
+        sum2: latest.sum2,
+        sum3: latest.sum3,
+        result: latest.result,
+        nextCloseTime: nextCloseRef.current,
+      };
+      const sig = `${next.term}|${next.sum1}|${next.sum2}|${next.sum3}|${next.result}|${next.nextCloseTime}`;
+      if (sig === drawSigRef.current) return;
+      drawSigRef.current = sig;
+      setDraw(next);
+    } catch {
+      // ignore draw poll errors
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchRuntime();
+    void fetchDraw();
+    const runtimeId = window.setInterval(() => { void fetchRuntime(); }, 4000);
+    const drawId = window.setInterval(() => { void fetchDraw(); }, 15000);
+    return () => {
+      window.clearInterval(runtimeId);
+      window.clearInterval(drawId);
+    };
+  }, [fetchDraw, fetchRuntime]);
+
+  useEffect(() => {
+    const latest = runtime?.lastAlert;
+    if (!latest || latest.id === seenAlertId) return;
+    setSeenAlertId(latest.id);
+    sessionStorage.setItem(seenAlertStorageKey, latest.id);
+    onAlert(latest.message);
+    if (!latest.voice) return;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    try {
+      const utterance = new SpeechSynthesisUtterance(latest.message);
+      utterance.lang = "zh-CN";
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      // ignore browser voice failures
+    }
+  }, [onAlert, runtime?.lastAlert, seenAlertId]);
 
   useEffect(() => {
     if (!draw?.nextCloseTime) return;
@@ -882,7 +827,7 @@ function CanadaCountdownCard({
     return () => window.clearInterval(id);
   }, [draw?.nextCloseTime]);
 
-  const periodLabel = draw?.term ? `${draw.term}期` : (activePeriod ? `${activePeriod}期` : "等待中");
+  const periodLabel = draw?.term ? `${draw.term}期` : (runtime?.activePeriod ? `${runtime.activePeriod}期` : "等待中");
   const countdown = draw?.nextCloseTime ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
   const cycleSec = 210;
   const pct = Math.min(100, Math.max(0, (countdown / cycleSec) * 100));
@@ -893,50 +838,139 @@ function CanadaCountdownCard({
   const parityLabel = total % 2 === 0 ? "双" : "单";
 
   return (
-    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5">
-      <div className="flex justify-between items-start gap-3 mb-4">
-        <div>
-          <div className="text-slate-400 text-sm">当前期号</div>
-          <div className="text-white text-3xl font-bold mt-1">{periodLabel}</div>
-        </div>
-        {balls.length === 3 && (
-          <div className="flex items-center gap-2 flex-wrap justify-end">
-            {balls.map((value, index) => {
-              const isAccent = index === 1;
-              return (
-                <div key={`${index}-${value}`} className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${isAccent ? "bg-orange-500 text-white" : "bg-slate-600 text-white"}`}>
-                  {value}
-                </div>
-              );
-            })}
-            <span className="text-slate-500 text-lg">=</span>
-            <div className="w-10 h-10 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold">
-              {total}
-            </div>
-            <div className="text-slate-300 text-sm">{sizeLabel}{parityLabel}</div>
+    <>
+      <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-5">
+        <div className="flex justify-between items-start gap-3 mb-4">
+          <div>
+            <div className="text-slate-400 text-sm">当前期号</div>
+            <div className="text-white text-3xl font-bold mt-1">{periodLabel}</div>
           </div>
-        )}
+          {balls.length === 3 && (
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {balls.map((value, index) => {
+                const isAccent = index === 1;
+                return (
+                  <div key={`${index}-${value}`} className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold ${isAccent ? "bg-orange-500 text-white" : "bg-slate-600 text-white"}`}>
+                    {value}
+                  </div>
+                );
+              })}
+              <span className="text-slate-500 text-lg">=</span>
+              <div className="w-10 h-10 rounded-full bg-blue-500 text-white flex items-center justify-center text-sm font-bold">
+                {total}
+              </div>
+              <div className="text-slate-300 text-sm">{sizeLabel}{parityLabel}</div>
+            </div>
+          )}
+        </div>
+
+        <div className="text-center py-2">
+          <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"}`}>
+            {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
+          </div>
+          <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
+        </div>
+
+        <div className="mt-2">
+          <div className="relative h-2 bg-[#0f1220] rounded-full overflow-hidden">
+            <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
+            <div
+              className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-[10px] text-slate-600 mt-1">
+            <span>开奖</span>
+            <span className="text-yellow-600/70">←投注区间 01:20→</span>
+            <span>封盘</span>
+          </div>
+        </div>
+
       </div>
 
-      <div className="text-center py-2">
-        <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"}`}>
-          {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
+      <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+        <div className="text-white font-semibold text-sm mb-2">运行环境</div>
+        <div className="grid grid-cols-2 gap-3 text-xs">
+          <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+            <div className="text-slate-500">TG 连接</div>
+            <div className={tgStatus?.connected ? "text-emerald-400 mt-1" : "text-red-400 mt-1"}>
+              {tgStatus?.connected ? "已连接" : "未连接"}
+            </div>
+          </div>
+          <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+            <div className="text-slate-500">投注群组</div>
+            <div className="text-white mt-1 truncate">{tgStatus?.watchGroupTitle ?? "未选择"}</div>
+          </div>
         </div>
-        <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
+        <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
+          <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+            <div className="text-slate-500">当前期号</div>
+            <div className="text-white mt-1">{runtime?.activePeriod ?? "等待中"}</div>
+          </div>
+          <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+            <div className="text-slate-500">最近提醒</div>
+            <div className="text-white mt-1 truncate">{runtime?.lastAlert?.message ?? "暂无"}</div>
+          </div>
+        </div>
       </div>
+    </>
+  );
+}
 
-      <div className="mt-2">
-        <div className="relative h-2 bg-[#0f1220] rounded-full overflow-hidden">
-          <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
-          <div
-            className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"}`}
-            style={{ width: `${pct}%` }}
-          />
+function CanadaPlanRuntimeSummary({
+  activePlanId,
+  currentLevelSummary,
+}: {
+  activePlanId: string;
+  currentLevelSummary: string;
+}) {
+  const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
+
+  const fetchRuntime = useCallback(async () => {
+    try {
+      const rt = await api.canada.runtime();
+      setRuntime(prev => {
+        const next = rt.runtime;
+        if (!prev) return next;
+        if (prev.updatedAt === next.updatedAt) return prev;
+        return next;
+      });
+    } catch {
+      // ignore runtime poll errors
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchRuntime();
+    const id = window.setInterval(() => { void fetchRuntime(); }, 4000);
+    return () => window.clearInterval(id);
+  }, [fetchRuntime]);
+
+  const currentPlanRuntime = runtime?.plans?.[activePlanId];
+
+  return (
+    <div className="grid grid-cols-2 gap-3 text-xs">
+      <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+        <div className="text-slate-500">当前层级</div>
+        <div className="text-white mt-1">第{(currentPlanRuntime?.currentLevel ?? 0) + 1}手</div>
+        <div className="text-[10px] text-slate-500 mt-1 truncate">
+          {currentLevelSummary || "暂无"}
         </div>
-        <div className="flex justify-between text-[10px] text-slate-600 mt-1">
-          <span>开奖</span>
-          <span className="text-yellow-600/70">←投注区间 01:20→</span>
-          <span>封盘</span>
+      </div>
+      <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+        <div className="text-slate-500">累计盈亏</div>
+        <div className={`${(currentPlanRuntime?.sessionPnl ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"} mt-1`}>
+          {(currentPlanRuntime?.sessionPnl ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+        </div>
+      </div>
+      <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+        <div className="text-slate-500">最近发单</div>
+        <div className="text-white mt-1 truncate">{currentPlanRuntime?.lastMessage || "暂无"}</div>
+      </div>
+      <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+        <div className="text-slate-500">状态</div>
+        <div className={`${currentPlanRuntime?.blockedReason ? "text-red-400" : "text-emerald-400"} mt-1 truncate`}>
+          {currentPlanRuntime?.blockedReason ?? "运行中/待触发"}
         </div>
       </div>
     </div>
