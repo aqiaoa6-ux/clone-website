@@ -3,14 +3,11 @@ import { useAuth } from "./context/AuthContext";
 import LoginPage from "./pages/LoginPage";
 import RegisterPage from "./pages/RegisterPage";
 import CardKeyPage from "./pages/CardKeyPage";
-import Dashboard from "./pages/Dashboard";
 import Hash2Page from "./pages/Hash2Page";
 import Hash2SettlePage from "./pages/Hash2SettlePage";
 import CanadaPage from "./pages/CanadaPage";
 import CanadaSettlePage from "./pages/CanadaSettlePage";
 import AdminPage from "./pages/AdminPage";
-import TrendPage from "./pages/TrendPage";
-import TutorialPage from "./pages/TutorialPage";
 
 // sessionStorage key: set after user explicitly confirms "this is my account"
 // sessionStorage is per-tab and cleared when the tab/browser closes,
@@ -87,16 +84,6 @@ export default function AppRoutes() {
           <AdminPage />
         </ProtectedRoute>
       </Route>
-      <Route path="/trend">
-        <ProtectedRoute requireCard={false}>
-          <TrendPage />
-        </ProtectedRoute>
-      </Route>
-      <Route path="/tutorial">
-        <ProtectedRoute requireCard={false}>
-          <TutorialPage />
-        </ProtectedRoute>
-      </Route>
       <Route path="/hash2/settle">
         <ProtectedRoute>
           <Hash2SettlePage />
@@ -118,8 +105,8 @@ export default function AppRoutes() {
         </ProtectedRoute>
       </Route>
       <Route path="/">
-        <ProtectedRoute>
-          <Dashboard />
+        <ProtectedRoute requireCard={false}>
+          <Redirect to="/hash2" />
         </ProtectedRoute>
       </Route>
       <Route>

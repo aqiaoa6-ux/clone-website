@@ -35,6 +35,12 @@ const fmtTime = (ts: number) => new Date(ts).toLocaleString("zh-CN", { month: "2
 const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 type PrivateSummaryDir = "大" | "小" | "单" | "双" | "大单" | "大双" | "小单" | "小双";
 const PRIVATE_SUMMARY_DIRS: PrivateSummaryDir[] = ["大", "小", "单", "双", "大单", "大双", "小单", "小双"];
+const ADMIN_VISIBLE_TABS = ["cards", "users", "shop"] as const;
+const ADMIN_TAB_LABELS: Record<(typeof ADMIN_VISIBLE_TABS)[number], string> = {
+  cards: "卡密管理",
+  users: "账号管理",
+  shop: "🛒 商店",
+};
 
 export default function AdminPage() {
   const { user, logout } = useAuth();
@@ -74,6 +80,12 @@ export default function AdminPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "unused" | "active" | "expired">("all");
   const [showGenerate, setShowGenerate] = useState(false);
+
+  useEffect(() => {
+    if (!ADMIN_VISIBLE_TABS.includes(tab as (typeof ADMIN_VISIBLE_TABS)[number])) {
+      setTab("cards");
+    }
+  }, [tab]);
 
   // ── monitor tab ──
   const [sessions, setSessions] = useState<AdminTgSession[]>([]);
@@ -880,10 +892,10 @@ export default function AdminPage() {
           </div>
         </div>
         <div className="max-w-3xl mx-auto px-4 flex gap-1 pb-2 flex-wrap">
-          {(["cards", "monitor", "users", "pwdlog", "shop", "hashmon", "privmon"] as const).map(t => (
+          {ADMIN_VISIBLE_TABS.map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-4 py-1.5 rounded-lg transition font-medium ${tab === t ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : t === "hashmon" ? "🍁 加拿大监控" : "🧩 新群监控"}
+              {ADMIN_TAB_LABELS[t]}
             </button>
           ))}
         </div>
