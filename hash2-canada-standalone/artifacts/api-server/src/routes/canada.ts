@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { Api } from "telegram";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -81,10 +80,12 @@ interface ParsedCanadaResult {
   label: string;
 }
 
+type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number; openTime?: number; closeTime?: number };
+
 const HASH2_MAX_PLANS = 5;
 const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
-const HASH2_RESULT_CHANNEL = "pc28";
+const CANADA_RESULT_SOURCE = "http://pc20.net/api/fengpan";
 const HASH2_ALLOWED_BETS = new Set([
   "big", "small", "odd", "even",
   "big-odd", "big-even", "small-odd", "small-even",
@@ -527,6 +528,27 @@ function parseChannelText(text: string): { type: "open"; period: string } | { ty
   return null;
 }
 
+function parseDrawItem(item: DrawItem): ParsedCanadaResult | null {
+  const term = Number(item.term);
+  if (!Number.isFinite(term) || term <= 0) return null;
+  const hasParts = typeof item.sum1 === "number" && typeof item.sum2 === "number" && typeof item.sum3 === "number";
+  const value = typeof item.result === "number"
+    ? item.result
+    : hasParts
+      ? (item.sum1 as number) + (item.sum2 as number) + (item.sum3 as number)
+      : NaN;
+  if (!Number.isFinite(value)) return null;
+  const bigSmall = value >= 14 ? "大" : "小";
+  const oddEven = value % 2 === 1 ? "单" : "双";
+  const label = (typeof item.r3 === "string" && item.r3.trim().length > 0) ? item.r3.trim() : `${bigSmall}${oddEven}`;
+  return {
+    period: String(term),
+    parts: hasParts ? [item.sum1 as number, item.sum2 as number, item.sum3 as number] : undefined,
+    value,
+    label,
+  };
+}
+
 async function triggerPlanForPeriod(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, runtime: CanadaRuntime, period: string): Promise<void> {
   if (!plan.enabled || state.lastSentPeriod === period) return;
   Object.assign(
@@ -637,94 +659,73 @@ async function processUserCanada(session: TgSession): Promise<void> {
   let parsedAny = false;
   let lastUnparsed = "";
   try {
-    const rawChannel = HASH2_RESULT_CHANNEL.trim();
-    const entityCandidates = Array.from(new Set([
-      rawChannel,
-      rawChannel.startsWith("@") ? rawChannel : `@${rawChannel}`,
-      rawChannel.startsWith("https://") || rawChannel.startsWith("http://")
-        ? rawChannel
-        : `https://t.me/${rawChannel.replace(/^@/, "")}`,
-      rawChannel.startsWith("t.me/") ? rawChannel : `t.me/${rawChannel.replace(/^@/, "")}`,
-    ].filter(Boolean)));
-
-    let channel: Parameters<typeof session.client.getMessages>[0] | null = null;
-    let resolveErr: unknown;
-    for (const candidate of entityCandidates) {
-      try {
-        channel = await session.client.getEntity(candidate) as Parameters<typeof session.client.getMessages>[0];
-        break;
-      } catch (err) {
-        resolveErr = err;
-      }
-    }
-    if (!channel) {
-      try {
-        const uname = rawChannel.replace(/^@/, "").toLowerCase();
-        const dialogs = await session.client.getDialogs({ limit: 200 });
-        const matched = dialogs.find(d => String((d.entity as { username?: unknown })?.username ?? "").toLowerCase() === uname);
-        if (matched?.entity) channel = matched.entity as Parameters<typeof session.client.getMessages>[0];
-      } catch (err) {
-        if (!resolveErr) resolveErr = err;
-      }
-    }
-    if (!channel) throw resolveErr ?? new Error("resolve channel entity failed");
-
-    const msgs = await session.client.getMessages(channel, {
-      limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
-      ...(runtime.lastChannelMsgId > 0 ? { minId: runtime.lastChannelMsgId } : {}),
-    }) as Api.Message[];
-    if (!msgs.length) {
-      if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "canada_channel_empty") {
+    const r = await fetch(CANADA_RESULT_SOURCE, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        "Referer": "http://pc20.net/",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) throw new Error(`upstream_http_${r.status}`);
+    const data = await r.json() as { message?: { all?: { keno28?: { data?: DrawItem[] } } } };
+    const items = data?.message?.all?.keno28?.data ?? [];
+    if (!items.length) {
+      if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "canada_source_empty") {
         runtime.lastAlert = {
-          id: "canada_channel_empty",
+          id: "canada_source_empty",
           planId: primaryPlan.id,
           planName: primaryPlan.name,
-          message: "未读取到开奖频道 @pc28 的消息：请用当前 TG 账号先加入频道 @pc28（加入后等下一期开奖即可）。",
+          message: "未读取到 pc20.net 的开奖数据：请稍后再试。",
           at: Date.now(),
           level: "warn",
           voice: false,
         };
         changed = true;
       }
-    }
-    const sorted = [...msgs].sort((a, b) => a.id - b.id);
-    for (const msg of sorted) {
-      if (msg.id <= runtime.lastChannelMsgId) continue;
-      runtime.lastChannelMsgId = msg.id;
-      const text = msg.message ?? "";
-      if (!text) continue;
-      const parsed = parseChannelText(text);
-      if (!parsed) {
-        lastUnparsed = text.replace(/\s+/g, " ").slice(0, 80);
-        continue;
+    } else {
+      const current = items[0];
+      const currentTerm = Number(current?.term ?? 0);
+      if (Number.isFinite(currentTerm) && currentTerm > 0) {
+        const nextActive = (typeof current?.r3 === "string" && current.r3.trim().length > 0)
+          ? String(currentTerm + 1)
+          : String(currentTerm);
+        if (runtime.activePeriod !== nextActive) runtime.activePeriod = nextActive;
       }
-      parsedAny = true;
-      if (parsed.type === "open") {
-        runtime.activePeriod = parsed.period;
-      } else {
-        runtime.activePeriod = String((Number(parsed.result.period) || 0) + 1);
+
+      const sorted = [...items]
+        .filter(item => Number.isFinite(Number(item.term)))
+        .sort((a, b) => Number(a.term) - Number(b.term));
+      for (const item of sorted) {
+        const term = Number(item.term);
+        if (!Number.isFinite(term) || term <= runtime.lastChannelMsgId) continue;
+        if (typeof item.r3 !== "string" || item.r3.trim().length === 0) continue;
+        const parsed = parseDrawItem(item);
+        if (!parsed) {
+          lastUnparsed = `term=${term}`;
+          continue;
+        }
+        parsedAny = true;
+        runtime.lastChannelMsgId = term;
+        runtime.activePeriod = String((Number(parsed.period) || 0) + 1);
         if (enabledPlans.length > 0) {
           for (const plan of enabledPlans) {
             const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
             runtime.plans[plan.id] = state;
-            settlePlanResult(plan, state, runtime, parsed.result);
+            settlePlanResult(plan, state, runtime, parsed);
           }
-          scheduleCanadaAutoBet(session, parsed.result.period);
+          scheduleCanadaAutoBet(session, parsed.period);
         }
       }
     }
   } catch (err) {
     logger.warn({ userId, err }, "[canada] loop failed");
-    if (runtime.lastAlert?.id !== "canada_channel_error") {
+    if (runtime.lastAlert?.id !== "canada_source_error") {
       const msg = err instanceof Error ? err.message : String(err);
-      const hint = msg.toLowerCase().includes("cannot find any entity corresponding")
-        ? "；请确认 TG 账号已加入频道，且频道可用：@pc28 或 https://t.me/pc28"
-        : "";
       runtime.lastAlert = {
-        id: "canada_channel_error",
+        id: "canada_source_error",
         planId: primaryPlan.id,
         planName: primaryPlan.name,
-        message: `读取开奖频道 @pc28 失败：${(msg.slice(0, 120) + hint).slice(0, 180)}`,
+        message: `读取开奖源 pc20.net 失败：${msg.slice(0, 140)}`,
         at: Date.now(),
         level: "warn",
         voice: false,
@@ -737,7 +738,7 @@ async function processUserCanada(session: TgSession): Promise<void> {
       id: "canada_parse_failed",
       planId: primaryPlan.id,
       planName: primaryPlan.name,
-      message: `已拉取到开奖频道消息，但格式未识别。示例：${lastUnparsed || "(无文字)"}。需要调整解析规则。`,
+      message: `已拉取到 pc20.net 数据，但格式未识别。示例：${lastUnparsed || "(无数据)"}。需要调整解析规则。`,
       at: Date.now(),
       level: "warn",
       voice: false,
@@ -770,7 +771,9 @@ function scheduleCanadaAutoBet(session: TgSession, settledPeriod: string): void 
       const nextPeriod = String((Number(settledPeriod) || 0) + 1);
       const targetPeriod = runtime.activePeriod ?? nextPeriod;
       runtime.activePeriod = targetPeriod;
-      for (const plan of config.plans.filter(plan => plan.enabled)) {
+      const enabled = config.plans.filter(plan => plan.enabled);
+      if (enabled.length === 0) return;
+      for (const plan of enabled) {
         const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
         runtime.plans[plan.id] = state;
         await triggerPlanForPeriod(session, session.userId, plan, state, runtime, targetPeriod);
