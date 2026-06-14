@@ -629,8 +629,8 @@ async function processUserCanada(session: TgSession): Promise<void> {
   const userId = session.userId;
   const config = loadConfig(userId);
   const enabledPlans = config.plans.filter(plan => plan.enabled);
-  if (enabledPlans.length === 0) return;
   const runtime = loadRuntime(userId, config);
+  const primaryPlan = enabledPlans[0] ?? config.plans[0] ?? defaultPlan(0);
   let changed = false;
   const prevMsgId = runtime.lastChannelMsgId;
   const prevActive = runtime.activePeriod;
@@ -657,6 +657,16 @@ async function processUserCanada(session: TgSession): Promise<void> {
         resolveErr = err;
       }
     }
+    if (!channel) {
+      try {
+        const uname = rawChannel.replace(/^@/, "").toLowerCase();
+        const dialogs = await session.client.getDialogs({ limit: 200 });
+        const matched = dialogs.find(d => String((d.entity as { username?: unknown })?.username ?? "").toLowerCase() === uname);
+        if (matched?.entity) channel = matched.entity as Parameters<typeof session.client.getMessages>[0];
+      } catch (err) {
+        if (!resolveErr) resolveErr = err;
+      }
+    }
     if (!channel) throw resolveErr ?? new Error("resolve channel entity failed");
 
     const msgs = await session.client.getMessages(channel, {
@@ -665,11 +675,10 @@ async function processUserCanada(session: TgSession): Promise<void> {
     }) as Api.Message[];
     if (!msgs.length) {
       if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "canada_channel_empty") {
-        const plan = enabledPlans[0]!;
         runtime.lastAlert = {
           id: "canada_channel_empty",
-          planId: plan.id,
-          planName: plan.name,
+          planId: primaryPlan.id,
+          planName: primaryPlan.name,
           message: "未读取到开奖频道 @pc28 的消息：请用当前 TG 账号先加入频道 @pc28（加入后等下一期开奖即可）。",
           at: Date.now(),
           level: "warn",
@@ -694,26 +703,27 @@ async function processUserCanada(session: TgSession): Promise<void> {
         runtime.activePeriod = parsed.period;
       } else {
         runtime.activePeriod = String((Number(parsed.result.period) || 0) + 1);
-        for (const plan of enabledPlans) {
-          const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
-          runtime.plans[plan.id] = state;
-          settlePlanResult(plan, state, runtime, parsed.result);
+        if (enabledPlans.length > 0) {
+          for (const plan of enabledPlans) {
+            const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
+            runtime.plans[plan.id] = state;
+            settlePlanResult(plan, state, runtime, parsed.result);
+          }
+          scheduleCanadaAutoBet(session, parsed.result.period);
         }
-        scheduleCanadaAutoBet(session, parsed.result.period);
       }
     }
   } catch (err) {
     logger.warn({ userId, err }, "[canada] loop failed");
     if (runtime.lastAlert?.id !== "canada_channel_error") {
-      const plan = enabledPlans[0]!;
       const msg = err instanceof Error ? err.message : String(err);
       const hint = msg.toLowerCase().includes("cannot find any entity corresponding")
         ? "；请确认 TG 账号已加入频道，且频道可用：@pc28 或 https://t.me/pc28"
         : "";
       runtime.lastAlert = {
         id: "canada_channel_error",
-        planId: plan.id,
-        planName: plan.name,
+        planId: primaryPlan.id,
+        planName: primaryPlan.name,
         message: `读取开奖频道 @pc28 失败：${(msg.slice(0, 120) + hint).slice(0, 180)}`,
         at: Date.now(),
         level: "warn",
@@ -723,11 +733,10 @@ async function processUserCanada(session: TgSession): Promise<void> {
     }
   }
   if (runtime.lastChannelMsgId !== prevMsgId && !parsedAny && runtime.lastAlert?.id !== "canada_parse_failed") {
-    const plan = enabledPlans[0]!;
     runtime.lastAlert = {
       id: "canada_parse_failed",
-      planId: plan.id,
-      planName: plan.name,
+      planId: primaryPlan.id,
+      planName: primaryPlan.name,
       message: `已拉取到开奖频道消息，但格式未识别。示例：${lastUnparsed || "(无文字)"}。需要调整解析规则。`,
       at: Date.now(),
       level: "warn",
