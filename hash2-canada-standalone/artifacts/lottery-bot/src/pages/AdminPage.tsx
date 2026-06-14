@@ -482,6 +482,7 @@ export default function AdminPage() {
         setSecretVerified(true);
         setSecretPwd("");
         if (r.firstTime) setSecretError("首次设置成功，已记住该密码");
+        await loadCards();
       }
     } catch (err) {
       setSecretError(err instanceof Error ? err.message : "验证失败");
