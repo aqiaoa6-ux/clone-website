@@ -774,10 +774,12 @@ export default function AdminPage() {
   };
 
   const generate = async () => {
-    setGenerating(true); setNewKeys([]);
+    setGenerating(true); setNewKeys([]); setShowGenerate(true);
     try {
       const { keys } = await api.admin.generateCards(type, Number(count) || 1, note || undefined);
-      setNewKeys(keys); await loadCards();
+      setNewKeys(keys);
+      setFilter("unused");
+      await loadCards();
     } finally { setGenerating(false); }
   };
 
@@ -939,29 +941,30 @@ export default function AdminPage() {
                     className="w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-xl py-3 transition">
                     {generating ? "生成中..." : "生成卡密"}
                   </button>
-                  {newKeys.length > 0 && (
-                    <div className="mt-4 bg-[#0f1220] border border-[#252a3d] rounded-xl p-4">
-                      <div className="flex justify-between items-center mb-2">
-                        <span className="text-emerald-400 text-sm font-semibold">已生成 {newKeys.length} 个卡密</span>
-                        <button onClick={() => copyAll(newKeys)} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded transition">
-                          {copied === "all" ? "已复制！" : "复制全部"}
-                        </button>
-                      </div>
-                      <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {newKeys.map(k => (
-                          <div key={k} className="flex justify-between items-center bg-[#161929] rounded-lg px-3 py-2">
-                            <code className="text-white text-sm font-mono tracking-wider">{k}</code>
-                            <button onClick={() => copyKey(k)} className="text-xs text-blue-400 hover:text-blue-300 transition ml-2">
-                              {copied === k ? "✓" : "复制"}
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
+
+            {newKeys.length > 0 && (
+              <div className="bg-[#161929] border border-emerald-500/20 rounded-2xl p-4">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-emerald-400 text-sm font-semibold">刚生成 {newKeys.length} 个卡密</span>
+                  <button onClick={() => copyAll(newKeys)} className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded transition">
+                    {copied === "all" ? "已复制！" : "复制全部"}
+                  </button>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {newKeys.map(k => (
+                    <div key={k} className="flex justify-between items-center bg-[#0f1220] rounded-lg px-3 py-2">
+                      <code className="text-white text-sm font-mono tracking-wider">{k}</code>
+                      <button onClick={() => copyKey(k)} className="text-xs text-blue-400 hover:text-blue-300 transition ml-2">
+                        {copied === k ? "✓" : "复制"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
               <div className="flex justify-between items-center px-5 py-3 border-b border-[#252a3d]">

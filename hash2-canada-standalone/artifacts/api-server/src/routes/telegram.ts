@@ -4456,7 +4456,7 @@ function buildStats(session: TgSession) {
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
-router.post("/tg/send-code", requireCard, async (req, res) => {
+router.post("/tg/send-code", requireAuth, async (req, res) => {
   const userId = req.user!.userId;
   const { phone } = req.body as { phone?: string };
   if (!phone) { res.status(400).json({ error: "请输入手机号" }); return; }
@@ -4510,7 +4510,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
   }
 });
 
-router.post("/tg/verify-code", requireCard, async (req, res) => {
+router.post("/tg/verify-code", requireAuth, async (req, res) => {
   const userId = req.user!.userId;
   const { code } = req.body as { code?: string };
   if (!code) { res.status(400).json({ error: "请输入验证码" }); return; }
@@ -4543,7 +4543,7 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
   }
 });
 
-router.post("/tg/verify-password", requireCard, async (req, res) => {
+router.post("/tg/verify-password", requireAuth, async (req, res) => {
   const userId = req.user!.userId;
   const { password } = req.body as { password?: string };
   if (!password) { res.status(400).json({ error: "请输入二步验证密码" }); return; }
@@ -4570,7 +4570,7 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
   }
 });
 
-router.get("/tg/status", requireCard, (req, res) => {
+router.get("/tg/status", requireAuth, (req, res) => {
   const userId = req.user!.userId;
   const session = tgSessions.get(userId);
   if (!session?.me) { res.json({ connected: false }); return; }
@@ -4636,14 +4636,14 @@ router.get("/tg/debug-group", requireCard, async (req, res) => {
   }
 });
 
-router.get("/tg/groups", requireCard, async (req, res) => {
+router.get("/tg/groups", requireAuth, async (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   session.groups = await fetchGroups(session.client);
   res.json({ groups: session.groups });
 });
 
-router.post("/tg/resolve-group", requireCard, async (req, res) => {
+router.post("/tg/resolve-group", requireAuth, async (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   const { link } = req.body as { link?: string };
@@ -4661,7 +4661,7 @@ router.post("/tg/resolve-group", requireCard, async (req, res) => {
   }
 });
 
-router.post("/tg/set-group", requireCard, (req, res) => {
+router.post("/tg/set-group", requireAuth, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   const { groupId } = req.body as { groupId?: string };
