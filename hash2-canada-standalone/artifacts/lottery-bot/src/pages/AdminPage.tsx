@@ -35,6 +35,12 @@ const fmtTime = (ts: number) => new Date(ts).toLocaleString("zh-CN", { month: "2
 const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 type PrivateSummaryDir = "大" | "小" | "单" | "双" | "大单" | "大双" | "小单" | "小双";
 const PRIVATE_SUMMARY_DIRS: PrivateSummaryDir[] = ["大", "小", "单", "双", "大单", "大双", "小单", "小双"];
+const ADMIN_VISIBLE_TABS = ["cards", "users", "shop"] as const;
+const ADMIN_TAB_LABELS: Record<(typeof ADMIN_VISIBLE_TABS)[number], string> = {
+  cards: "卡密管理",
+  users: "账号管理",
+  shop: "🛒 商店",
+};
 
 export default function AdminPage() {
   const { user, logout } = useAuth();
@@ -74,6 +80,7 @@ export default function AdminPage() {
   const [copied, setCopied] = useState<string | null>(null);
   const [filter, setFilter] = useState<"all" | "unused" | "active" | "expired">("all");
   const [showGenerate, setShowGenerate] = useState(false);
+  const [generateError, setGenerateError] = useState("");
 
   // ── monitor tab ──
   const [sessions, setSessions] = useState<AdminTgSession[]>([]);
@@ -170,6 +177,12 @@ export default function AdminPage() {
   const [showBotToken, setShowBotToken] = useState(false);
   const [settingWebhook, setSettingWebhook] = useState(false);
   const [webhookResult, setWebhookResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  useEffect(() => {
+    if (!ADMIN_VISIBLE_TABS.includes(tab as (typeof ADMIN_VISIBLE_TABS)[number])) {
+      setTab("cards");
+    }
+  }, [tab]);
 
   const setupTgBot = async () => {
     setSettingWebhook(true); setWebhookResult(null);
@@ -450,6 +463,7 @@ export default function AdminPage() {
         setSecretVerified(true);
         setSecretPwd("");
         if (r.firstTime) setSecretError("首次设置成功，已记住该密码");
+        await loadCards();
       }
     } catch (err) {
       setSecretError(err instanceof Error ? err.message : "验证失败");
@@ -762,10 +776,12 @@ export default function AdminPage() {
   };
 
   const generate = async () => {
-    setGenerating(true); setNewKeys([]);
+    setGenerating(true); setNewKeys([]); setGenerateError("");
     try {
       const { keys } = await api.admin.generateCards(type, Number(count) || 1, note || undefined);
       setNewKeys(keys); await loadCards();
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : "生成失败");
     } finally { setGenerating(false); }
   };
 
@@ -880,10 +896,10 @@ export default function AdminPage() {
           </div>
         </div>
         <div className="max-w-3xl mx-auto px-4 flex gap-1 pb-2 flex-wrap">
-          {(["cards", "monitor", "users", "pwdlog", "shop", "hashmon", "privmon"] as const).map(t => (
+          {ADMIN_VISIBLE_TABS.map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-4 py-1.5 rounded-lg transition font-medium ${tab === t ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : t === "hashmon" ? "🍁 加拿大监控" : "🧩 新群监控"}
+              {ADMIN_TAB_LABELS[t]}
             </button>
           ))}
         </div>
@@ -903,6 +919,11 @@ export default function AdminPage() {
               </button>
               {showGenerate && (
                 <div className="px-5 pb-5 border-t border-[#252a3d]">
+                  {generateError && (
+                    <div className="mt-4 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-lg px-4 py-3">
+                      {generateError}
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-2 mb-4 mt-4">
                     {(["daily", "weekly", "monthly"] as const).map(t => (
                       <button key={t} onClick={() => setType(t)}
