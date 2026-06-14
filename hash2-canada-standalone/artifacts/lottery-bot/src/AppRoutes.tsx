@@ -21,7 +21,7 @@ function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: 
 }) {
   const { user, card, loading, cardLoading } = useAuth();
 
-  if (loading || (user && requireCard && !user.isAdmin && cardLoading)) {
+  if (loading || (user && requireCard && cardLoading)) {
     return (
       <div className="min-h-screen bg-[#0b0e1a] flex items-center justify-center">
         <div className="text-slate-500 text-sm">加载中...</div>
@@ -38,8 +38,8 @@ function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: 
   }
 
   if (requireAdmin && !user.isAdmin) return <Redirect to="/" />;
-  // Admins bypass card requirement — they need to access /admin to generate keys
-  if (requireCard && !card?.active && !user.isAdmin) return <Redirect to="/card-key" />;
+  if (requireCard && !card?.active) return <Redirect to="/card-key" />;
+  if (requireAdmin) return <>{children}</>;
 
   return <>{children}</>;
 }
@@ -47,7 +47,7 @@ function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: 
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, card, loading, cardLoading } = useAuth();
 
-  if (loading || (user && !user.isAdmin && cardLoading)) {
+  if (loading || (user && cardLoading)) {
     return (
       <div className="min-h-screen bg-[#0b0e1a] flex items-center justify-center">
         <div className="text-slate-500 text-sm">加载中...</div>
@@ -56,8 +56,6 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (user && sessionStorage.getItem(SESSION_CONFIRMED_KEY)) {
-    // Admins go straight to dashboard (they don't need a card)
-    if (user.isAdmin) return <Redirect to="/" />;
     if (!card?.active) return <Redirect to="/card-key" />;
     return <Redirect to="/" />;
   }
@@ -80,7 +78,7 @@ export default function AppRoutes() {
         </ProtectedRoute>
       </Route>
       <Route path="/admin">
-        <ProtectedRoute requireAdmin>
+        <ProtectedRoute requireAdmin requireCard={false}>
           <AdminPage />
         </ProtectedRoute>
       </Route>
@@ -105,7 +103,7 @@ export default function AppRoutes() {
         </ProtectedRoute>
       </Route>
       <Route path="/">
-        <ProtectedRoute requireCard={false}>
+        <ProtectedRoute>
           <Redirect to="/hash2" />
         </ProtectedRoute>
       </Route>
