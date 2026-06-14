@@ -631,13 +631,34 @@ async function processUserCanada(session: TgSession): Promise<void> {
   const enabledPlans = config.plans.filter(plan => plan.enabled);
   if (enabledPlans.length === 0) return;
   const runtime = loadRuntime(userId, config);
-  const channel = HASH2_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
   let changed = false;
   const prevMsgId = runtime.lastChannelMsgId;
   const prevActive = runtime.activePeriod;
   let parsedAny = false;
   let lastUnparsed = "";
   try {
+    const rawChannel = HASH2_RESULT_CHANNEL.trim();
+    const entityCandidates = Array.from(new Set([
+      rawChannel,
+      rawChannel.startsWith("@") ? rawChannel : `@${rawChannel}`,
+      rawChannel.startsWith("https://") || rawChannel.startsWith("http://")
+        ? rawChannel
+        : `https://t.me/${rawChannel.replace(/^@/, "")}`,
+      rawChannel.startsWith("t.me/") ? rawChannel : `t.me/${rawChannel.replace(/^@/, "")}`,
+    ].filter(Boolean)));
+
+    let channel: Parameters<typeof session.client.getMessages>[0] | null = null;
+    let resolveErr: unknown;
+    for (const candidate of entityCandidates) {
+      try {
+        channel = await session.client.getEntity(candidate) as Parameters<typeof session.client.getMessages>[0];
+        break;
+      } catch (err) {
+        resolveErr = err;
+      }
+    }
+    if (!channel) throw resolveErr ?? new Error("resolve channel entity failed");
+
     const msgs = await session.client.getMessages(channel, {
       limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
       ...(runtime.lastChannelMsgId > 0 ? { minId: runtime.lastChannelMsgId } : {}),
@@ -686,11 +707,14 @@ async function processUserCanada(session: TgSession): Promise<void> {
     if (runtime.lastAlert?.id !== "canada_channel_error") {
       const plan = enabledPlans[0]!;
       const msg = err instanceof Error ? err.message : String(err);
+      const hint = msg.toLowerCase().includes("cannot find any entity corresponding")
+        ? "；请确认 TG 账号已加入频道，且频道可用：@pc28 或 https://t.me/pc28"
+        : "";
       runtime.lastAlert = {
         id: "canada_channel_error",
         planId: plan.id,
         planName: plan.name,
-        message: `读取开奖频道 @pc28 失败：${msg.slice(0, 120)}`,
+        message: `读取开奖频道 @pc28 失败：${(msg.slice(0, 120) + hint).slice(0, 180)}`,
         at: Date.now(),
         level: "warn",
         voice: false,
