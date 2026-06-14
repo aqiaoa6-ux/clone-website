@@ -9,11 +9,6 @@ import CanadaPage from "./pages/CanadaPage";
 import CanadaSettlePage from "./pages/CanadaSettlePage";
 import AdminPage from "./pages/AdminPage";
 
-// sessionStorage key: set after user explicitly confirms "this is my account"
-// sessionStorage is per-tab and cleared when the tab/browser closes,
-// so every new session requires one confirmation click on the login page.
-export const SESSION_CONFIRMED_KEY = "session_confirmed";
-
 function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: {
   children: React.ReactNode;
   requireCard?: boolean;
@@ -30,12 +25,6 @@ function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: 
   }
 
   if (!user) return <Redirect to="/login" />;
-
-  // Require identity confirmation once per browser session.
-  // Prevents another person on the same browser from silently inheriting the session.
-  if (!sessionStorage.getItem(SESSION_CONFIRMED_KEY)) {
-    return <Redirect to="/login" />;
-  }
 
   if (requireAdmin && !user.isAdmin) return <Redirect to="/" />;
   if (requireCard && !card?.active) return <Redirect to="/card-key" />;
@@ -55,7 +44,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (user && sessionStorage.getItem(SESSION_CONFIRMED_KEY)) {
+  if (user) {
     if (!card?.active) return <Redirect to="/card-key" />;
     return <Redirect to="/" />;
   }

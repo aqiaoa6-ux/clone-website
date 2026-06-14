@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { SESSION_CONFIRMED_KEY } from "../AppRoutes";
 
 export default function RegisterPage() {
   const { register } = useAuth();
@@ -19,7 +18,6 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       await register(username, password);
-      sessionStorage.setItem(SESSION_CONFIRMED_KEY, "1");
       setLocation("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "注册失败");

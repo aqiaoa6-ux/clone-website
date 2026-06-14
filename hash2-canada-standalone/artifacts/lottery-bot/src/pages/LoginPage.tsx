@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { SESSION_CONFIRMED_KEY } from "../AppRoutes";
 
 export default function LoginPage() {
   const { user, loading, login } = useAuth();
@@ -19,7 +18,6 @@ export default function LoginPage() {
   // 已登录直接跳转，不显示确认卡片
   useEffect(() => {
     if (!loading && user) {
-      sessionStorage.setItem(SESSION_CONFIRMED_KEY, "1");
       setLocation("/");
     }
   }, [loading, user, setLocation]);
@@ -30,7 +28,6 @@ export default function LoginPage() {
     setSubmitting(true);
     try {
       await login(username, password);
-      sessionStorage.setItem(SESSION_CONFIRMED_KEY, "1");
       setLocation("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");
