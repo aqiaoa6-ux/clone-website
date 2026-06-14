@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import BottomNav from "../components/BottomNav";
@@ -131,11 +131,24 @@ export default function CanadaPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activePlan, setActivePlan] = useState(0);
-  const [expandedLevels, setExpandedLevels] = useState<Record<string, boolean>>({});
-  const [expandedOdds, setExpandedOdds] = useState<Record<string, boolean>>({});
   const [alertMessage, setAlertMessage] = useState<string | null>(null);
   const [testingAlert, setTestingAlert] = useState(false);
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
+  const [sectionOpen, setSectionOpen] = useState<Record<string, boolean>>({
+    intro: false,
+    tg: false,
+    live: true,
+    plans: true,
+    runtime: false,
+    basic: true,
+    play1: false,
+    play2: false,
+    levels: false,
+    basicOdds: false,
+    comboOdds: false,
+    numOdds: false,
+    specialOdds: false,
+  });
 
   useEffect(() => {
     let mounted = true;
@@ -156,6 +169,9 @@ export default function CanadaPage() {
   }, []);
 
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
+  const toggleSection = (key: string) => {
+    setSectionOpen(prev => ({ ...prev, [key]: !prev[key] }));
+  };
   const currentLevelSummary = useMemo(() => {
     if (!currentPlan.bets.length) return "";
     return `同方案共用层级 · 任意命中回第1手 · 全部未中才进下一手`;
@@ -305,7 +321,13 @@ export default function CanadaPage() {
       </div>
 
       <div className="max-w-lg mx-auto px-4 py-4 space-y-3 pb-24">
-        <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+        <CollapseSection
+          title="独立配置模块"
+          summary={`${user?.username ?? ""}${config.updatedAt ? ` · ${new Date(config.updatedAt).toLocaleString("zh-CN")}` : ""}`}
+          open={sectionOpen.intro}
+          onToggle={() => toggleSection("intro")}
+        >
+          <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
           <div className="flex items-center justify-between">
             <div>
               <div className="text-white font-semibold">独立配置模块</div>
@@ -320,19 +342,40 @@ export default function CanadaPage() {
               </div>
             </div>
           </div>
-        </div>
+          </div>
+        </CollapseSection>
 
-        <TgAccessPanel
+        <CollapseSection
+          title="TG 设置"
+          summary={tgStatus?.watchGroupTitle ?? "未设置"}
+          open={sectionOpen.tg}
+          onToggle={() => toggleSection("tg")}
+        >
+          <TgAccessPanel
           tgStatus={tgStatus}
           onStatusChange={status => setTgStatus(status)}
-        />
+          />
+        </CollapseSection>
 
-        <CanadaLiveOverview
+        <CollapseSection
+          title="实时面板"
+          summary="期号 / 倒计时 / 运行环境"
+          open={sectionOpen.live}
+          onToggle={() => toggleSection("live")}
+        >
+          <CanadaLiveOverview
           tgStatus={tgStatus}
           onAlert={message => setAlertMessage(message)}
-        />
+          />
+        </CollapseSection>
 
-        <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
+        <CollapseSection
+          title="方案列表"
+          summary={currentPlan.name || `方案${activePlan + 1}`}
+          open={sectionOpen.plans}
+          onToggle={() => toggleSection("plans")}
+        >
+          <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
           <div className="text-white font-semibold text-sm mb-3">方案列表</div>
           <div className="flex gap-2 overflow-x-auto pb-1">
             {config.plans.map((plan, index) => (
@@ -349,7 +392,8 @@ export default function CanadaPage() {
               </button>
             ))}
           </div>
-        </div>
+          </div>
+        </CollapseSection>
 
         {!loading && (
           <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4 space-y-4">
@@ -371,96 +415,112 @@ export default function CanadaPage() {
               </button>
             </div>
 
-            <CanadaPlanRuntimeSummary
-              activePlanId={currentPlan.id}
-              currentLevelSummary={currentLevelSummary}
-            />
+            <CollapseSection
+              title="运行状态"
+              summary="层级 / 盈亏 / 状态"
+              open={sectionOpen.runtime}
+              onToggle={() => toggleSection("runtime")}
+            >
+              <CanadaPlanRuntimeSummary
+                activePlanId={currentPlan.id}
+                currentLevelSummary={currentLevelSummary}
+              />
+            </CollapseSection>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">方案名称</label>
-                <input
-                  value={currentPlan.name}
-                  onChange={e => updatePlan(activePlan, { name: e.target.value })}
-                  className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">押注格式</label>
-                <select
-                  value={currentPlan.format}
-                  onChange={e => updatePlan(activePlan, { format: e.target.value as CanadaPlan["format"] })}
-                  className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
-                >
-                  <option value="amount_first">金额/目标</option>
-                  <option value="target_first">目标/金额</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">基础金额</label>
-                <NumericDraftInput
-                  value={currentPlan.baseAmount}
-                  min={0}
-                  onCommit={value => updatePlan(activePlan, { baseAmount: value })}
-                  className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">手数上限</label>
-                <NumericDraftInput
-                  value={currentPlan.handCount}
-                  min={1}
-                  max={60}
-                  onCommit={value => updatePlan(activePlan, { handCount: value })}
-                  className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">止损</label>
-                <NumericDraftInput
-                  value={currentPlan.stopLoss}
-                  min={0}
-                  onCommit={value => updatePlan(activePlan, { stopLoss: value })}
-                  className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">止盈</label>
-                <NumericDraftInput
-                  value={currentPlan.targetProfit}
-                  min={0}
-                  onCommit={value => updatePlan(activePlan, { targetProfit: value })}
-                  className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
-                />
-              </div>
-            </div>
+            <CollapseSection
+              title="基础设置"
+              summary={`${selectedLabels || "暂无"} · 基础金额 ${currentPlan.baseAmount || 0}`}
+              open={sectionOpen.basic}
+              onToggle={() => toggleSection("basic")}
+            >
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">方案名称</label>
+                    <input
+                      value={currentPlan.name}
+                      onChange={e => updatePlan(activePlan, { name: e.target.value })}
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">押注格式</label>
+                    <select
+                      value={currentPlan.format}
+                      onChange={e => updatePlan(activePlan, { format: e.target.value as CanadaPlan["format"] })}
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
+                    >
+                      <option value="amount_first">金额/目标</option>
+                      <option value="target_first">目标/金额</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">基础金额</label>
+                    <NumericDraftInput
+                      value={currentPlan.baseAmount}
+                      min={0}
+                      onCommit={value => updatePlan(activePlan, { baseAmount: value })}
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">手数上限</label>
+                    <NumericDraftInput
+                      value={currentPlan.handCount}
+                      min={1}
+                      max={60}
+                      onCommit={value => updatePlan(activePlan, { handCount: value })}
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">止损</label>
+                    <NumericDraftInput
+                      value={currentPlan.stopLoss}
+                      min={0}
+                      onCommit={value => updatePlan(activePlan, { stopLoss: value })}
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">止盈</label>
+                    <NumericDraftInput
+                      value={currentPlan.targetProfit}
+                      min={0}
+                      onCommit={value => updatePlan(activePlan, { targetProfit: value })}
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
+                    />
+                  </div>
+                </div>
 
-            <div className="grid grid-cols-1 gap-2 text-sm">
-              <label className="flex items-center justify-between rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <span className="text-slate-300">金额为 0 仍保持脚本运行</span>
-                <input
-                  type="checkbox"
-                  checked={currentPlan.zeroAmountRuns}
-                  onChange={e => updatePlan(activePlan, { zeroAmountRuns: e.target.checked })}
-                />
-              </label>
-              <label className="flex items-center justify-between rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <span className="text-slate-300">网页提醒</span>
-                <input
-                  type="checkbox"
-                  checked={currentPlan.webAlertEnabled}
-                  onChange={e => updatePlan(activePlan, { webAlertEnabled: e.target.checked })}
-                />
-              </label>
-              <label className="flex items-center justify-between rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-                <span className="text-slate-300">语音播报</span>
-                <input
-                  type="checkbox"
-                  checked={currentPlan.voiceAlertEnabled}
-                  onChange={e => updatePlan(activePlan, { voiceAlertEnabled: e.target.checked })}
-                />
-              </label>
-            </div>
+                <div className="grid grid-cols-1 gap-2 text-sm">
+                  <label className="flex items-center justify-between rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+                    <span className="text-slate-300">金额为 0 仍保持脚本运行</span>
+                    <input
+                      type="checkbox"
+                      checked={currentPlan.zeroAmountRuns}
+                      onChange={e => updatePlan(activePlan, { zeroAmountRuns: e.target.checked })}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+                    <span className="text-slate-300">网页提醒</span>
+                    <input
+                      type="checkbox"
+                      checked={currentPlan.webAlertEnabled}
+                      onChange={e => updatePlan(activePlan, { webAlertEnabled: e.target.checked })}
+                    />
+                  </label>
+                  <label className="flex items-center justify-between rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
+                    <span className="text-slate-300">语音播报</span>
+                    <input
+                      type="checkbox"
+                      checked={currentPlan.voiceAlertEnabled}
+                      onChange={e => updatePlan(activePlan, { voiceAlertEnabled: e.target.checked })}
+                    />
+                  </label>
+                </div>
+              </div>
+            </CollapseSection>
 
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -485,8 +545,12 @@ export default function CanadaPage() {
               </div>
             )}
 
-            <div>
-              <div className="text-white font-semibold text-sm mb-2">玩法1</div>
+            <CollapseSection
+              title="玩法1"
+              summary={HASH2_BET_OPTIONS.filter(item => item.group === "玩法1" && currentPlan.bets.includes(item.key)).map(item => item.label).join(" / ") || "未选择"}
+              open={sectionOpen.play1}
+              onToggle={() => toggleSection("play1")}
+            >
               <div className="flex flex-wrap gap-2">
                 {HASH2_BET_OPTIONS.filter(item => item.group === "玩法1").map(item => {
                   const active = currentPlan.bets.includes(item.key);
@@ -505,10 +569,14 @@ export default function CanadaPage() {
                   );
                 })}
               </div>
-            </div>
+            </CollapseSection>
 
-            <div>
-              <div className="text-white font-semibold text-sm mb-2">玩法2</div>
+            <CollapseSection
+              title="玩法2"
+              summary={HASH2_BET_OPTIONS.filter(item => item.group === "玩法2" && currentPlan.bets.includes(item.key)).map(item => item.label).join(" / ") || "未选择"}
+              open={sectionOpen.play2}
+              onToggle={() => toggleSection("play2")}
+            >
               <div className="flex flex-wrap gap-2">
                 {HASH2_BET_OPTIONS.filter(item => item.group === "玩法2").map(item => {
                   const active = currentPlan.bets.includes(item.key);
@@ -527,43 +595,39 @@ export default function CanadaPage() {
                   );
                 })}
               </div>
-            </div>
+            </CollapseSection>
 
-            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
-              <button
-                onClick={() => setExpandedLevels(prev => ({ ...prev, [currentPlan.id]: !prev[currentPlan.id] }))}
-                className="w-full px-4 py-3 flex items-center justify-between text-left bg-[#111526]"
-              >
-                <span className="text-white font-semibold text-sm">60 手金额配置</span>
-                <span className="text-slate-500 text-xs">
-                  {expandedLevels[currentPlan.id] ? "收起" : `展开 · 第1手 ${currentPlan.amountLevels[0] ?? 0}`}
-                </span>
-              </button>
-              <div className="px-4 pt-3 text-[10px] text-slate-500 bg-[#111526]">
+            <CollapseSection
+              title="60 手金额配置"
+              summary={`第1手 ${currentPlan.amountLevels[0] ?? 0}`}
+              open={sectionOpen.levels}
+              onToggle={() => toggleSection("levels")}
+            >
+              <div className="text-[10px] text-slate-500 mb-3">
                 未中自动进下一手，命中任意下注项后回到第 1 手
               </div>
-              {expandedLevels[currentPlan.id] && (
-                <div className="grid grid-cols-4 gap-2 p-3">
-                  {Array.from({ length: 60 }, (_, i) => (
-                    <div key={i}>
-                      <label className="block text-[10px] text-slate-600 mb-1">第{i + 1}手</label>
-                      <NumericDraftInput
-                        value={currentPlan.amountLevels[i] ?? 0}
-                        min={0}
-                        onCommit={value => setLevel(i, String(value))}
-                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
-              <div className="w-full px-4 py-3 text-left bg-[#111526]">
-                <span className="text-white font-semibold text-sm">大小单双自定义赔率</span>
+              <div className="grid grid-cols-4 gap-2">
+                {Array.from({ length: 60 }, (_, i) => (
+                  <div key={i}>
+                    <label className="block text-[10px] text-slate-600 mb-1">第{i + 1}手</label>
+                    <NumericDraftInput
+                      value={currentPlan.amountLevels[i] ?? 0}
+                      min={0}
+                      onCommit={value => setLevel(i, String(value))}
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                    />
+                  </div>
+                ))}
               </div>
-              <div className="grid grid-cols-2 gap-2 p-3">
+            </CollapseSection>
+
+            <CollapseSection
+              title="大小单双自定义赔率"
+              summary="大 / 小 / 单 / 双"
+              open={sectionOpen.basicOdds}
+              onToggle={() => toggleSection("basicOdds")}
+            >
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[10px] text-slate-600 mb-1">大赔率</label>
                   <NumericDraftInput
@@ -601,13 +665,15 @@ export default function CanadaPage() {
                   />
                 </div>
               </div>
-            </div>
+            </CollapseSection>
 
-            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
-              <div className="w-full px-4 py-3 text-left bg-[#111526]">
-                <span className="text-white font-semibold text-sm">组合自定义赔率</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 p-3">
+            <CollapseSection
+              title="组合自定义赔率"
+              summary="大单 / 大双 / 小单 / 小双"
+              open={sectionOpen.comboOdds}
+              onToggle={() => toggleSection("comboOdds")}
+            >
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[10px] text-slate-600 mb-1">大单赔率</label>
                   <NumericDraftInput
@@ -645,40 +711,36 @@ export default function CanadaPage() {
                   />
                 </div>
               </div>
-            </div>
+            </CollapseSection>
 
-            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
-              <button
-                onClick={() => setExpandedOdds(prev => ({ ...prev, [currentPlan.id]: !prev[currentPlan.id] }))}
-                className="w-full px-4 py-3 flex items-center justify-between text-left bg-[#111526]"
-              >
-                <span className="text-white font-semibold text-sm">0-27 自定义赔率</span>
-                <span className="text-slate-500 text-xs">
-                  {expandedOdds[currentPlan.id] ? "收起" : "展开"}
-                </span>
-              </button>
-              {expandedOdds[currentPlan.id] && (
-                <div className="grid grid-cols-4 gap-2 p-3">
-                  {Array.from({ length: 28 }, (_, i) => (
-                    <div key={i}>
-                      <label className="block text-[10px] text-slate-600 mb-1">{i}号赔率</label>
-                      <NumericDraftInput
-                        value={currentPlan.numberOdds[String(i)] ?? 0}
-                        min={0}
-                        onCommit={value => setNumberOdd(i, String(value))}
-                        className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
-                      />
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="rounded-2xl border border-[#252a3d] overflow-hidden">
-              <div className="w-full px-4 py-3 text-left bg-[#111526]">
-                <span className="text-white font-semibold text-sm">特殊玩法自定义赔率</span>
+            <CollapseSection
+              title="0-27 自定义赔率"
+              summary="展开数字赔率"
+              open={sectionOpen.numOdds}
+              onToggle={() => toggleSection("numOdds")}
+            >
+              <div className="grid grid-cols-4 gap-2">
+                {Array.from({ length: 28 }, (_, i) => (
+                  <div key={i}>
+                    <label className="block text-[10px] text-slate-600 mb-1">{i}号赔率</label>
+                    <NumericDraftInput
+                      value={currentPlan.numberOdds[String(i)] ?? 0}
+                      min={0}
+                      onCommit={value => setNumberOdd(i, String(value))}
+                      className="w-full bg-[#0f1220] border border-[#252a3d] rounded-lg px-2 py-1.5 text-white text-xs"
+                    />
+                  </div>
+                ))}
               </div>
-              <div className="grid grid-cols-2 gap-2 p-3">
+            </CollapseSection>
+
+            <CollapseSection
+              title="特殊玩法自定义赔率"
+              summary="极大 / 极小 / 豹子 / 对子 / 顺子"
+              open={sectionOpen.specialOdds}
+              onToggle={() => toggleSection("specialOdds")}
+            >
+              <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[10px] text-slate-600 mb-1">极大赔率</label>
                   <NumericDraftInput
@@ -725,7 +787,7 @@ export default function CanadaPage() {
                   />
                 </div>
               </div>
-            </div>
+            </CollapseSection>
           </div>
         )}
       </div>
@@ -973,6 +1035,36 @@ function CanadaPlanRuntimeSummary({
           {currentPlanRuntime?.blockedReason ?? "运行中/待触发"}
         </div>
       </div>
+    </div>
+  );
+}
+
+function CollapseSection({
+  title,
+  summary,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  summary?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="rounded-2xl border border-[#252a3d] overflow-hidden bg-[#161929]">
+      <button
+        onClick={onToggle}
+        className="flex w-full items-center justify-between px-4 py-3 text-left"
+      >
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-white">{title}</div>
+          {summary ? <div className="mt-1 truncate text-[11px] text-slate-500">{summary}</div> : null}
+        </div>
+        <span className="ml-3 shrink-0 text-xs text-slate-400">{open ? "收起" : "展开"}</span>
+      </button>
+      {open ? <div className="border-t border-[#252a3d] p-3">{children}</div> : null}
     </div>
   );
 }
