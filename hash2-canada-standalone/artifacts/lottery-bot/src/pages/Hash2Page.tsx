@@ -21,7 +21,6 @@ const HASH2_BET_OPTIONS: Array<{ key: string; label: string; group: "玩法1" | 
   { key: "straight", label: "顺子", group: "玩法2" },
   ...Array.from({ length: 28 }, (_, i) => ({ key: `num:${i}`, label: String(i), group: "玩法2" as const })),
 ];
-
 function NumericDraftInput({
   value,
   min = 0,
@@ -110,7 +109,7 @@ function makeDefaultPlan(index: number): Hash2Plan {
 
 function makeDefaultConfig(): Hash2Config {
   return {
-    plans: Array.from({ length: 5 }, (_, i) => makeDefaultPlan(i)),
+    plans: Array.from({ length: 6 }, (_, i) => makeDefaultPlan(i)),
     updatedAt: Date.now(),
   };
 }
@@ -301,7 +300,7 @@ export default function Hash2Page() {
             <div>
               <div className="text-white font-semibold">独立配置模块</div>
               <div className="text-slate-500 text-xs mt-1">
-                玩法1/玩法2可同时配置，最多保留 5 套方案，每套独立 60 手
+                玩法1/玩法2可同时配置，最多保留 6 套方案，每套独立 60 手
               </div>
             </div>
             <div className="text-right">

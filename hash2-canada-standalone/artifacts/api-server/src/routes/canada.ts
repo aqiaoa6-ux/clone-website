@@ -84,9 +84,17 @@ interface ParsedCanadaResult {
 
 type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number; openTime?: number; closeTime?: number };
 
-const HASH2_MAX_PLANS = 5;
+const HASH2_MAX_PLANS = 6;
 const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
+const STOPLOSS_NEXT_PLAN_ID: Record<string, string> = {
+  "plan-1": "plan-2",
+  "plan-2": "plan-3",
+};
+const STOPLOSS_PREV_PLAN_ID: Record<string, string> = {
+  "plan-2": "plan-1",
+  "plan-3": "plan-2",
+};
 const CANADA_RESULT_SOURCE = "http://pc20.net/api/fengpan";
 const HASH2_ALLOWED_BETS = new Set([
   "big", "small", "odd", "even",
@@ -418,7 +426,7 @@ function planRiskReason(plan: CanadaPlan, runtime: CanadaPlanRuntime): string | 
   return undefined;
 }
 
-function autoEnablePlanFiveOnStopLoss(
+function autoEnableNextPlanOnStopLoss(
   userId: number,
   config: CanadaConfig,
   runtime: CanadaRuntime,
@@ -426,37 +434,28 @@ function autoEnablePlanFiveOnStopLoss(
   riskReason: string,
 ): boolean {
   if (!riskReason.includes("止损")) return false;
-  if (sourcePlan.id === "plan-5") return false;
-  const fallbackPlan = config.plans.find(plan => plan.id === "plan-5");
-  if (!fallbackPlan || fallbackPlan.enabled) return false;
-  const enabledPrimaryPlans = config.plans.filter(plan => plan.id !== "plan-5" && plan.enabled);
-  if (enabledPrimaryPlans.length === 0) return false;
-  const allPrimaryPlansStopped = enabledPrimaryPlans.every(plan => {
-    if (plan.id === sourcePlan.id) return riskReason.includes("止损");
-    const blockedReason = runtime.plans[plan.id]?.blockedReason ?? "";
-    return blockedReason.includes("止损");
-  });
-  if (!allPrimaryPlansStopped) return false;
-  fallbackPlan.enabled = true;
+  const nextPlanId = STOPLOSS_NEXT_PLAN_ID[sourcePlan.id];
+  if (!nextPlanId) return false;
+  const nextPlan = config.plans.find(plan => plan.id === nextPlanId);
+  if (!nextPlan || nextPlan.enabled) return false;
+  nextPlan.enabled = true;
   config.updatedAt = Date.now();
   runtime.updatedAt = Date.now();
   runtime.lastAlert = makeAlert(
-    fallbackPlan,
-    `${sourcePlan.name} ${riskReason}，已自动开启${fallbackPlan.name}`,
+    nextPlan,
+    `${sourcePlan.name} ${riskReason}，已自动开启${nextPlan.name}`,
     "warn",
   );
   saveConfig(userId, config);
-  logger.info({ userId, sourcePlan: sourcePlan.id, fallbackPlan: fallbackPlan.id }, "[canada] auto enabled plan-5 after stop loss");
+  logger.info({ userId, sourcePlan: sourcePlan.id, nextPlan: nextPlan.id }, "[canada] auto enabled next plan after stop loss");
   return true;
 }
 
-function canRunPlanFive(config: CanadaConfig, runtime: CanadaRuntime): boolean {
-  const primaryPlans = config.plans.filter(plan => plan.id !== "plan-5" && plan.enabled);
-  if (primaryPlans.length === 0) return false;
-  return primaryPlans.every(plan => {
-    const blockedReason = runtime.plans[plan.id]?.blockedReason ?? "";
-    return blockedReason.includes("止损");
-  });
+function canRunAutoChainedPlan(plan: CanadaPlan, runtime: CanadaRuntime): boolean {
+  const prevPlanId = STOPLOSS_PREV_PLAN_ID[plan.id];
+  if (!prevPlanId) return true;
+  const blockedReason = runtime.plans[prevPlanId]?.blockedReason ?? "";
+  return blockedReason.includes("止损");
 }
 
 function fmtMoney(n: number): string {
@@ -620,7 +619,7 @@ function parseDrawItem(item: DrawItem): ParsedCanadaResult | null {
 async function triggerPlanForPeriod(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, runtime: CanadaRuntime, period: string): Promise<void> {
   if (!plan.enabled || state.lastSentPeriod === period) return;
   const config = loadConfig(userId);
-  if (plan.id === "plan-5" && !canRunPlanFive(config, runtime)) return;
+  if (!canRunAutoChainedPlan(plan, runtime)) return;
   Object.assign(
     state,
     normalizePlanLevelState(plan, state.betLevels, state.pendingAmounts, state.currentLevel, state.pendingAmount),
@@ -629,7 +628,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
   if (riskReason) {
     state.blockedReason = riskReason;
     state.lastSentPeriod = period;
-    const autoEnabledPlanFive = autoEnablePlanFiveOnStopLoss(userId, config, runtime, plan, riskReason);
+    const autoEnabledNextPlan = autoEnableNextPlanOnStopLoss(userId, config, runtime, plan, riskReason);
     if (state.lastRiskNotified !== riskReason) {
       state.lastRiskNotified = riskReason;
       state.updatedAt = Date.now();
@@ -638,7 +637,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
     if (plan.webAlertEnabled) {
       runtime.lastAlert = makeAlert(
         plan,
-        autoEnabledPlanFive ? `${plan.name} ${riskReason}，已自动开启方案5` : `${plan.name} ${riskReason}`,
+        autoEnabledNextPlan ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}` : `${plan.name} ${riskReason}`,
         riskReason.includes("止损") ? "error" : "success",
       );
     }
@@ -725,7 +724,7 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
   const riskReason = planRiskReason(plan, state);
   if (riskReason) {
     state.blockedReason = riskReason;
-    const autoEnabledPlanFive = autoEnablePlanFiveOnStopLoss(userId, config, runtime, plan, riskReason);
+    const autoEnabledNextPlan = autoEnableNextPlanOnStopLoss(userId, config, runtime, plan, riskReason);
     if (state.lastRiskNotified !== riskReason) {
       state.lastRiskNotified = riskReason;
       await sendRiskAlert(session, userId, plan, state, riskReason, result.period, "settle");
@@ -733,7 +732,7 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
     if (plan.webAlertEnabled) {
       runtime.lastAlert = makeAlert(
         plan,
-        autoEnabledPlanFive ? `${plan.name} ${riskReason}，已自动开启方案5` : `${plan.name} ${riskReason}`,
+        autoEnabledNextPlan ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}` : `${plan.name} ${riskReason}`,
         riskReason.includes("止损") ? "error" : "success",
       );
     }
