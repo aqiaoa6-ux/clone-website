@@ -451,6 +451,44 @@ function autoEnableNextPlanOnStopLoss(
   return true;
 }
 
+function resetPlanRuntimeForRestart(plan: CanadaPlan, state: CanadaPlanRuntime): void {
+  const levelState = normalizePlanLevelState(plan, {}, {}, 0, 0);
+  state.currentLevel = 0;
+  state.betLevels = levelState.betLevels;
+  state.pendingAmounts = levelState.pendingAmounts;
+  state.pendingAmount = 0;
+  state.sessionPnl = 0;
+  state.pendingPeriod = null;
+  state.lastSentPeriod = null;
+  state.lastSettledPeriod = null;
+  state.blockedReason = undefined;
+  state.lastHit = undefined;
+  state.lastRiskNotified = undefined;
+  state.updatedAt = Date.now();
+}
+
+function autoReturnToPlanOneOnTakeProfit(
+  userId: number,
+  config: CanadaConfig,
+  runtime: CanadaRuntime,
+  sourcePlan: CanadaPlan,
+  riskReason: string,
+): boolean {
+  if (!riskReason.includes("止盈")) return false;
+  if (sourcePlan.id !== "plan-2" && sourcePlan.id !== "plan-3") return false;
+  const planOne = config.plans.find(plan => plan.id === "plan-1");
+  const planOneRuntime = runtime.plans["plan-1"];
+  if (!planOne || !planOneRuntime) return false;
+  planOne.enabled = true;
+  resetPlanRuntimeForRestart(planOne, planOneRuntime);
+  config.updatedAt = Date.now();
+  runtime.updatedAt = Date.now();
+  runtime.lastAlert = makeAlert(planOne, `${sourcePlan.name} ${riskReason}，已回到方案1第一手`, "success");
+  saveConfig(userId, config);
+  logger.info({ userId, sourcePlan: sourcePlan.id, targetPlan: planOne.id }, "[canada] returned to plan-1 after take profit");
+  return true;
+}
+
 function canRunAutoChainedPlan(plan: CanadaPlan, runtime: CanadaRuntime): boolean {
   const prevPlanId = STOPLOSS_PREV_PLAN_ID[plan.id];
   if (!prevPlanId) return true;
@@ -629,6 +667,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
     state.blockedReason = riskReason;
     state.lastSentPeriod = period;
     const autoEnabledNextPlan = autoEnableNextPlanOnStopLoss(userId, config, runtime, plan, riskReason);
+    const autoReturnedPlanOne = autoReturnToPlanOneOnTakeProfit(userId, config, runtime, plan, riskReason);
     if (state.lastRiskNotified !== riskReason) {
       state.lastRiskNotified = riskReason;
       state.updatedAt = Date.now();
@@ -637,7 +676,11 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
     if (plan.webAlertEnabled) {
       runtime.lastAlert = makeAlert(
         plan,
-        autoEnabledNextPlan ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}` : `${plan.name} ${riskReason}`,
+        autoReturnedPlanOne
+          ? `${plan.name} ${riskReason}，已回到方案1第一手`
+          : autoEnabledNextPlan
+            ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}`
+            : `${plan.name} ${riskReason}`,
         riskReason.includes("止损") ? "error" : "success",
       );
     }
@@ -725,6 +768,7 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
   if (riskReason) {
     state.blockedReason = riskReason;
     const autoEnabledNextPlan = autoEnableNextPlanOnStopLoss(userId, config, runtime, plan, riskReason);
+    const autoReturnedPlanOne = autoReturnToPlanOneOnTakeProfit(userId, config, runtime, plan, riskReason);
     if (state.lastRiskNotified !== riskReason) {
       state.lastRiskNotified = riskReason;
       await sendRiskAlert(session, userId, plan, state, riskReason, result.period, "settle");
@@ -732,7 +776,11 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
     if (plan.webAlertEnabled) {
       runtime.lastAlert = makeAlert(
         plan,
-        autoEnabledNextPlan ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}` : `${plan.name} ${riskReason}`,
+        autoReturnedPlanOne
+          ? `${plan.name} ${riskReason}，已回到方案1第一手`
+          : autoEnabledNextPlan
+            ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}`
+            : `${plan.name} ${riskReason}`,
         riskReason.includes("止损") ? "error" : "success",
       );
     }
