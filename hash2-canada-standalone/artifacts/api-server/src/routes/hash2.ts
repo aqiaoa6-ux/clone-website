@@ -477,9 +477,17 @@ function autoReturnToPlanOneOnTakeProfit(
   if (sourcePlan.id !== "plan-2" && sourcePlan.id !== "plan-3") return false;
   const planOne = config.plans.find(plan => plan.id === "plan-1");
   const planOneRuntime = runtime.plans["plan-1"];
-  if (!planOne || !planOneRuntime) return false;
+  const planTwo = config.plans.find(plan => plan.id === "plan-2");
+  const planThree = config.plans.find(plan => plan.id === "plan-3");
+  const planTwoRuntime = runtime.plans["plan-2"];
+  const planThreeRuntime = runtime.plans["plan-3"];
+  if (!planOne || !planOneRuntime || !planTwo || !planTwoRuntime || !planThree || !planThreeRuntime) return false;
   planOne.enabled = true;
   resetPlanRuntimeForRestart(planOne, planOneRuntime);
+  planTwo.enabled = false;
+  planThree.enabled = false;
+  resetPlanRuntimeForRestart(planTwo, planTwoRuntime);
+  resetPlanRuntimeForRestart(planThree, planThreeRuntime);
   config.updatedAt = Date.now();
   runtime.updatedAt = Date.now();
   runtime.lastAlert = makeAlert(planOne, `${sourcePlan.name} ${riskReason}，已回到方案1第一手`, "success");
