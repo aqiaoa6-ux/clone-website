@@ -417,6 +417,30 @@ function planRiskReason(plan: CanadaPlan, runtime: CanadaPlanRuntime): string | 
   return undefined;
 }
 
+function autoEnablePlanFiveOnStopLoss(
+  userId: number,
+  config: CanadaConfig,
+  runtime: CanadaRuntime,
+  sourcePlan: CanadaPlan,
+  riskReason: string,
+): boolean {
+  if (!riskReason.includes("止损")) return false;
+  if (sourcePlan.id === "plan-5") return false;
+  const fallbackPlan = config.plans.find(plan => plan.id === "plan-5");
+  if (!fallbackPlan || fallbackPlan.enabled) return false;
+  fallbackPlan.enabled = true;
+  config.updatedAt = Date.now();
+  runtime.updatedAt = Date.now();
+  runtime.lastAlert = makeAlert(
+    fallbackPlan,
+    `${sourcePlan.name} ${riskReason}，已自动开启${fallbackPlan.name}`,
+    "warn",
+  );
+  saveConfig(userId, config);
+  logger.info({ userId, sourcePlan: sourcePlan.id, fallbackPlan: fallbackPlan.id }, "[canada] auto enabled plan-5 after stop loss");
+  return true;
+}
+
 function fmtMoney(n: number): string {
   if (!Number.isFinite(n)) return "0";
   const fixed = Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(2);
@@ -590,6 +614,7 @@ function parseDrawItem(item: DrawItem): ParsedCanadaResult | null {
 
 async function triggerPlanForPeriod(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, runtime: CanadaRuntime, period: string): Promise<void> {
   if (!plan.enabled || state.lastSentPeriod === period) return;
+  const config = loadConfig(userId);
   Object.assign(
     state,
     normalizePlanLevelState(plan, state.betLevels, state.pendingAmounts, state.currentLevel, state.pendingAmount),
@@ -598,12 +623,19 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
   if (riskReason) {
     state.blockedReason = riskReason;
     state.lastSentPeriod = period;
+    const autoEnabledPlanFive = autoEnablePlanFiveOnStopLoss(userId, config, runtime, plan, riskReason);
     if (state.lastRiskNotified !== riskReason) {
       state.lastRiskNotified = riskReason;
       state.updatedAt = Date.now();
       await sendRiskAlert(session, userId, plan, state, riskReason, period, "trigger");
     }
-    if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} ${riskReason}`, riskReason.includes("止损") ? "error" : "success");
+    if (plan.webAlertEnabled) {
+      runtime.lastAlert = makeAlert(
+        plan,
+        autoEnabledPlanFive ? `${plan.name} ${riskReason}，已自动开启方案5` : `${plan.name} ${riskReason}`,
+        riskReason.includes("止损") ? "error" : "success",
+      );
+    }
     return;
   }
   state.lastRiskNotified = undefined;
@@ -647,6 +679,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
 async function settlePlanResult(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, runtime: CanadaRuntime, result: ParsedCanadaResult): Promise<void> {
   if (!plan.enabled) return;
   if (state.pendingPeriod !== result.period || state.lastSettledPeriod === result.period) return;
+  const config = loadConfig(userId);
 
   Object.assign(
     state,
@@ -686,11 +719,18 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
   const riskReason = planRiskReason(plan, state);
   if (riskReason) {
     state.blockedReason = riskReason;
+    const autoEnabledPlanFive = autoEnablePlanFiveOnStopLoss(userId, config, runtime, plan, riskReason);
     if (state.lastRiskNotified !== riskReason) {
       state.lastRiskNotified = riskReason;
       await sendRiskAlert(session, userId, plan, state, riskReason, result.period, "settle");
     }
-    if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} ${riskReason}`, riskReason.includes("止损") ? "error" : "success");
+    if (plan.webAlertEnabled) {
+      runtime.lastAlert = makeAlert(
+        plan,
+        autoEnabledPlanFive ? `${plan.name} ${riskReason}，已自动开启方案5` : `${plan.name} ${riskReason}`,
+        riskReason.includes("止损") ? "error" : "success",
+      );
+    }
   } else {
     state.blockedReason = undefined;
     state.lastRiskNotified = undefined;
