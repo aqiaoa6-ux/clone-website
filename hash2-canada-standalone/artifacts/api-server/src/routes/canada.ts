@@ -428,6 +428,14 @@ function autoEnablePlanFiveOnStopLoss(
   if (sourcePlan.id === "plan-5") return false;
   const fallbackPlan = config.plans.find(plan => plan.id === "plan-5");
   if (!fallbackPlan || fallbackPlan.enabled) return false;
+  const enabledPrimaryPlans = config.plans.filter(plan => plan.id !== "plan-5" && plan.enabled);
+  if (enabledPrimaryPlans.length === 0) return false;
+  const allPrimaryPlansStopped = enabledPrimaryPlans.every(plan => {
+    if (plan.id === sourcePlan.id) return riskReason.includes("止损");
+    const blockedReason = runtime.plans[plan.id]?.blockedReason ?? "";
+    return blockedReason.includes("止损");
+  });
+  if (!allPrimaryPlansStopped) return false;
   fallbackPlan.enabled = true;
   config.updatedAt = Date.now();
   runtime.updatedAt = Date.now();
