@@ -23,6 +23,12 @@
 
 - `NODE_ENV=production`
 - `DATA_DIR=/var/data`
+- `ALERT_EMAIL_TO=接收提醒的QQ邮箱`
+- `ALERT_EMAIL_USER=发送用QQ邮箱`
+- `ALERT_EMAIL_PASS=QQ邮箱SMTP授权码`
+- `ALERT_EMAIL_HOST=smtp.qq.com`
+- `ALERT_EMAIL_PORT=465`
+- `ALERT_EMAIL_SECURE=true`
 
 说明：
 
@@ -31,6 +37,8 @@
 - 新数据库初始化后，`第一个注册用户会自动成为管理员`
 - 前端会先构建到 `artifacts/lottery-bot/dist/public`
 - 后端启动后会自动托管前端静态文件
+- 止盈/止损邮件提醒现在支持直接走 `QQ邮箱 SMTP`
+- 最少只要补 `ALERT_EMAIL_TO`、`ALERT_EMAIL_USER`、`ALERT_EMAIL_PASS` 也能用；QQ 邮箱会默认走 `smtp.qq.com:465`
 - 当前新项目已经包含：
   - `账号系统`
   - `卡密系统`

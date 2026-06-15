@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { requireCard } from "../middleware/requireAuth";
+import { sendAlertEmail } from "../lib/email";
 import { logger } from "../lib/logger";
 import { tgSessions, type TgSession } from "./telegram";
 
@@ -464,19 +465,6 @@ function fmtMoney(n: number): string {
   return fixed;
 }
 
-async function sendEmailWebhook(subject: string, text: string): Promise<void> {
-  const url = process.env.ALERT_EMAIL_WEBHOOK_URL;
-  if (!url) return;
-  const fetchFn = globalThis.fetch;
-  if (!fetchFn) return;
-  const to = process.env.ALERT_EMAIL_TO ?? "";
-  await fetchFn(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ to, subject, text }),
-  });
-}
-
 async function sendRiskAlert(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, riskReason: string, period: string, source: "trigger" | "settle"): Promise<void> {
   const pnl = fmtMoney(state.sessionPnl);
   const title = `【风控提醒】加拿大 ${plan.name}`;
@@ -490,7 +478,7 @@ async function sendRiskAlert(session: TgSession, userId: number, plan: CanadaPla
     }
   }
   try {
-    await sendEmailWebhook(`风控提醒 加拿大 ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
+    await sendAlertEmail(`风控提醒 加拿大 ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
   } catch (err) {
     logger.warn({ userId, err }, "[canada] risk email alert failed");
   }
