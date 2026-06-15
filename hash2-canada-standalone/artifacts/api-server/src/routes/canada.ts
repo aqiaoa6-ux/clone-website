@@ -449,6 +449,15 @@ function autoEnablePlanFiveOnStopLoss(
   return true;
 }
 
+function canRunPlanFive(config: CanadaConfig, runtime: CanadaRuntime): boolean {
+  const primaryPlans = config.plans.filter(plan => plan.id !== "plan-5" && plan.enabled);
+  if (primaryPlans.length === 0) return false;
+  return primaryPlans.every(plan => {
+    const blockedReason = runtime.plans[plan.id]?.blockedReason ?? "";
+    return blockedReason.includes("止损");
+  });
+}
+
 function fmtMoney(n: number): string {
   if (!Number.isFinite(n)) return "0";
   const fixed = Math.abs(n) >= 100 ? n.toFixed(0) : n.toFixed(2);
@@ -623,6 +632,7 @@ function parseDrawItem(item: DrawItem): ParsedCanadaResult | null {
 async function triggerPlanForPeriod(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, runtime: CanadaRuntime, period: string): Promise<void> {
   if (!plan.enabled || state.lastSentPeriod === period) return;
   const config = loadConfig(userId);
+  if (plan.id === "plan-5" && !canRunPlanFive(config, runtime)) return;
   Object.assign(
     state,
     normalizePlanLevelState(plan, state.betLevels, state.pendingAmounts, state.currentLevel, state.pendingAmount),
