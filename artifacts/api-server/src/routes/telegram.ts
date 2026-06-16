@@ -1641,55 +1641,109 @@ function buildAbcDigitPositionHistory(positionIndex: 0 | 1 | 2): number[] {
     .filter((value): value is number => Number.isInteger(value));
 }
 
-function scoreAbcDigitCandidate(history: number[], digit: number): number {
+type AbcDigitTier = "tight" | "balanced" | "wide";
+
+function getAbcDigitTier(count: number): AbcDigitTier {
+  if (count <= 6) return "tight";
+  if (count === 7) return "balanced";
+  return "wide";
+}
+
+function countDigitHits(items: number[], digit: number): number {
+  return items.reduce((sum, value) => (value === digit ? sum + 1 : sum), 0);
+}
+
+function scoreAbcDigitCandidate(history: number[], digit: number, count: number): number {
   if (!history.length) return digit * -0.01;
 
-  const recent = history.slice(-36);
-  let score = 0;
+  const recent = history.slice(-40);
+  const normalizedCount = clampAbcPickCount(count);
+  const tier = getAbcDigitTier(normalizedCount);
+  const latest = recent[recent.length - 1]!;
+  const previous = recent[recent.length - 2];
+  const prev2 = recent[recent.length - 3];
 
-  recent.forEach((value, index) => {
-    if (value === digit) score += 0.55 + index * 0.08;
-  });
-
-  for (const [size, weight] of [[6, 2.8], [12, 1.9], [24, 1.2], [36, 0.8]] as const) {
-    const slice = recent.slice(-Math.min(size, recent.length));
-    if (!slice.length) continue;
-    const hits = slice.filter(value => value === digit).length;
-    score += (hits - slice.length / 10) * weight;
-  }
+  const tail5 = recent.slice(-5);
+  const tail10 = recent.slice(-10);
+  const tail20 = recent.slice(-20);
+  const hits5 = countDigitHits(tail5, digit);
+  const hits10 = countDigitHits(tail10, digit);
+  const hits20 = countDigitHits(tail20, digit);
+  const hits40 = countDigitHits(recent, digit);
 
   const lastIndex = [...recent].reverse().findIndex(value => value === digit);
   const gap = lastIndex === -1 ? recent.length + 6 : lastIndex;
-  if (gap === 0) score -= 0.9;
-  else if (gap <= 2) score += 0.5;
-  else if (gap <= 5) score += 1.4;
-  else if (gap <= 9) score += 2.1;
-  else if (gap <= 14) score += 1.0;
-  else score -= Math.min(2.2, (gap - 14) * 0.18);
-
-  const latest = recent[recent.length - 1]!;
-  const previous = recent[recent.length - 2];
+  const digitStreak = abcStreakTail(recent, value => value === digit);
   const latestStreak = abcStreakTail(recent, value => value === latest);
-  if (digit === latest && latestStreak >= 2) score += Math.min(3.2, latestStreak * 0.9);
+
+  let pairHits = 0;
+  let tripletHits = 0;
   if (previous !== undefined) {
-    const pairHits = recent.slice(0, -1).reduce((sum, value, index) => {
+    pairHits = recent.slice(0, -1).reduce((sum, value, index) => {
       if (value === latest && recent[index + 1] === digit) return sum + 1;
       return sum;
     }, 0);
-    score += pairHits * 0.85;
 
-    const pairKeyA = previous;
-    const pairKeyB = latest;
-    const tripletHits = recent.slice(0, -2).reduce((sum, value, index) => {
-      if (value === pairKeyA && recent[index + 1] === pairKeyB && recent[index + 2] === digit) return sum + 1;
+    tripletHits = recent.slice(0, -2).reduce((sum, value, index) => {
+      if (value === previous && recent[index + 1] === latest && recent[index + 2] === digit) return sum + 1;
       return sum;
     }, 0);
-    score += tripletHits * 1.25;
+  }
+
+  const recentMirrorHits = prev2 === undefined || previous === undefined
+    ? 0
+    : [latest, previous, prev2].filter(value => value === digit).length;
+
+  let score = 0;
+
+  if (tier === "tight") {
+    score += hits5 * 1.8 + hits10 * 1.45 + hits20 * 0.8;
+    score += pairHits * 2.2 + tripletHits * 3.1;
+
+    if (gap === 0) score -= 4.4;
+    else if (gap === 1) score -= 1.8;
+    else if (gap <= 4) score += 2.4;
+    else if (gap <= 8) score += 1.3;
+    else if (gap <= 14) score -= 0.5;
+    else score -= Math.min(4.2, 1.2 + (gap - 14) * 0.28);
+
+    if (digit === latest) score -= Math.min(4.6, 1.4 + latestStreak * 1.05);
+    if (digitStreak >= 2) score -= Math.min(3.4, 0.8 + digitStreak * 0.95);
+    score -= recentMirrorHits * 0.85;
+  } else if (tier === "balanced") {
+    score += hits5 * 1.5 + hits10 * 1.35 + hits20 * 0.9 + hits40 * 0.18;
+    score += pairHits * 2.0 + tripletHits * 2.7;
+
+    if (gap === 0) score -= 2.5;
+    else if (gap === 1) score -= 0.9;
+    else if (gap <= 5) score += 1.7;
+    else if (gap <= 9) score += 0.9;
+    else if (gap <= 16) score -= 0.2;
+    else score -= Math.min(3.6, 0.9 + (gap - 16) * 0.24);
+
+    if (digit === latest) score -= Math.min(2.6, 0.6 + latestStreak * 0.7);
+    if (digitStreak >= 3) score -= Math.min(2.2, 0.5 + digitStreak * 0.55);
+    score -= recentMirrorHits * 0.5;
+  } else {
+    // 8-9 个号优先保留热号，本质是 10 个号里只剔除最差的 1-2 个。
+    score += hits5 * 1.35 + hits10 * 1.6 + hits20 * 1.2 + hits40 * 0.45;
+    score += pairHits * 1.5 + tripletHits * 2.0;
+
+    if (gap === 0) score += hits10 >= 2 ? 0.7 : -0.4;
+    else if (gap === 1) score += 0.5;
+    else if (gap <= 6) score += 1.1;
+    else if (gap <= 12) score += 0.2;
+    else if (gap <= 18) score -= 1.0;
+    else score -= Math.min(5.4, 1.8 + (gap - 18) * 0.35);
+
+    if (digitStreak >= 4) score -= Math.min(2.5, 0.6 + digitStreak * 0.42);
+    if (digit === latest && latestStreak >= 4) score -= 1.4;
+    score -= recentMirrorHits * 0.15;
   }
 
   const tail3 = recent.slice(-3);
   const avg3 = tail3.reduce((sum, value) => sum + value, 0) / tail3.length;
-  score += (5 - Math.abs(digit - avg3)) * 0.12;
+  score += (4.5 - Math.abs(digit - avg3)) * (tier === "wide" ? 0.04 : 0.08);
 
   return Math.round(score * 1000) / 1000;
 }
@@ -1697,7 +1751,7 @@ function scoreAbcDigitCandidate(history: number[], digit: number): number {
 function pickAbcDigits(history: number[], count: number): number[] {
   const normalizedCount = clampAbcPickCount(count);
   return Array.from({ length: 10 }, (_, digit) => digit)
-    .map(digit => ({ digit, score: scoreAbcDigitCandidate(history, digit) }))
+    .map(digit => ({ digit, score: scoreAbcDigitCandidate(history, digit, normalizedCount) }))
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return a.digit - b.digit;
