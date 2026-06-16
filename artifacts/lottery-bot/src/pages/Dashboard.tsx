@@ -27,6 +27,7 @@ const ALGO_LABELS: Record<string, string> = {
   ai_trend:         "加拿大-算法1（旧版）",
   steady_ai:        "加拿大-算法2（旧版）",
   abc_trend:        "加拿大-ABC走势",
+  abc_digit_ai:     "加拿大-ABC三位数字AI",
   hash_follow:      "哈希-算法1",
   hash_reverse:     "哈希-算法2",
   hash_smart:       "哈希-算法3",
@@ -45,6 +46,7 @@ const ALGO_DESC: Record<string, string> = {
   ai_trend:         "加拿大旧版1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
   steady_ai:        "加拿大旧版2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
   abc_trend:        "加拿大ABC = 基于近24期走势，综合大小/单双/组合热度，自动选择 ABC 方向",
+  abc_digit_ai:     "ABC三位数字 = 按 A/B/C 三个位分别分析近期开奖数字热度、遗漏、转移关系，自动选出每个位要投的 4-9 个号码",
   hash_follow:      "哈希1 = 区块链龙形（顺龙1-5期，超6期反转，震荡跟尾）",
   hash_reverse:     "哈希2 = 双链均衡（三窗口加权回归，边界聚集时顺势突破）",
   hash_smart:       "哈希3 = MD5波段（短期动量×中期偏差×交替密度三维合力）",
@@ -328,6 +330,10 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [oddsBigEven, setOddsBigEven] = useState(String(status.oddsBigEven ?? status.odds ?? 1.98));
   const [oddsSmallOdd, setOddsSmallOdd] = useState(String(status.oddsSmallOdd ?? status.odds ?? 1.98));
   const [oddsSmallEven, setOddsSmallEven] = useState(String(status.oddsSmallEven ?? status.odds ?? 1.98));
+  const [abcACount, setAbcACount] = useState(String((status as unknown as { abcACount?: number }).abcACount ?? 4));
+  const [abcBCount, setAbcBCount] = useState(String((status as unknown as { abcBCount?: number }).abcBCount ?? 4));
+  const [abcCCount, setAbcCCount] = useState(String((status as unknown as { abcCCount?: number }).abcCCount ?? 4));
+  const [abcDigitOdds, setAbcDigitOdds] = useState(String((status as unknown as { abcDigitOdds?: number }).abcDigitOdds ?? 9.98));
   const [chaseNumbers, setChaseNumbers] = useState<Array<{ num: string; amount: string }>>(
     (status.chaseNumbers ?? []).map(c => ({ num: String(c.num), amount: String(c.amount) }))
   );
@@ -377,6 +383,10 @@ function SettingsDrawer({ status, onClose, onSave }: {
         kuaisanBetOptions: kuaisanOpts,
         hashBetOptions: hashOpts,
         algoFlipOnLoss: Number(algoFlip),
+        abcACount: Number(abcACount),
+        abcBCount: Number(abcBCount),
+        abcCCount: Number(abcCCount),
+        abcDigitOdds: Number(abcDigitOdds),
       });
       if (kkpay !== status.kkpayUsername) await api.tg.setKkpay(kkpay);
       onClose();
@@ -542,6 +552,38 @@ function SettingsDrawer({ status, onClose, onSave }: {
                 </div>
               )}
             </div>
+
+            {gameMode === "lottery" && algos.includes("abc_digit_ai") && (
+              <div className="mt-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/5 p-3 space-y-3">
+                <div>
+                  <div className="text-xs font-medium text-cyan-300">ABC 独立模板</div>
+                  <div className="text-[10px] text-slate-400 mt-1">
+                    A/B/C 代表三个位置，系统按历史走势自动从 0-9 中选出要投的号码。你只需要设置每个位要投几个号。
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] text-slate-500 mb-0.5">A位投几个</label>
+                    <input type="number" min="4" max="9" value={abcACount} onChange={e => setAbcACount(e.target.value)} className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-500 mb-0.5">B位投几个</label>
+                    <input type="number" min="4" max="9" value={abcBCount} onChange={e => setAbcBCount(e.target.value)} className={inputCls} />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-500 mb-0.5">C位投几个</label>
+                    <input type="number" min="4" max="9" value={abcCCount} onChange={e => setAbcCCount(e.target.value)} className={inputCls} />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">ABC 单号赔率（含本金）</label>
+                  <input type="number" min="1.01" step="0.01" value={abcDigitOdds} onChange={e => setAbcDigitOdds(e.target.value)} className={inputCls} />
+                </div>
+                <div className="text-[10px] text-cyan-200/80">
+                  发单格式示例：`A1/100  A4/100  B0/100  B7/100  C3/100`
+                </div>
+              </div>
+            )}
           </div>
 
           <div className={sectionCls}>

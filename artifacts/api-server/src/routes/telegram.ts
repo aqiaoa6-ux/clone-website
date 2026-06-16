@@ -203,7 +203,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
-  | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend";
+  | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend" | "abc_digit_ai";
 
 interface BetCfg {
   autoBet: boolean;
@@ -234,6 +234,10 @@ interface BetCfg {
   kuaisanBetOptions: string[];
   hashBetOptions: string[];
   algoFlipOnLoss: number; // 0=disabled; N=连续方向错N局后自动反转方向
+  abcACount: number;
+  abcBCount: number;
+  abcCCount: number;
+  abcDigitOdds: number;
 }
 
 interface GroupInfo {
@@ -443,6 +447,10 @@ const DEFAULT_CFG: BetCfg = {
   gameMode: "lottery",
   kuaisanBetOptions: ["big", "small"],
   hashBetOptions: ["big", "small"],
+  abcACount: 4,
+  abcBCount: 4,
+  abcCCount: 4,
+  abcDigitOdds: 9.98,
 };
 
 const BET_OPTION_LABELS: Record<BetOption, string> = {
@@ -490,8 +498,27 @@ const HASH_BET_LABELS: Record<string, string> = {
 
 export const tgSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
+let lotteryDigitHistoryCache: Array<[number, number, number]> = [];
 // 哈希28 全局开奖历史（所有用户共享，最新优先，最多保留 100 期）
 let hashHistoryCache: HashResult[] = [];
+
+function clampAbcPickCount(value: unknown, fallback = 4): number {
+  const num = Math.floor(Number(value));
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(9, Math.max(4, num));
+}
+
+function normalizeAbcDigitOdds(value: unknown, fallback = 9.98): number {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 1) return fallback;
+  return Math.round(num * 1000) / 1000;
+}
+
+function extractDrawDigits(item: { sum1?: number; sum2?: number; sum3?: number }): [number, number, number] | null {
+  const digits = [item.sum1, item.sum2, item.sum3].map(v => Number(v));
+  if (digits.some(v => !Number.isInteger(v) || v < 0 || v > 9)) return null;
+  return digits as [number, number, number];
+}
 
 // ─── 独立走势缓存预热（不依赖 TG 会话，服务启动即运行）────────────────────────
 async function warmLotteryCache(): Promise<void> {
@@ -505,6 +532,11 @@ async function warmLotteryCache(): Promise<void> {
     const items = data?.message?.all?.keno28?.data ?? [];
     const labels = items.map(d => d.r3).filter((x): x is string => !!x).reverse();
     if (labels.length) lotteryHistoryCache = labels.slice(-50);
+    const digits = items
+      .map(extractDrawDigits)
+      .filter((item): item is [number, number, number] => item !== null)
+      .reverse();
+    if (digits.length) lotteryDigitHistoryCache = digits.slice(-120);
     // 记录当前投注期号：items[0].r3 存在=已开奖，下一期才是当前期；否则 items[0] 本身是当前期
     if (items.length > 0 && items[0]!.term) {
       currentLotteryTerm = items[0]!.r3 ? items[0]!.term + 1 : items[0]!.term;
@@ -1590,6 +1622,94 @@ function decideAbcTrend(session: TgSession): string | null {
     })[0] ?? null;
 }
 
+type AbcDigitPosition = "A" | "B" | "C";
+type AbcDigitPlan = Record<AbcDigitPosition, number[]>;
+
+function buildAbcDigitPositionHistory(positionIndex: 0 | 1 | 2): number[] {
+  return lotteryDigitHistoryCache
+    .map(item => item[positionIndex])
+    .filter((value): value is number => Number.isInteger(value));
+}
+
+function scoreAbcDigitCandidate(history: number[], digit: number): number {
+  if (!history.length) return digit * -0.01;
+
+  const recent = history.slice(-36);
+  let score = 0;
+
+  recent.forEach((value, index) => {
+    if (value === digit) score += 0.55 + index * 0.08;
+  });
+
+  for (const [size, weight] of [[6, 2.8], [12, 1.9], [24, 1.2], [36, 0.8]] as const) {
+    const slice = recent.slice(-Math.min(size, recent.length));
+    if (!slice.length) continue;
+    const hits = slice.filter(value => value === digit).length;
+    score += (hits - slice.length / 10) * weight;
+  }
+
+  const lastIndex = [...recent].reverse().findIndex(value => value === digit);
+  const gap = lastIndex === -1 ? recent.length + 6 : lastIndex;
+  if (gap === 0) score -= 0.9;
+  else if (gap <= 2) score += 0.5;
+  else if (gap <= 5) score += 1.4;
+  else if (gap <= 9) score += 2.1;
+  else if (gap <= 14) score += 1.0;
+  else score -= Math.min(2.2, (gap - 14) * 0.18);
+
+  const latest = recent[recent.length - 1]!;
+  const previous = recent[recent.length - 2];
+  const latestStreak = abcStreakTail(recent, value => value === latest);
+  if (digit === latest && latestStreak >= 2) score += Math.min(3.2, latestStreak * 0.9);
+  if (previous !== undefined) {
+    const pairHits = recent.slice(0, -1).reduce((sum, value, index) => {
+      if (value === latest && recent[index + 1] === digit) return sum + 1;
+      return sum;
+    }, 0);
+    score += pairHits * 0.85;
+
+    const pairKeyA = previous;
+    const pairKeyB = latest;
+    const tripletHits = recent.slice(0, -2).reduce((sum, value, index) => {
+      if (value === pairKeyA && recent[index + 1] === pairKeyB && recent[index + 2] === digit) return sum + 1;
+      return sum;
+    }, 0);
+    score += tripletHits * 1.25;
+  }
+
+  const tail3 = recent.slice(-3);
+  const avg3 = tail3.reduce((sum, value) => sum + value, 0) / tail3.length;
+  score += (5 - Math.abs(digit - avg3)) * 0.12;
+
+  return Math.round(score * 1000) / 1000;
+}
+
+function pickAbcDigits(history: number[], count: number): number[] {
+  const normalizedCount = clampAbcPickCount(count);
+  return Array.from({ length: 10 }, (_, digit) => digit)
+    .map(digit => ({ digit, score: scoreAbcDigitCandidate(history, digit) }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.digit - b.digit;
+    })
+    .slice(0, normalizedCount)
+    .map(item => item.digit)
+    .sort((a, b) => a - b);
+}
+
+function buildAbcDigitPlan(session: TgSession): AbcDigitPlan | null {
+  const historyA = buildAbcDigitPositionHistory(0);
+  const historyB = buildAbcDigitPositionHistory(1);
+  const historyC = buildAbcDigitPositionHistory(2);
+  if (!historyA.length || !historyB.length || !historyC.length) return null;
+
+  return {
+    A: pickAbcDigits(historyA, session.cfg.abcACount),
+    B: pickAbcDigits(historyB, session.cfg.abcBCount),
+    C: pickAbcDigits(historyC, session.cfg.abcCCount),
+  };
+}
+
 // ─── Algorithm / direction decision ──────────────────────────────────────────
 
 function parseBetLabel(text: string): string | null {
@@ -2496,6 +2616,84 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   if (betLog.length > 200) betLog.length = 200;
 }
 
+async function placeAbcDigitBets(session: TgSession, plan: AbcDigitPlan): Promise<void> {
+  const { betLog } = session;
+  const targetId = session.watchGroupId!;
+  const amount = session.currentBet;
+  const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
+  session.betPlacedThisCycle = true;
+
+  const abcEntries = ([
+    ...plan.A.map(num => ({ key: `A${num}` })),
+    ...plan.B.map(num => ({ key: `B${num}` })),
+    ...plan.C.map(num => ({ key: `C${num}` })),
+  ] as const);
+
+  const chaseEntries = (!session.chasePlacedThisCycle && session.cfg.enableChase ? session.cfg.chaseNumbers : [])
+    .filter(c => c.amount > 0);
+  session.chasePlacedThisCycle = true;
+
+  const parts: string[] = [
+    ...chaseEntries.map(c => `${c.num}/${chaseEffectiveAmount(session, String(c.num), c.amount)}`),
+    ...abcEntries.map(entry => `${entry.key}/${amount}`),
+  ];
+  const message = parts.join("  ");
+
+  const now = Date.now();
+  let succeeded = false;
+  let failReason: string | undefined;
+  try {
+    await session.client.sendMessage(targetId, { message });
+    session.lastBetAt = now;
+    succeeded = true;
+  } catch (err) {
+    failReason = extractTgError(err);
+    handleBetSendError(session, failReason);
+  }
+
+  const status = succeeded ? "sent" : "failed";
+  const algoId = session.lastAlgoUsed;
+  const rawAlgoDir = session.lastRawAlgoDir ?? undefined;
+
+  for (const entry of abcEntries) {
+    const rec: BetRecord = {
+      id: `abc-${entry.key}-${now}`,
+      groupId: targetId,
+      groupTitle,
+      messageText: message,
+      betContent: entry.key,
+      amount,
+      timestamp: now,
+      status,
+      ...(failReason ? { failReason } : {}),
+      ...(algoId ? { algoId } : {}),
+      ...(rawAlgoDir ? { rawAlgoDir } : {}),
+    };
+    betLog.unshift(rec);
+    pushEvent(session, "bet:new", { bet: rec });
+  }
+
+  for (const { num, amount: chaseAmount } of chaseEntries) {
+    const effAmt = chaseEffectiveAmount(session, String(num), chaseAmount);
+    const rec: BetRecord = {
+      id: `chase-${num}-${now}`,
+      groupId: targetId,
+      groupTitle,
+      messageText: message,
+      betContent: String(num),
+      amount: effAmt,
+      timestamp: now,
+      status,
+      isChase: true,
+      ...(failReason ? { failReason } : {}),
+    };
+    betLog.unshift(rec);
+    pushEvent(session, "bet:new", { bet: rec });
+  }
+
+  if (betLog.length > 300) betLog.length = 300;
+}
+
 // ─── Kill-Group Mode ───────────────────────────────────────────────────────────
 // 四组杀组：AI 从 [大单/大双/小单/小双] 中挑出最可能不出的那一组杀掉，
 // 同时投注剩余三组。
@@ -2974,6 +3172,18 @@ async function runAutoBet(session: TgSession): Promise<void> {
     return;
   }
 
+  if (session.cfg.gameMode === "lottery" && session.cfg.algorithms.includes("abc_digit_ai")) {
+    const plan = buildAbcDigitPlan(session);
+    if (!plan) {
+      logger.warn("[abc-digit-ai] insufficient digit history, skip");
+      return;
+    }
+    session.lastAlgoUsed = "abc_digit_ai";
+    session.lastRawAlgoDir = `A:${plan.A.join(",")}|B:${plan.B.join(",")}|C:${plan.C.join(",")}`;
+    await placeAbcDigitBets(session, plan);
+    return;
+  }
+
   // adaptive_switch 算法：大小未中自动切杀组，杀组中奖切回大小
   if (session.cfg.algorithms.includes("adaptive_switch")) {
     if (session.adaptiveSwitchKillMode) {
@@ -3100,14 +3310,37 @@ async function pollLottery(session: TgSession): Promise<void> {
 
     const labels = items.map(d => d.r3).filter((x): x is string => !!x).reverse();
     if (labels.length) lotteryHistoryCache = labels.slice(-50);
+    const digitHistory = items
+      .map(extractDrawDigits)
+      .filter((item): item is [number, number, number] => item !== null)
+      .reverse();
+    if (digitHistory.length) lotteryDigitHistoryCache = digitHistory.slice(-120);
 
     if (latest.term <= session.lastSeenLotteryPeriod) return;
 
     if (latest.r3) {
+      const latestDigits = extractDrawDigits(latest);
       // Settle ALL pending main bets
       // betContent may be "大" / "大单" / "大单+小双" / "大双+大单+小双"
       const pendingAll = session.betLog.filter(b => b.status === "sent" && !b.isChase);
       for (const pending of pendingAll) {
+        const abcMatch = pending.betContent.match(/^([ABC])(\d)$/);
+        if (abcMatch && latestDigits) {
+          const posIndex = abcMatch[1] === "A" ? 0 : abcMatch[1] === "B" ? 1 : 2;
+          const targetDigit = Number(abcMatch[2]);
+          const won = latestDigits[posIndex] === targetDigit;
+          const pnl = won
+            ? Math.round(pending.amount * (session.cfg.abcDigitOdds - 1) * 100) / 100
+            : -pending.amount;
+          settleBet(session, {
+            won,
+            pnl,
+            result: `${latestDigits[0]}+${latestDigits[1]}+${latestDigits[2]}`,
+            betId: pending.id,
+            period: latest.term,
+          });
+          continue;
+        }
         const parts = pending.betContent.split("+").map(s => s.trim());
         const count = parts.length; // 1=normal, 2=dual, 3=kill-group
         let wonPart = false;
@@ -4833,6 +5066,10 @@ router.post("/tg/config", requireCard, (req, res) => {
     kuaisanBetOptions: body.kuaisanBetOptions ?? prev.kuaisanBetOptions,
     hashBetOptions: (body as Partial<BetCfg>).hashBetOptions ?? prev.hashBetOptions,
     algoFlipOnLoss: body.algoFlipOnLoss ?? prev.algoFlipOnLoss,
+    abcACount: clampAbcPickCount(body.abcACount ?? prev.abcACount, prev.abcACount),
+    abcBCount: clampAbcPickCount(body.abcBCount ?? prev.abcBCount, prev.abcBCount),
+    abcCCount: clampAbcPickCount(body.abcCCount ?? prev.abcCCount, prev.abcCCount),
+    abcDigitOdds: normalizeAbcDigitOdds(body.abcDigitOdds ?? prev.abcDigitOdds, prev.abcDigitOdds),
   };
   session.cfg.chaseNumbers = normalizeChaseNumbers(session.cfg.chaseNumbers);
   if (body.chaseNumbers !== undefined || body.chaseAmountLevels !== undefined || body.chaseDoubleOnLoss !== undefined) {

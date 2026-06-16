@@ -166,6 +166,18 @@ export interface BetCfg {
   chaseAmountLevels?: number[];
   gameMode?: string;
   kuaisanBetOptions?: string[];
+  hashBetOptions?: string[];
+  dualGroupMode?: boolean;
+  killGroupMode?: boolean;
+  algoFlipOnLoss?: number;
+  oddsBigOdd?: number;
+  oddsBigEven?: number;
+  oddsSmallOdd?: number;
+  oddsSmallEven?: number;
+  abcACount?: number;
+  abcBCount?: number;
+  abcCCount?: number;
+  abcDigitOdds?: number;
 }
 
 export interface KuaisanResultItem {
@@ -220,6 +232,10 @@ export interface TgStatus {
   oddsBigEven?: number;
   oddsSmallOdd?: number;
   oddsSmallEven?: number;
+  abcACount?: number;
+  abcBCount?: number;
+  abcCCount?: number;
+  abcDigitOdds?: number;
   totalBets?: number;
   settled?: number;
   wins?: number;
