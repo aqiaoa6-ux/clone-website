@@ -324,6 +324,7 @@ export interface TgSession {
   currentLevel: number;
   algIndex: number;
   abcDigitCycleIndex: number;
+  abcDigitCycleLastKilled: AbcDigitPlan;
   lastAlgoUsed?: AlgorithmId;
   currentPattern?: MarketPattern;
   recentResults: string[];
@@ -1042,6 +1043,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     lastBetAt: 0,
     algIndex: 0,
     abcDigitCycleIndex: 0,
+    abcDigitCycleLastKilled: { A: [], B: [], C: [] },
     betPlacedThisCycle: false,
     chasePlacedThisCycle: false,
     lastSeenLotteryPeriod: 0,
@@ -1661,6 +1663,37 @@ function getAbcDigitGap(history: number[], digit: number): number {
   return lastIndex === -1 ? recent.length + 6 : lastIndex;
 }
 
+function isAbcDigitSuperCold(history: number[], digit: number, count: number): boolean {
+  const recent = history.slice(-40);
+  const gap = getAbcDigitGap(recent, digit);
+  if (count >= 9) {
+    const tail12 = recent.slice(-12);
+    return countDigitHits(tail12, digit) === 0 && gap >= 12;
+  }
+  if (count === 8) {
+    const tail10 = recent.slice(-10);
+    return countDigitHits(tail10, digit) === 0 && gap >= 14;
+  }
+  return false;
+}
+
+function isAbcDigitMidColdCandidate(history: number[], digit: number, count: number): boolean {
+  const recent = history.slice(-40);
+  const tail5 = recent.slice(-5);
+  const tail10 = recent.slice(-10);
+  const gap = getAbcDigitGap(recent, digit);
+  const hits5 = countDigitHits(tail5, digit);
+  const hits10 = countDigitHits(tail10, digit);
+
+  if (count >= 9) {
+    return hits5 === 0 && hits10 <= 1 && gap >= 4 && gap <= 11;
+  }
+  if (count === 8) {
+    return hits5 === 0 && hits10 <= 1 && gap >= 5 && gap <= 13;
+  }
+  return false;
+}
+
 function scoreAbcDigitCandidate(history: number[], digit: number, count: number): number {
   if (!history.length) return digit * -0.01;
 
@@ -1814,11 +1847,14 @@ function scoreAbcDigitKillCandidate(history: number[], digit: number, count: num
   if (hits10 === 0 && gap >= 22) killScore -= 1.5;
   if (count === 8 && hits10 === 0 && gap >= 16) killScore -= 2.1;
   if (count === 9 && hits10 === 0 && gap >= 18) killScore -= 2.6;
+  if (count === 8 && hits5 === 0 && hits10 <= 1 && gap >= 5 && gap <= 13) killScore += 1.2;
+  if (count === 9 && hits5 === 0 && hits10 <= 1 && gap >= 4 && gap <= 11) killScore += 1.4;
+  if (isAbcDigitSuperCold(recent, digit, count)) killScore -= count === 9 ? 4.2 : 3.4;
 
   if (digitStreak >= 4) killScore += Math.min(1.4, 0.4 + digitStreak * 0.2);
   if (digit === latest && latestStreak >= 4) killScore += 0.5;
 
-  if (count === 8 && gap >= 10 && gap <= 18) killScore += 0.45;
+  if (count === 8 && gap >= 8 && gap <= 13) killScore += 0.35;
 
   // 用历史本身生成很小的动态扰动，打破长期并列导致的固定杀号。
   const signature = recent.reduce((sum, value, index) => sum + (value + 1) * (index + 3), 0);
@@ -1836,8 +1872,6 @@ function pickAbcDigits(history: number[], count: number): number[] {
     const killCount = 10 - normalizedCount;
     const protectedCount = normalizedCount === 8 ? 6 : 7;
     const recent = history.slice(-40);
-    const tail10 = recent.slice(-10);
-    const coldProtectThreshold = normalizedCount === 8 ? 16 : 18;
     const protectedDigits = new Set(
       allDigits
         .map(digit => ({ digit, score: scoreAbcDigitCandidate(history, digit, 7) }))
@@ -1849,14 +1883,16 @@ function pickAbcDigits(history: number[], count: number): number[] {
         .map(item => item.digit),
     );
     const coldProtectedDigits = new Set(
-      allDigits.filter(digit => {
-        const gap = getAbcDigitGap(recent, digit);
-        const hits10 = countDigitHits(tail10, digit);
-        return hits10 === 0 && gap >= coldProtectThreshold;
-      }),
+      allDigits.filter(digit => isAbcDigitSuperCold(recent, digit, normalizedCount)),
     );
-
-    const killPool = allDigits.filter(digit => !protectedDigits.has(digit) && !coldProtectedDigits.has(digit));
+    const preferredKillPool = allDigits.filter(digit =>
+      !protectedDigits.has(digit)
+      && !coldProtectedDigits.has(digit)
+      && isAbcDigitMidColdCandidate(recent, digit, normalizedCount),
+    );
+    const killPool = preferredKillPool.length >= killCount
+      ? preferredKillPool
+      : allDigits.filter(digit => !protectedDigits.has(digit) && !coldProtectedDigits.has(digit));
     const fallbackKillPool = allDigits.filter(digit => !protectedDigits.has(digit));
     const killed = new Set(
       (killPool.length >= killCount ? killPool : fallbackKillPool.length >= killCount ? fallbackKillPool : allDigits)
@@ -1906,6 +1942,41 @@ function buildAbcDigitPlan(session: TgSession): AbcDigitPlan | null {
   return plan;
 }
 
+function getAbcDigitExcludedDigits(pickedDigits: number[]): number[] {
+  const picked = new Set(pickedDigits);
+  return Array.from({ length: 10 }, (_, digit) => digit).filter(digit => !picked.has(digit));
+}
+
+function rebalanceAbcDigitCycleDigits(
+  history: number[],
+  pickedDigits: number[],
+  count: number,
+  lastKilledDigits: number[],
+): number[] {
+  if (count < 8 || lastKilledDigits.length === 0) return pickedDigits;
+
+  const omittedDigits = getAbcDigitExcludedDigits(pickedDigits);
+  const sameKilled = omittedDigits.length === lastKilledDigits.length
+    && omittedDigits.every((digit, index) => digit === lastKilledDigits[index]);
+  if (!sameKilled) return pickedDigits;
+
+  const restoreDigit = omittedDigits.find(digit => isAbcDigitSuperCold(history, digit, count) || getAbcDigitGap(history, digit) >= 10);
+  if (restoreDigit === undefined) return pickedDigits;
+
+  const dropCandidate = [...pickedDigits]
+    .sort((a, b) => {
+      const scoreA = scoreAbcDigitKillCandidate(history, a, count);
+      const scoreB = scoreAbcDigitKillCandidate(history, b, count);
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      return b - a;
+    })
+    .find(digit => !isAbcDigitSuperCold(history, digit, count));
+
+  if (dropCandidate === undefined) return pickedDigits;
+
+  return [...pickedDigits.filter(digit => digit !== dropCandidate), restoreDigit].sort((a, b) => a - b);
+}
+
 function getEnabledAbcDigitPositions(session: TgSession): AbcDigitPosition[] {
   const positions: AbcDigitPosition[] = [];
   if (session.cfg.abcAEnabled) positions.push("A");
@@ -1923,6 +1994,17 @@ function buildAbcDigitSinglePositionPlan(session: TgSession, position: AbcDigitP
   if (position === "A") plan.A = pickAbcDigits(history, session.cfg.abcACount);
   if (position === "B") plan.B = pickAbcDigits(history, session.cfg.abcBCount);
   if (position === "C") plan.C = pickAbcDigits(history, session.cfg.abcCCount);
+
+  const currentDigits = plan[position];
+  const count = position === "A" ? session.cfg.abcACount : position === "B" ? session.cfg.abcBCount : session.cfg.abcCCount;
+  const rebalancedDigits = rebalanceAbcDigitCycleDigits(
+    history,
+    currentDigits,
+    count,
+    session.abcDigitCycleLastKilled[position] ?? [],
+  );
+  plan[position] = rebalancedDigits;
+  session.abcDigitCycleLastKilled[position] = getAbcDigitExcludedDigits(rebalancedDigits);
 
   return plan[position].length ? plan : null;
 }
