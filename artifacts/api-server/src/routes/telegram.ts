@@ -1753,9 +1753,94 @@ function scoreAbcDigitCandidate(history: number[], digit: number, count: number)
   return Math.round(score * 1000) / 1000;
 }
 
+function scoreAbcDigitKillCandidate(history: number[], digit: number, count: number): number {
+  if (!history.length) return digit * 0.01;
+
+  const recent = history.slice(-40);
+  const latest = recent[recent.length - 1]!;
+  const previous = recent[recent.length - 2];
+
+  const tail5 = recent.slice(-5);
+  const tail10 = recent.slice(-10);
+  const tail20 = recent.slice(-20);
+  const hits5 = countDigitHits(tail5, digit);
+  const hits10 = countDigitHits(tail10, digit);
+  const hits20 = countDigitHits(tail20, digit);
+
+  const lastIndex = [...recent].reverse().findIndex(value => value === digit);
+  const gap = lastIndex === -1 ? recent.length + 6 : lastIndex;
+  const digitStreak = abcStreakTail(recent, value => value === digit);
+  const latestStreak = abcStreakTail(recent, value => value === latest);
+
+  let pairHits = 0;
+  let tripletHits = 0;
+  if (previous !== undefined) {
+    pairHits = recent.slice(0, -1).reduce((sum, value, index) => {
+      if (value === latest && recent[index + 1] === digit) return sum + 1;
+      return sum;
+    }, 0);
+
+    tripletHits = recent.slice(0, -2).reduce((sum, value, index) => {
+      if (value === previous && recent[index + 1] === latest && recent[index + 2] === digit) return sum + 1;
+      return sum;
+    }, 0);
+  }
+
+  let killScore = 0;
+
+  // 8/9 个号本质是挑出最该剔除的 1-2 个：优先杀“中冷转弱”的，不是一直杀同一批超冷号。
+  killScore += (tail5.length - hits5) * 0.42;
+  killScore += (tail10.length - hits10) * 0.26;
+  killScore += (tail20.length - hits20) * 0.08;
+  killScore -= pairHits * 1.1;
+  killScore -= tripletHits * 1.45;
+
+  if (gap <= 1) killScore -= 2.6;
+  else if (gap <= 4) killScore -= 0.9;
+  else if (gap <= 8) killScore += 0.7;
+  else if (gap <= 14) killScore += 2.0;
+  else if (gap <= 20) killScore += 2.6;
+  else if (gap <= 26) killScore -= 1.4;
+  else killScore -= 2.4;
+
+  if (hits5 === 0 && hits10 > 0) killScore += 1.0;
+  if (hits5 === 0 && hits10 === 0 && gap >= 16) killScore -= 1.6;
+  if (hits10 === 0 && gap >= 22) killScore -= 1.5;
+
+  if (digitStreak >= 4) killScore += Math.min(1.4, 0.4 + digitStreak * 0.2);
+  if (digit === latest && latestStreak >= 4) killScore += 0.5;
+
+  if (count === 8 && gap >= 10 && gap <= 18) killScore += 0.45;
+
+  // 用历史本身生成很小的动态扰动，打破长期并列导致的固定杀号。
+  const signature = recent.reduce((sum, value, index) => sum + (value + 1) * (index + 3), 0);
+  killScore += ((signature + digit * 11 + gap * 7) % 17) * 0.01;
+
+  return Math.round(killScore * 1000) / 1000;
+}
+
 function pickAbcDigits(history: number[], count: number): number[] {
   const normalizedCount = clampAbcPickCount(count);
-  return Array.from({ length: 10 }, (_, digit) => digit)
+  const tier = getAbcDigitTier(normalizedCount);
+  const allDigits = Array.from({ length: 10 }, (_, digit) => digit);
+
+  if (tier === "wide") {
+    const killCount = 10 - normalizedCount;
+    const killed = new Set(
+      allDigits
+        .map(digit => ({ digit, score: scoreAbcDigitKillCandidate(history, digit, normalizedCount) }))
+        .sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return a.digit - b.digit;
+        })
+        .slice(0, killCount)
+        .map(item => item.digit),
+    );
+
+    return allDigits.filter(digit => !killed.has(digit));
+  }
+
+  return allDigits
     .map(digit => ({ digit, score: scoreAbcDigitCandidate(history, digit, normalizedCount) }))
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
