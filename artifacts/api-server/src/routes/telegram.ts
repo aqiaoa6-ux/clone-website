@@ -203,7 +203,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
-  | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend" | "abc_digit_ai";
+  | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend" | "abc_digit_ai" | "abc_digit_cycle_ai";
 
 interface BetCfg {
   autoBet: boolean;
@@ -323,6 +323,7 @@ export interface TgSession {
   lastBetAt: number;
   currentLevel: number;
   algIndex: number;
+  abcDigitCycleIndex: number;
   lastAlgoUsed?: AlgorithmId;
   currentPattern?: MarketPattern;
   recentResults: string[];
@@ -1040,6 +1041,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
       : (data.cfg?.betAmount ?? DEFAULT_CFG.betAmount),
     lastBetAt: 0,
     algIndex: 0,
+    abcDigitCycleIndex: 0,
     betPlacedThisCycle: false,
     chasePlacedThisCycle: false,
     lastSeenLotteryPeriod: 0,
@@ -1901,6 +1903,40 @@ function buildAbcDigitPlan(session: TgSession): AbcDigitPlan | null {
   }
 
   if (!plan.A.length && !plan.B.length && !plan.C.length) return null;
+  return plan;
+}
+
+function getEnabledAbcDigitPositions(session: TgSession): AbcDigitPosition[] {
+  const positions: AbcDigitPosition[] = [];
+  if (session.cfg.abcAEnabled) positions.push("A");
+  if (session.cfg.abcBEnabled) positions.push("B");
+  if (session.cfg.abcCEnabled) positions.push("C");
+  return positions;
+}
+
+function buildAbcDigitSinglePositionPlan(session: TgSession, position: AbcDigitPosition): AbcDigitPlan | null {
+  const plan: AbcDigitPlan = { A: [], B: [], C: [] };
+  const positionIndex = position === "A" ? 0 : position === "B" ? 1 : 2;
+  const history = buildAbcDigitPositionHistory(positionIndex);
+  if (!history.length) return null;
+
+  if (position === "A") plan.A = pickAbcDigits(history, session.cfg.abcACount);
+  if (position === "B") plan.B = pickAbcDigits(history, session.cfg.abcBCount);
+  if (position === "C") plan.C = pickAbcDigits(history, session.cfg.abcCCount);
+
+  return plan[position].length ? plan : null;
+}
+
+function buildAbcDigitCyclePlan(session: TgSession): AbcDigitPlan | null {
+  const enabledPositions = getEnabledAbcDigitPositions(session);
+  if (!enabledPositions.length) return null;
+
+  const nextIndex = session.abcDigitCycleIndex % enabledPositions.length;
+  const position = enabledPositions[nextIndex]!;
+  const plan = buildAbcDigitSinglePositionPlan(session, position);
+  if (!plan) return null;
+
+  session.abcDigitCycleIndex = (nextIndex + 1) % enabledPositions.length;
   return plan;
 }
 
@@ -3400,17 +3436,23 @@ async function runAutoBet(session: TgSession): Promise<void> {
     return;
   }
 
-  if (session.cfg.gameMode === "lottery" && session.cfg.algorithms.includes("abc_digit_ai")) {
+  const abcDigitAlgo = session.cfg.gameMode === "lottery"
+    ? session.cfg.algorithms.find(algo => algo === "abc_digit_cycle_ai" || algo === "abc_digit_ai")
+    : undefined;
+
+  if (abcDigitAlgo) {
     if (!hasAbcDigitEnabled(session)) {
       logger.warn("[abc-digit-ai] all positions disabled, skip");
       return;
     }
-    const plan = buildAbcDigitPlan(session);
+    const plan = abcDigitAlgo === "abc_digit_cycle_ai"
+      ? buildAbcDigitCyclePlan(session)
+      : buildAbcDigitPlan(session);
     if (!plan) {
       logger.warn("[abc-digit-ai] insufficient digit history, skip");
       return;
     }
-    session.lastAlgoUsed = "abc_digit_ai";
+    session.lastAlgoUsed = abcDigitAlgo;
     session.lastRawAlgoDir = summarizeAbcDigitPlan(plan);
     await placeAbcDigitBets(session, plan);
     return;
@@ -5080,7 +5122,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       kkpayHandler: null, kkpayHandlerBuilder: null,
       consecutiveLosses: 0, consecutiveAlgoLosses: 0, recentAlgoOutcomes: [], sessionPnl: 0,
       currentBet: (existing?.cfg ?? DEFAULT_CFG).betAmount, lastBetAt: 0,
-      currentLevel: 0, algIndex: 0,
+      currentLevel: 0, algIndex: 0, abcDigitCycleIndex: 0,
       betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "", lastAIBet: null, lastRawAlgoDir: null, algoFlipCooldown: 0,
       algoStats: {},
       chaseLevels: {},
