@@ -5205,6 +5205,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       consecutiveLosses: 0, consecutiveAlgoLosses: 0, recentAlgoOutcomes: [], sessionPnl: 0,
       currentBet: (existing?.cfg ?? DEFAULT_CFG).betAmount, lastBetAt: 0,
       currentLevel: 0, algIndex: 0, abcDigitCycleIndex: 0,
+      abcDigitCycleLastKilled: existing?.abcDigitCycleLastKilled ?? { A: [], B: [], C: [] },
       betPlacedThisCycle: false, chasePlacedThisCycle: false, lastSeenLotteryPeriod: 0, currentCloseTimeMs: 0, lastSignalText: "", lastAIBet: null, lastRawAlgoDir: null, algoFlipCooldown: 0,
       algoStats: {},
       chaseLevels: {},
