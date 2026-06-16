@@ -203,7 +203,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
-  | "canada_kill" | "canada_kill_plus" | "canada_smart_plus";
+  | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend";
 
 interface BetCfg {
   autoBet: boolean;
@@ -1341,11 +1341,11 @@ function buildHistory(session: TgSession): string[] {
 type MarketPattern = "streak" | "oscillating" | "neutral";
 
 /** 长龙形态适用算法 */
-const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "ai_trend", "adaptive_switch", "ks_follow", "ks_bb"];
+const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "ai_trend", "adaptive_switch", "ks_follow", "ks_bb", "abc_trend"];
 /** 震荡形态适用算法 */
-const OSCILLATING_ALGOS: AlgorithmId[] = ["anti_streak", "dragon_break", "signal_reverse", "ks_reverse", "ks_bb"];
+const OSCILLATING_ALGOS: AlgorithmId[] = ["anti_streak", "dragon_break", "signal_reverse", "ks_reverse", "ks_bb", "abc_trend"];
 /** 中性算法（兜底） */
-const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick", "steady_ai", "ks_smart"];
+const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick", "steady_ai", "ks_smart", "abc_trend"];
 
 /**
  * 检测最近 8 期走势形态：
@@ -1467,6 +1467,129 @@ function antiStreak(session: TgSession): string | null {
     }
   }
   return freqPick(mapped, labels, false);
+}
+
+const ABC_RAW_LABELS = ["大单", "大双", "小单", "小双"] as const;
+const ABC_GROUP_A = "大单小双";
+const ABC_GROUP_B = "小单大双";
+
+function buildAbcHistory(session: TgSession): string[] {
+  return [...lotteryHistoryCache, ...session.recentResults]
+    .slice(-24)
+    .filter((label): label is (typeof ABC_RAW_LABELS)[number] =>
+      (ABC_RAW_LABELS as readonly string[]).includes(label),
+    );
+}
+
+function calcAbcBinaryScore(history: string[], isPositive: (label: string) => boolean): number {
+  if (!history.length) return 0;
+
+  let score = 0;
+  const tail = history.slice(-8);
+  tail.forEach((label, index) => {
+    const weight = 0.9 + index * 0.25;
+    score += isPositive(label) ? weight : -weight;
+  });
+
+  for (const { size, weight } of [{ size: 6, weight: 1.2 }, { size: 12, weight: 0.9 }, { size: 20, weight: 0.6 }]) {
+    const slice = history.slice(-Math.min(size, history.length));
+    if (slice.length < 4) continue;
+    const ratio = slice.filter(isPositive).length / slice.length;
+    if (ratio >= 0.66) score += weight * 2.2;
+    else if (ratio >= 0.58) score += weight * 1.0;
+    else if (ratio <= 0.34) score -= weight * 2.2;
+    else if (ratio <= 0.42) score -= weight * 1.0;
+  }
+
+  const latest = tail[tail.length - 1]!;
+  const latestSign = isPositive(latest) ? 1 : -1;
+  let streak = 0;
+  for (let i = history.length - 1; i >= 0 && isPositive(history[i]!) === isPositive(latest); i--) streak++;
+
+  let alternations = 0;
+  for (let i = 1; i < tail.length; i++) {
+    if (isPositive(tail[i]!) !== isPositive(tail[i - 1]!)) alternations++;
+  }
+  const altRatio = tail.length > 1 ? alternations / (tail.length - 1) : 0.5;
+  if (altRatio >= 0.72) score += latestSign * -2.4;
+  else if (altRatio <= 0.30) score += latestSign * Math.min(3.2, 1.0 + streak * 0.7);
+
+  return score;
+}
+
+function calcAbcComboScore(history: string[], target: (typeof ABC_RAW_LABELS)[number]): number {
+  if (!history.length) return 0;
+
+  let score = 0;
+  const tail = history.slice(-10);
+  tail.forEach((label, index) => {
+    if (label === target) score += 0.9 + index * 0.2;
+  });
+
+  const freq = tail.filter(label => label === target).length / tail.length;
+  score += (freq - 0.25) * 5.5;
+
+  let streak = 0;
+  for (let i = history.length - 1; i >= 0 && history[i] === target; i--) streak++;
+  if (streak >= 2) score += Math.min(3.0, streak * 0.9);
+  else if (streak === 1) score += 0.8;
+
+  let absence = 0;
+  for (let i = history.length - 1; i >= 0 && history[i] !== target; i--) absence++;
+  if (absence >= 6) score -= 2.0;
+  else if (absence >= 4) score -= 0.8;
+
+  return score;
+}
+
+function decideAbcTrend(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return null;
+
+  const history = buildAbcHistory(session);
+  if (history.length < 4) {
+    if (session.cfg.dualGroupMode) return Math.random() < 0.5 ? ABC_GROUP_A : ABC_GROUP_B;
+    return labels[Math.floor(Math.random() * labels.length)] ?? null;
+  }
+
+  const bigScore = calcAbcBinaryScore(history, label => label.startsWith("大"));
+  const oddScore = calcAbcBinaryScore(history, label => label.endsWith("单"));
+
+  const comboScores: Record<(typeof ABC_RAW_LABELS)[number], number> = {
+    "大单": bigScore + oddScore + calcAbcComboScore(history, "大单"),
+    "大双": bigScore - oddScore + calcAbcComboScore(history, "大双"),
+    "小单": -bigScore + oddScore + calcAbcComboScore(history, "小单"),
+    "小双": -bigScore - oddScore + calcAbcComboScore(history, "小双"),
+  };
+
+  if (session.cfg.dualGroupMode) {
+    const groupScoreA =
+      comboScores["大单"] +
+      comboScores["小双"] +
+      calcAbcBinaryScore(history, label => label === "大单" || label === "小双");
+    const groupScoreB =
+      comboScores["小单"] +
+      comboScores["大双"] +
+      calcAbcBinaryScore(history, label => label === "小单" || label === "大双");
+    return groupScoreA >= groupScoreB ? ABC_GROUP_A : ABC_GROUP_B;
+  }
+
+  const scoreMap: Record<string, number> = {
+    "大": bigScore,
+    "小": -bigScore,
+    "单": oddScore,
+    "双": -oddScore,
+    ...comboScores,
+  };
+
+  return [...labels]
+    .sort((a, b) => {
+      const diff = (scoreMap[b] ?? -999) - (scoreMap[a] ?? -999);
+      if (diff !== 0) return diff;
+      const lastA = [...history].reverse().findIndex(item => mapR3ToEnabled(item, [a]) === a);
+      const lastB = [...history].reverse().findIndex(item => mapR3ToEnabled(item, [b]) === b);
+      return lastA - lastB;
+    })[0] ?? null;
 }
 
 // ─── Algorithm / direction decision ──────────────────────────────────────────
@@ -1824,6 +1947,7 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "momentum") return momentum(session);
   if (algoId === "anti_streak") return antiStreak(session);
   if (algoId === "streak_follow") return streakFollow(session);
+  if (algoId === "abc_trend") return decideAbcTrend(session);
   if (algoId === "signal_follow" || algoId === "signal_reverse") {
     const p = parseBetLabel(signalText);
     if (!p) return null;
@@ -4911,7 +5035,7 @@ router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
 // 所有可回测算法（不依赖外部信号），任意登录用户可访问，无需持有卡密
 const ALL_SIMULATABLE_ALGOS: AlgorithmId[] = [
   "adaptive_switch", "steady_ai", "ai_trend", "streak_follow",
-  "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick",
+  "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend",
 ];
 
 router.get("/tg/algo-rates", requireAuth, (req, res) => {
