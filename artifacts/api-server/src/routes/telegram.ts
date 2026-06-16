@@ -1653,6 +1653,12 @@ function countDigitHits(items: number[], digit: number): number {
   return items.reduce((sum, value) => (value === digit ? sum + 1 : sum), 0);
 }
 
+function getAbcDigitGap(history: number[], digit: number): number {
+  const recent = history.slice(-40);
+  const lastIndex = [...recent].reverse().findIndex(value => value === digit);
+  return lastIndex === -1 ? recent.length + 6 : lastIndex;
+}
+
 function scoreAbcDigitCandidate(history: number[], digit: number, count: number): number {
   if (!history.length) return digit * -0.01;
 
@@ -1671,8 +1677,7 @@ function scoreAbcDigitCandidate(history: number[], digit: number, count: number)
   const hits20 = countDigitHits(tail20, digit);
   const hits40 = countDigitHits(recent, digit);
 
-  const lastIndex = [...recent].reverse().findIndex(value => value === digit);
-  const gap = lastIndex === -1 ? recent.length + 6 : lastIndex;
+  const gap = getAbcDigitGap(recent, digit);
   const digitStreak = abcStreakTail(recent, value => value === digit);
   const latestStreak = abcStreakTail(recent, value => value === latest);
 
@@ -1767,8 +1772,7 @@ function scoreAbcDigitKillCandidate(history: number[], digit: number, count: num
   const hits10 = countDigitHits(tail10, digit);
   const hits20 = countDigitHits(tail20, digit);
 
-  const lastIndex = [...recent].reverse().findIndex(value => value === digit);
-  const gap = lastIndex === -1 ? recent.length + 6 : lastIndex;
+  const gap = getAbcDigitGap(recent, digit);
   const digitStreak = abcStreakTail(recent, value => value === digit);
   const latestStreak = abcStreakTail(recent, value => value === latest);
 
@@ -1806,6 +1810,8 @@ function scoreAbcDigitKillCandidate(history: number[], digit: number, count: num
   if (hits5 === 0 && hits10 > 0) killScore += 1.0;
   if (hits5 === 0 && hits10 === 0 && gap >= 16) killScore -= 1.6;
   if (hits10 === 0 && gap >= 22) killScore -= 1.5;
+  if (count === 8 && hits10 === 0 && gap >= 16) killScore -= 2.1;
+  if (count === 9 && hits10 === 0 && gap >= 18) killScore -= 2.6;
 
   if (digitStreak >= 4) killScore += Math.min(1.4, 0.4 + digitStreak * 0.2);
   if (digit === latest && latestStreak >= 4) killScore += 0.5;
@@ -1826,8 +1832,32 @@ function pickAbcDigits(history: number[], count: number): number[] {
 
   if (tier === "wide") {
     const killCount = 10 - normalizedCount;
-    const killed = new Set(
+    const protectedCount = normalizedCount === 8 ? 6 : 7;
+    const recent = history.slice(-40);
+    const tail10 = recent.slice(-10);
+    const coldProtectThreshold = normalizedCount === 8 ? 16 : 18;
+    const protectedDigits = new Set(
       allDigits
+        .map(digit => ({ digit, score: scoreAbcDigitCandidate(history, digit, 7) }))
+        .sort((a, b) => {
+          if (b.score !== a.score) return b.score - a.score;
+          return a.digit - b.digit;
+        })
+        .slice(0, protectedCount)
+        .map(item => item.digit),
+    );
+    const coldProtectedDigits = new Set(
+      allDigits.filter(digit => {
+        const gap = getAbcDigitGap(recent, digit);
+        const hits10 = countDigitHits(tail10, digit);
+        return hits10 === 0 && gap >= coldProtectThreshold;
+      }),
+    );
+
+    const killPool = allDigits.filter(digit => !protectedDigits.has(digit) && !coldProtectedDigits.has(digit));
+    const fallbackKillPool = allDigits.filter(digit => !protectedDigits.has(digit));
+    const killed = new Set(
+      (killPool.length >= killCount ? killPool : fallbackKillPool.length >= killCount ? fallbackKillPool : allDigits)
         .map(digit => ({ digit, score: scoreAbcDigitKillCandidate(history, digit, normalizedCount) }))
         .sort((a, b) => {
           if (b.score !== a.score) return b.score - a.score;
