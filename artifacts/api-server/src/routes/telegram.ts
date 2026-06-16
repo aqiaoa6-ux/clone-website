@@ -1475,44 +1475,47 @@ const ABC_GROUP_B = "小单大双";
 
 function buildAbcHistory(session: TgSession): string[] {
   return [...lotteryHistoryCache, ...session.recentResults]
-    .slice(-24)
+    .slice(-36)
     .filter((label): label is (typeof ABC_RAW_LABELS)[number] =>
       (ABC_RAW_LABELS as readonly string[]).includes(label),
     );
 }
 
-function calcAbcBinaryScore(history: string[], isPositive: (label: string) => boolean): number {
+function abcStreakTail<T>(items: T[], same: (item: T) => boolean): number {
+  let count = 0;
+  for (let i = items.length - 1; i >= 0 && same(items[i]!); i--) count++;
+  return count;
+}
+
+function calcAbcAxisScore(history: string[], positive: (label: string) => boolean): number {
   if (!history.length) return 0;
 
   let score = 0;
-  const tail = history.slice(-8);
-  tail.forEach((label, index) => {
-    const weight = 0.9 + index * 0.25;
-    score += isPositive(label) ? weight : -weight;
+  const recent = history.slice(-12);
+
+  // 最近 12 期越新的权重越高，方向连续则顺一点，强震荡则反一点。
+  recent.forEach((label, index) => {
+    const weight = 0.7 + index * 0.18;
+    score += positive(label) ? weight : -weight;
   });
 
-  for (const { size, weight } of [{ size: 6, weight: 1.2 }, { size: 12, weight: 0.9 }, { size: 20, weight: 0.6 }]) {
+  for (const [size, weight] of [[6, 2.2], [12, 1.5], [24, 1.0]] as const) {
     const slice = history.slice(-Math.min(size, history.length));
     if (slice.length < 4) continue;
-    const ratio = slice.filter(isPositive).length / slice.length;
-    if (ratio >= 0.66) score += weight * 2.2;
-    else if (ratio >= 0.58) score += weight * 1.0;
-    else if (ratio <= 0.34) score -= weight * 2.2;
-    else if (ratio <= 0.42) score -= weight * 1.0;
+    const ratio = slice.filter(positive).length / slice.length;
+    score += (ratio - 0.5) * weight * 8;
   }
 
-  const latest = tail[tail.length - 1]!;
-  const latestSign = isPositive(latest) ? 1 : -1;
-  let streak = 0;
-  for (let i = history.length - 1; i >= 0 && isPositive(history[i]!) === isPositive(latest); i--) streak++;
+  const latestPositive = positive(recent[recent.length - 1]!);
+  const streak = abcStreakTail(history, item => positive(item) === latestPositive);
+  if (streak >= 3) score += latestPositive ? Math.min(3.6, streak * 0.75) : -Math.min(3.6, streak * 0.75);
 
   let alternations = 0;
-  for (let i = 1; i < tail.length; i++) {
-    if (isPositive(tail[i]!) !== isPositive(tail[i - 1]!)) alternations++;
+  for (let i = 1; i < recent.length; i++) {
+    if (positive(recent[i]!) !== positive(recent[i - 1]!)) alternations++;
   }
-  const altRatio = tail.length > 1 ? alternations / (tail.length - 1) : 0.5;
-  if (altRatio >= 0.72) score += latestSign * -2.4;
-  else if (altRatio <= 0.30) score += latestSign * Math.min(3.2, 1.0 + streak * 0.7);
+  const altRatio = recent.length > 1 ? alternations / (recent.length - 1) : 0.5;
+  if (altRatio >= 0.72) score += latestPositive ? -2.8 : 2.8;
 
   return score;
 }
@@ -1521,23 +1524,21 @@ function calcAbcComboScore(history: string[], target: (typeof ABC_RAW_LABELS)[nu
   if (!history.length) return 0;
 
   let score = 0;
-  const tail = history.slice(-10);
-  tail.forEach((label, index) => {
-    if (label === target) score += 0.9 + index * 0.2;
+  const recent = history.slice(-15);
+  recent.forEach((label, index) => {
+    if (label === target) score += 0.6 + index * 0.16;
   });
 
-  const freq = tail.filter(label => label === target).length / tail.length;
-  score += (freq - 0.25) * 5.5;
+  const count15 = recent.filter(label => label === target).length;
+  score += (count15 / recent.length - 0.25) * 7.5;
 
-  let streak = 0;
-  for (let i = history.length - 1; i >= 0 && history[i] === target; i--) streak++;
-  if (streak >= 2) score += Math.min(3.0, streak * 0.9);
-  else if (streak === 1) score += 0.8;
+  const streak = abcStreakTail(history, item => item === target);
+  if (streak >= 2) score += Math.min(4.2, streak * 1.1);
 
   let absence = 0;
   for (let i = history.length - 1; i >= 0 && history[i] !== target; i--) absence++;
-  if (absence >= 6) score -= 2.0;
-  else if (absence >= 4) score -= 0.8;
+  if (absence >= 8) score -= 3.2;
+  else if (absence >= 5) score -= 1.4;
 
   return score;
 }
@@ -1547,13 +1548,13 @@ function decideAbcTrend(session: TgSession): string | null {
   if (!labels.length) return null;
 
   const history = buildAbcHistory(session);
-  if (history.length < 4) {
+  if (history.length < 5) {
     if (session.cfg.dualGroupMode) return Math.random() < 0.5 ? ABC_GROUP_A : ABC_GROUP_B;
     return labels[Math.floor(Math.random() * labels.length)] ?? null;
   }
 
-  const bigScore = calcAbcBinaryScore(history, label => label.startsWith("大"));
-  const oddScore = calcAbcBinaryScore(history, label => label.endsWith("单"));
+  const bigScore = calcAbcAxisScore(history, label => label.startsWith("大"));
+  const oddScore = calcAbcAxisScore(history, label => label.endsWith("单"));
 
   const comboScores: Record<(typeof ABC_RAW_LABELS)[number], number> = {
     "大单": bigScore + oddScore + calcAbcComboScore(history, "大单"),
@@ -1563,15 +1564,9 @@ function decideAbcTrend(session: TgSession): string | null {
   };
 
   if (session.cfg.dualGroupMode) {
-    const groupScoreA =
-      comboScores["大单"] +
-      comboScores["小双"] +
-      calcAbcBinaryScore(history, label => label === "大单" || label === "小双");
-    const groupScoreB =
-      comboScores["小单"] +
-      comboScores["大双"] +
-      calcAbcBinaryScore(history, label => label === "小单" || label === "大双");
-    return groupScoreA >= groupScoreB ? ABC_GROUP_A : ABC_GROUP_B;
+    const groupA = comboScores["大单"] + comboScores["小双"];
+    const groupB = comboScores["小单"] + comboScores["大双"];
+    return groupA >= groupB ? ABC_GROUP_A : ABC_GROUP_B;
   }
 
   const scoreMap: Record<string, number> = {
@@ -1579,16 +1574,19 @@ function decideAbcTrend(session: TgSession): string | null {
     "小": -bigScore,
     "单": oddScore,
     "双": -oddScore,
-    ...comboScores,
+    "大单": comboScores["大单"],
+    "大双": comboScores["大双"],
+    "小单": comboScores["小单"],
+    "小双": comboScores["小双"],
   };
 
   return [...labels]
     .sort((a, b) => {
       const diff = (scoreMap[b] ?? -999) - (scoreMap[a] ?? -999);
       if (diff !== 0) return diff;
-      const lastA = [...history].reverse().findIndex(item => mapR3ToEnabled(item, [a]) === a);
-      const lastB = [...history].reverse().findIndex(item => mapR3ToEnabled(item, [b]) === b);
-      return lastA - lastB;
+      const latestA = [...history].reverse().findIndex(item => mapR3ToEnabled(item, [a]) === a);
+      const latestB = [...history].reverse().findIndex(item => mapR3ToEnabled(item, [b]) === b);
+      return latestA - latestB;
     })[0] ?? null;
 }
 
