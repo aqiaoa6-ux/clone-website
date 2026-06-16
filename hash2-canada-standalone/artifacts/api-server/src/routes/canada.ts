@@ -458,12 +458,16 @@ function resetPlanRuntimeForRestart(plan: CanadaPlan, state: CanadaPlanRuntime):
   state.pendingAmounts = levelState.pendingAmounts;
   state.pendingAmount = 0;
   state.sessionPnl = 0;
+  state.totalRounds = 0;
+  state.wins = 0;
+  state.losses = 0;
   state.pendingPeriod = null;
   state.lastSentPeriod = null;
   state.lastSettledPeriod = null;
   state.blockedReason = undefined;
   state.lastHit = undefined;
   state.lastRiskNotified = undefined;
+  state.lastMessage = "";
   state.updatedAt = Date.now();
 }
 
@@ -964,6 +968,27 @@ router.get("/canada/runtime", requireCard, (req, res) => {
   const config = loadConfig(userId);
   const runtime = loadRuntime(userId, config);
   res.json({ runtime });
+});
+
+router.post("/canada/reset-runtime", requireCard, (req, res) => {
+  const userId = req.user!.userId;
+  const planId = String((req.body as { planId?: string } | undefined)?.planId ?? "").trim();
+  const config = loadConfig(userId);
+  const plan = config.plans.find(item => item.id === planId);
+  if (!plan) {
+    res.status(400).json({ error: "方案不存在" });
+    return;
+  }
+  const runtime = loadRuntime(userId, config);
+  const state = runtime.plans[planId];
+  if (!state) {
+    res.status(400).json({ error: "方案运行状态不存在" });
+    return;
+  }
+  resetPlanRuntimeForRestart(plan, state);
+  runtime.updatedAt = Date.now();
+  saveRuntime(userId, runtime);
+  res.json({ ok: true, runtime });
 });
 
 router.post("/canada/test-alert", requireCard, (req, res) => {

@@ -987,6 +987,7 @@ function CanadaPlanRuntimeSummary({
   currentLevelSummary: string;
 }) {
   const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
+  const [resetting, setResetting] = useState(false);
 
   const fetchRuntime = useCallback(async () => {
     try {
@@ -1009,6 +1010,15 @@ function CanadaPlanRuntimeSummary({
   }, [activePlanId, fetchRuntime]);
 
   const currentPlanRuntime = runtime?.plans?.[activePlanId];
+  const resetRuntime = async () => {
+    setResetting(true);
+    try {
+      const res = await api.canada.resetRuntime(activePlanId);
+      setRuntime(res.runtime);
+    } finally {
+      setResetting(false);
+    }
+  };
 
   return (
     <div className="grid grid-cols-2 gap-3 text-xs">
@@ -1024,6 +1034,13 @@ function CanadaPlanRuntimeSummary({
         <div className={`${(currentPlanRuntime?.sessionPnl ?? 0) >= 0 ? "text-emerald-400" : "text-red-400"} mt-1`}>
           {(currentPlanRuntime?.sessionPnl ?? 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
         </div>
+        <button
+          onClick={() => void resetRuntime()}
+          disabled={resetting}
+          className="mt-2 rounded-lg border border-[#30375a] px-2 py-1 text-[10px] text-slate-300 transition hover:bg-[#1a2033] disabled:opacity-50"
+        >
+          {resetting ? "清空中..." : "清空"}
+        </button>
       </div>
       <div className="min-h-[74px] rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
         <div className="text-slate-500">最近发单</div>

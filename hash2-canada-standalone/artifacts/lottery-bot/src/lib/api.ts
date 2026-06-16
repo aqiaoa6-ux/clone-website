@@ -114,6 +114,7 @@ export const api = {
     config: () => api.get<Hash2Config>("/hash2/config"),
     saveConfig: (config: Hash2Config) => api.post<{ ok: boolean; config: Hash2Config }>("/hash2/config", config),
     runtime: () => api.get<{ runtime: Hash2Runtime }>("/hash2/runtime"),
+    resetRuntime: (planId: string) => api.post<{ ok: boolean; runtime: Hash2Runtime }>("/hash2/reset-runtime", { planId }),
     testAlert: (message?: string) => api.post<{ ok: boolean; message: string; at: number }>("/hash2/test-alert", { message }),
   },
 
@@ -121,6 +122,7 @@ export const api = {
     config: () => api.get<CanadaConfig>("/canada/config"),
     saveConfig: (config: CanadaConfig) => api.post<{ ok: boolean; config: CanadaConfig }>("/canada/config", config),
     runtime: () => api.get<{ runtime: CanadaRuntime }>("/canada/runtime"),
+    resetRuntime: (planId: string) => api.post<{ ok: boolean; runtime: CanadaRuntime }>("/canada/reset-runtime", { planId }),
     testAlert: (message?: string) => api.post<{ ok: boolean; message: string; at: number }>("/canada/test-alert", { message }),
   },
 
