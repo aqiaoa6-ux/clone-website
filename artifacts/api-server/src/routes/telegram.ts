@@ -1725,20 +1725,25 @@ function scoreAbcDigitCandidate(history: number[], digit: number, count: number)
     if (digitStreak >= 3) score -= Math.min(2.2, 0.5 + digitStreak * 0.55);
     score -= recentMirrorHits * 0.5;
   } else {
-    // 8-9 个号优先保留热号，本质是 10 个号里只剔除最差的 1-2 个。
-    score += hits5 * 1.35 + hits10 * 1.6 + hits20 * 1.2 + hits40 * 0.45;
+    // 8-9 个号优先保留热号，但不能长期把同一批冷号一直排除在外。
+    // 逻辑改成：保热 + 杀中冷 + 防超长冷号漏补。
+    score += hits5 * 1.28 + hits10 * 1.55 + hits20 * 1.15 + hits40 * 0.4;
     score += pairHits * 1.5 + tripletHits * 2.0;
 
-    if (gap === 0) score += hits10 >= 2 ? 0.7 : -0.4;
-    else if (gap === 1) score += 0.5;
-    else if (gap <= 6) score += 1.1;
-    else if (gap <= 12) score += 0.2;
-    else if (gap <= 18) score -= 1.0;
-    else score -= Math.min(5.4, 1.8 + (gap - 18) * 0.35);
+    if (gap === 0) score += hits10 >= 2 ? 0.55 : -0.25;
+    else if (gap === 1) score += 0.45;
+    else if (gap <= 5) score += 0.95;
+    else if (gap <= 10) score += 0.2;
+    else if (gap <= 16) score -= 0.9;
+    else if (gap <= 22) score += Math.min(1.9, 0.35 + (gap - 16) * 0.26);
+    else score += Math.min(3.6, 1.9 + (gap - 22) * 0.12);
 
-    if (digitStreak >= 4) score -= Math.min(2.5, 0.6 + digitStreak * 0.42);
-    if (digit === latest && latestStreak >= 4) score -= 1.4;
-    score -= recentMirrorHits * 0.15;
+    if (hits5 === 0 && hits10 === 0 && gap >= 9 && gap <= 16) score -= 1.15;
+    if (hits10 === 0 && gap >= 18) score += Math.min(2.8, 0.9 + (gap - 18) * 0.18);
+
+    if (digitStreak >= 5) score -= Math.min(2.0, 0.35 + digitStreak * 0.28);
+    if (digit === latest && latestStreak >= 5) score -= 0.9;
+    score -= recentMirrorHits * 0.1;
   }
 
   const tail3 = recent.slice(-3);
