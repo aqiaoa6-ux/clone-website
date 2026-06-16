@@ -2708,66 +2708,92 @@ async function placeAbcDigitBets(session: TgSession, plan: AbcDigitPlan): Promis
   const groupTitle = session.groups.find(g => g.id === targetId || `-100${g.id}` === targetId)?.title ?? targetId;
   session.betPlacedThisCycle = true;
 
-  const abcEntries = ([
-    ...plan.A.map(num => ({ key: `A${num}` })),
-    ...plan.B.map(num => ({ key: `B${num}` })),
-    ...plan.C.map(num => ({ key: `C${num}` })),
-  ] as const);
-
   const chaseEntries = (!session.chasePlacedThisCycle && session.cfg.enableChase ? session.cfg.chaseNumbers : [])
     .filter(c => c.amount > 0);
   session.chasePlacedThisCycle = true;
 
-  const parts: string[] = [
-    ...chaseEntries.map(c => `${c.num}/${chaseEffectiveAmount(session, String(c.num), c.amount)}`),
-    ...abcEntries.map(entry => `${entry.key}/${amount}`),
-  ];
-  const message = parts.join("  ");
+  const abcBatches = (["A", "B", "C"] as const)
+    .filter(position => plan[position].length > 0)
+    .map(position => ({
+      position,
+      betContent: plan[position].map(num => `${position}${num}`).join("+"),
+      message: plan[position].map(num => `${position}${num}/${amount}`).join("  "),
+      rawAlgoDir: `${position}:${plan[position].join(",")}`,
+    }));
 
-  const now = Date.now();
-  let succeeded = false;
-  let failReason: string | undefined;
-  try {
-    await session.client.sendMessage(targetId, { message });
-    session.lastBetAt = now;
-    succeeded = true;
-  } catch (err) {
-    failReason = extractTgError(err);
-    handleBetSendError(session, failReason);
+  let sharedFailReason: string | undefined;
+
+  if (chaseEntries.length > 0) {
+    const chaseMessage = chaseEntries
+      .map(c => `${c.num}/${chaseEffectiveAmount(session, String(c.num), c.amount)}`)
+      .join("  ");
+    const now = Date.now();
+    let succeeded = false;
+    let failReason = sharedFailReason;
+
+    if (!failReason) {
+      try {
+        await session.client.sendMessage(targetId, { message: chaseMessage });
+        session.lastBetAt = now;
+        succeeded = true;
+      } catch (err) {
+        failReason = extractTgError(err);
+        sharedFailReason = failReason;
+        handleBetSendError(session, failReason);
+      }
+    }
+
+    const status = succeeded ? "sent" : "failed";
+    for (const { num, amount: chaseAmount } of chaseEntries) {
+      const effAmt = chaseEffectiveAmount(session, String(num), chaseAmount);
+      const rec: BetRecord = {
+        id: `chase-${num}-${now}`,
+        groupId: targetId,
+        groupTitle,
+        messageText: chaseMessage,
+        betContent: String(num),
+        amount: effAmt,
+        timestamp: now,
+        status,
+        isChase: true,
+        ...(failReason ? { failReason } : {}),
+      };
+      betLog.unshift(rec);
+      pushEvent(session, "bet:new", { bet: rec });
+    }
   }
 
-  const status = succeeded ? "sent" : "failed";
-  const algoId = session.lastAlgoUsed;
-  const rawAlgoDir = session.lastRawAlgoDir ?? undefined;
-  const mainRec: BetRecord = {
-    id: `abc-main-${now}`,
-    groupId: targetId,
-    groupTitle,
-    messageText: message,
-    betContent: abcEntries.map(entry => entry.key).join("+"),
-    amount,
-    timestamp: now,
-    status,
-    ...(failReason ? { failReason } : {}),
-    ...(algoId ? { algoId } : {}),
-    ...(rawAlgoDir ? { rawAlgoDir } : {}),
-  };
-  betLog.unshift(mainRec);
-  pushEvent(session, "bet:new", { bet: mainRec });
+  for (const batch of abcBatches) {
+    const now = Date.now();
+    let succeeded = false;
+    let failReason = sharedFailReason;
 
-  for (const { num, amount: chaseAmount } of chaseEntries) {
-    const effAmt = chaseEffectiveAmount(session, String(num), chaseAmount);
+    if (!failReason) {
+      try {
+        await session.client.sendMessage(targetId, { message: batch.message });
+        session.lastBetAt = now;
+        succeeded = true;
+      } catch (err) {
+        failReason = extractTgError(err);
+        sharedFailReason = failReason;
+        handleBetSendError(session, failReason);
+      }
+    }
+
+    const status = succeeded ? "sent" : "failed";
+    const algoId = session.lastAlgoUsed;
     const rec: BetRecord = {
-      id: `chase-${num}-${now}`,
+      id: `abc-${batch.position}-${now}`,
       groupId: targetId,
       groupTitle,
-      messageText: message,
-      betContent: String(num),
-      amount: effAmt,
+      messageText: batch.message,
+      betContent: batch.betContent,
+      amount,
       timestamp: now,
       status,
-      isChase: true,
       ...(failReason ? { failReason } : {}),
+      ...(algoId ? { algoId } : {}),
+      rawAlgoDir: batch.rawAlgoDir,
     };
     betLog.unshift(rec);
     pushEvent(session, "bet:new", { bet: rec });
