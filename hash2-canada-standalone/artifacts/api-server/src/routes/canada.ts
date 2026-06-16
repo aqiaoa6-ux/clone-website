@@ -564,7 +564,7 @@ function buildPlanMessage(plan: CanadaPlan, entries: Array<{ key: string; amount
     if (isNumberBet) {
       return targetFirst ? `${label}/${formatStake(amount)}` : `${formatStake(amount)}/${label}`;
     }
-    return targetFirst ? `${label} ${formatStake(amount)}` : `${formatStake(amount)} ${label}`;
+    return targetFirst ? `${label}${formatStake(amount)}` : `${formatStake(amount)}${label}`;
   });
   return parts.join("  ");
 }
