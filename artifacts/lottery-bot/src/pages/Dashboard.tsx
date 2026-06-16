@@ -330,6 +330,9 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [oddsBigEven, setOddsBigEven] = useState(String(status.oddsBigEven ?? status.odds ?? 1.98));
   const [oddsSmallOdd, setOddsSmallOdd] = useState(String(status.oddsSmallOdd ?? status.odds ?? 1.98));
   const [oddsSmallEven, setOddsSmallEven] = useState(String(status.oddsSmallEven ?? status.odds ?? 1.98));
+  const [abcAEnabled, setAbcAEnabled] = useState<boolean>((status as unknown as { abcAEnabled?: boolean }).abcAEnabled ?? true);
+  const [abcBEnabled, setAbcBEnabled] = useState<boolean>((status as unknown as { abcBEnabled?: boolean }).abcBEnabled ?? true);
+  const [abcCEnabled, setAbcCEnabled] = useState<boolean>((status as unknown as { abcCEnabled?: boolean }).abcCEnabled ?? true);
   const [abcACount, setAbcACount] = useState(String((status as unknown as { abcACount?: number }).abcACount ?? 4));
   const [abcBCount, setAbcBCount] = useState(String((status as unknown as { abcBCount?: number }).abcBCount ?? 4));
   const [abcCCount, setAbcCCount] = useState(String((status as unknown as { abcCCount?: number }).abcCCount ?? 4));
@@ -383,6 +386,9 @@ function SettingsDrawer({ status, onClose, onSave }: {
         kuaisanBetOptions: kuaisanOpts,
         hashBetOptions: hashOpts,
         algoFlipOnLoss: Number(algoFlip),
+        abcAEnabled,
+        abcBEnabled,
+        abcCEnabled,
         abcACount: Number(abcACount),
         abcBCount: Number(abcBCount),
         abcCCount: Number(abcCCount),
@@ -562,17 +568,52 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAbcAEnabled(!abcAEnabled)}
+                    className={`py-2 rounded-lg text-xs font-medium border transition ${
+                      abcAEnabled
+                        ? "bg-cyan-600 border-cyan-500 text-white"
+                        : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-cyan-500/50"
+                    }`}
+                  >
+                    A启用
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAbcBEnabled(!abcBEnabled)}
+                    className={`py-2 rounded-lg text-xs font-medium border transition ${
+                      abcBEnabled
+                        ? "bg-cyan-600 border-cyan-500 text-white"
+                        : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-cyan-500/50"
+                    }`}
+                  >
+                    B启用
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAbcCEnabled(!abcCEnabled)}
+                    className={`py-2 rounded-lg text-xs font-medium border transition ${
+                      abcCEnabled
+                        ? "bg-cyan-600 border-cyan-500 text-white"
+                        : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:border-cyan-500/50"
+                    }`}
+                  >
+                    C启用
+                  </button>
+                </div>
+                <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="block text-[10px] text-slate-500 mb-0.5">A位投几个</label>
-                    <input type="number" min="4" max="9" value={abcACount} onChange={e => setAbcACount(e.target.value)} className={inputCls} />
+                    <input type="number" min="4" max="9" value={abcACount} onChange={e => setAbcACount(e.target.value)} className={inputCls} disabled={!abcAEnabled} />
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-500 mb-0.5">B位投几个</label>
-                    <input type="number" min="4" max="9" value={abcBCount} onChange={e => setAbcBCount(e.target.value)} className={inputCls} />
+                    <input type="number" min="4" max="9" value={abcBCount} onChange={e => setAbcBCount(e.target.value)} className={inputCls} disabled={!abcBEnabled} />
                   </div>
                   <div>
                     <label className="block text-[10px] text-slate-500 mb-0.5">C位投几个</label>
-                    <input type="number" min="4" max="9" value={abcCCount} onChange={e => setAbcCCount(e.target.value)} className={inputCls} />
+                    <input type="number" min="4" max="9" value={abcCCount} onChange={e => setAbcCCount(e.target.value)} className={inputCls} disabled={!abcCEnabled} />
                   </div>
                 </div>
                 <div>
@@ -580,7 +621,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
                   <input type="number" min="1.01" step="0.01" value={abcDigitOdds} onChange={e => setAbcDigitOdds(e.target.value)} className={inputCls} />
                 </div>
                 <div className="text-[10px] text-cyan-200/80">
-                  发单格式示例：`A1/100  A4/100  B0/100  B7/100  C3/100`
+                  发单格式示例：`A1/100  A4/100  B0/100  B7/100  C3/100`，关闭哪一位就不发哪一位。
                 </div>
               </div>
             )}

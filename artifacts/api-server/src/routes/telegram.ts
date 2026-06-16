@@ -234,6 +234,9 @@ interface BetCfg {
   kuaisanBetOptions: string[];
   hashBetOptions: string[];
   algoFlipOnLoss: number; // 0=disabled; N=连续方向错N局后自动反转方向
+  abcAEnabled: boolean;
+  abcBEnabled: boolean;
+  abcCEnabled: boolean;
   abcACount: number;
   abcBCount: number;
   abcCCount: number;
@@ -447,6 +450,9 @@ const DEFAULT_CFG: BetCfg = {
   gameMode: "lottery",
   kuaisanBetOptions: ["big", "small"],
   hashBetOptions: ["big", "small"],
+  abcAEnabled: true,
+  abcBEnabled: true,
+  abcCEnabled: true,
   abcACount: 4,
   abcBCount: 4,
   abcCCount: 4,
@@ -512,6 +518,10 @@ function normalizeAbcDigitOdds(value: unknown, fallback = 9.98): number {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 1) return fallback;
   return Math.round(num * 1000) / 1000;
+}
+
+function normalizeAbcEnabled(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function extractDrawDigits(item: { sum1?: number; sum2?: number; sum3?: number }): [number, number, number] | null {
@@ -1701,13 +1711,34 @@ function buildAbcDigitPlan(session: TgSession): AbcDigitPlan | null {
   const historyA = buildAbcDigitPositionHistory(0);
   const historyB = buildAbcDigitPositionHistory(1);
   const historyC = buildAbcDigitPositionHistory(2);
-  if (!historyA.length || !historyB.length || !historyC.length) return null;
+  const plan: AbcDigitPlan = { A: [], B: [], C: [] };
 
-  return {
-    A: pickAbcDigits(historyA, session.cfg.abcACount),
-    B: pickAbcDigits(historyB, session.cfg.abcBCount),
-    C: pickAbcDigits(historyC, session.cfg.abcCCount),
-  };
+  if (session.cfg.abcAEnabled) {
+    if (!historyA.length) return null;
+    plan.A = pickAbcDigits(historyA, session.cfg.abcACount);
+  }
+  if (session.cfg.abcBEnabled) {
+    if (!historyB.length) return null;
+    plan.B = pickAbcDigits(historyB, session.cfg.abcBCount);
+  }
+  if (session.cfg.abcCEnabled) {
+    if (!historyC.length) return null;
+    plan.C = pickAbcDigits(historyC, session.cfg.abcCCount);
+  }
+
+  if (!plan.A.length && !plan.B.length && !plan.C.length) return null;
+  return plan;
+}
+
+function hasAbcDigitEnabled(session: TgSession): boolean {
+  return !!(session.cfg.abcAEnabled || session.cfg.abcBEnabled || session.cfg.abcCEnabled);
+}
+
+function summarizeAbcDigitPlan(plan: AbcDigitPlan): string {
+  return (["A", "B", "C"] as const)
+    .filter(pos => plan[pos].length > 0)
+    .map(pos => `${pos}:${plan[pos].join(",")}`)
+    .join("|");
 }
 
 // ─── Algorithm / direction decision ──────────────────────────────────────────
@@ -2654,24 +2685,21 @@ async function placeAbcDigitBets(session: TgSession, plan: AbcDigitPlan): Promis
   const status = succeeded ? "sent" : "failed";
   const algoId = session.lastAlgoUsed;
   const rawAlgoDir = session.lastRawAlgoDir ?? undefined;
-
-  for (const entry of abcEntries) {
-    const rec: BetRecord = {
-      id: `abc-${entry.key}-${now}`,
-      groupId: targetId,
-      groupTitle,
-      messageText: message,
-      betContent: entry.key,
-      amount,
-      timestamp: now,
-      status,
-      ...(failReason ? { failReason } : {}),
-      ...(algoId ? { algoId } : {}),
-      ...(rawAlgoDir ? { rawAlgoDir } : {}),
-    };
-    betLog.unshift(rec);
-    pushEvent(session, "bet:new", { bet: rec });
-  }
+  const mainRec: BetRecord = {
+    id: `abc-main-${now}`,
+    groupId: targetId,
+    groupTitle,
+    messageText: message,
+    betContent: abcEntries.map(entry => entry.key).join("+"),
+    amount,
+    timestamp: now,
+    status,
+    ...(failReason ? { failReason } : {}),
+    ...(algoId ? { algoId } : {}),
+    ...(rawAlgoDir ? { rawAlgoDir } : {}),
+  };
+  betLog.unshift(mainRec);
+  pushEvent(session, "bet:new", { bet: mainRec });
 
   for (const { num, amount: chaseAmount } of chaseEntries) {
     const effAmt = chaseEffectiveAmount(session, String(num), chaseAmount);
@@ -3173,13 +3201,17 @@ async function runAutoBet(session: TgSession): Promise<void> {
   }
 
   if (session.cfg.gameMode === "lottery" && session.cfg.algorithms.includes("abc_digit_ai")) {
+    if (!hasAbcDigitEnabled(session)) {
+      logger.warn("[abc-digit-ai] all positions disabled, skip");
+      return;
+    }
     const plan = buildAbcDigitPlan(session);
     if (!plan) {
       logger.warn("[abc-digit-ai] insufficient digit history, skip");
       return;
     }
     session.lastAlgoUsed = "abc_digit_ai";
-    session.lastRawAlgoDir = `A:${plan.A.join(",")}|B:${plan.B.join(",")}|C:${plan.C.join(",")}`;
+    session.lastRawAlgoDir = summarizeAbcDigitPlan(plan);
     await placeAbcDigitBets(session, plan);
     return;
   }
@@ -3324,14 +3356,23 @@ async function pollLottery(session: TgSession): Promise<void> {
       // betContent may be "大" / "大单" / "大单+小双" / "大双+大单+小双"
       const pendingAll = session.betLog.filter(b => b.status === "sent" && !b.isChase);
       for (const pending of pendingAll) {
-        const abcMatch = pending.betContent.match(/^([ABC])(\d)$/);
-        if (abcMatch && latestDigits) {
-          const posIndex = abcMatch[1] === "A" ? 0 : abcMatch[1] === "B" ? 1 : 2;
-          const targetDigit = Number(abcMatch[2]);
-          const won = latestDigits[posIndex] === targetDigit;
+        const abcParts = pending.betContent
+          .split("+")
+          .map(s => s.trim())
+          .filter(part => /^([ABC])(\d)$/.test(part));
+        if (abcParts.length > 0 && latestDigits) {
+          let hitCount = 0;
+          for (const part of abcParts) {
+            const abcMatch = part.match(/^([ABC])(\d)$/);
+            if (!abcMatch) continue;
+            const posIndex = abcMatch[1] === "A" ? 0 : abcMatch[1] === "B" ? 1 : 2;
+            const targetDigit = Number(abcMatch[2]);
+            if (latestDigits[posIndex] === targetDigit) hitCount++;
+          }
+          const won = hitCount > 0;
           const pnl = won
-            ? Math.round(pending.amount * (session.cfg.abcDigitOdds - 1) * 100) / 100
-            : -pending.amount;
+            ? Math.round(pending.amount * (session.cfg.abcDigitOdds * hitCount - abcParts.length) * 100) / 100
+            : -pending.amount * abcParts.length;
           settleBet(session, {
             won,
             pnl,
@@ -5066,6 +5107,9 @@ router.post("/tg/config", requireCard, (req, res) => {
     kuaisanBetOptions: body.kuaisanBetOptions ?? prev.kuaisanBetOptions,
     hashBetOptions: (body as Partial<BetCfg>).hashBetOptions ?? prev.hashBetOptions,
     algoFlipOnLoss: body.algoFlipOnLoss ?? prev.algoFlipOnLoss,
+    abcAEnabled: normalizeAbcEnabled(body.abcAEnabled, prev.abcAEnabled),
+    abcBEnabled: normalizeAbcEnabled(body.abcBEnabled, prev.abcBEnabled),
+    abcCEnabled: normalizeAbcEnabled(body.abcCEnabled, prev.abcCEnabled),
     abcACount: clampAbcPickCount(body.abcACount ?? prev.abcACount, prev.abcACount),
     abcBCount: clampAbcPickCount(body.abcBCount ?? prev.abcBCount, prev.abcBCount),
     abcCCount: clampAbcPickCount(body.abcCCount ?? prev.abcCCount, prev.abcCCount),

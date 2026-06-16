@@ -174,6 +174,9 @@ export interface BetCfg {
   oddsBigEven?: number;
   oddsSmallOdd?: number;
   oddsSmallEven?: number;
+  abcAEnabled?: boolean;
+  abcBEnabled?: boolean;
+  abcCEnabled?: boolean;
   abcACount?: number;
   abcBCount?: number;
   abcCCount?: number;
@@ -232,6 +235,9 @@ export interface TgStatus {
   oddsBigEven?: number;
   oddsSmallOdd?: number;
   oddsSmallEven?: number;
+  abcAEnabled?: boolean;
+  abcBEnabled?: boolean;
+  abcCEnabled?: boolean;
   abcACount?: number;
   abcBCount?: number;
   abcCCount?: number;
