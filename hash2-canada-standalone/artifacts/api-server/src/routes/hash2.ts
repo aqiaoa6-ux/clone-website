@@ -558,8 +558,12 @@ function buildPlanMessage(plan: Hash2Plan, entries: Array<{ key: string; amount:
   const forceTargetFirst = entries.some(entry => entry.key.startsWith("num:"));
   const parts = entries.map(({ key, amount }) => {
     const label = betKeyLabel(key);
+    const isNumberBet = key.startsWith("num:");
     const targetFirst = forceTargetFirst || plan.format === "target_first";
-    return targetFirst ? `${label}/${formatStake(amount)}` : `${formatStake(amount)}/${label}`;
+    if (isNumberBet) {
+      return targetFirst ? `${label}/${formatStake(amount)}` : `${formatStake(amount)}/${label}`;
+    }
+    return targetFirst ? `${label} ${formatStake(amount)}` : `${formatStake(amount)} ${label}`;
   });
   return parts.join("  ");
 }
