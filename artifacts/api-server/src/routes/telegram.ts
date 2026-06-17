@@ -4044,6 +4044,12 @@ function startGroupListener(session: TgSession): void {
       }
       return;
     }
+
+    if (session.cfg.algorithms.includes("private_combo_ai")) {
+      logger.info("[msg-bet] private_combo_ai uses private monitor trigger only");
+      return;
+    }
+
     // adaptive_switch: 信号触发时同样根据当前状态决定大小还是杀组
     if (session.cfg.algorithms.includes("adaptive_switch")) {
       if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
