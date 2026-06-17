@@ -204,6 +204,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
   | "hash_abc_digit_ai" | "hash_abc_digit_cycle_ai"
+  | "private_combo_ai"
   | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend" | "abc_digit_ai" | "abc_digit_cycle_ai";
 
 interface BetCfg {
@@ -399,6 +400,8 @@ export interface TgSession {
   privateMonitorLastMsgIds: Record<string, number>;
   privateMonitorInFlight: Record<string, boolean>;
   privatePollCursor: number;
+  privateCountdown30Term: number | null;
+  privateAlgoLastBetTerm: number | null;
 }
 
 interface PersistedData {
@@ -423,6 +426,7 @@ interface PersistedData {
 
 const DRAW_CYCLE_MS = 210_000;
 const BET_BEFORE_DRAW_MS = 80_000;
+const PRIVATE_MONITOR_BET_COUNTDOWN_SEC = 30;
 
 const DEFAULT_CFG: BetCfg = {
   autoBet: false,
@@ -1074,6 +1078,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
     canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
     privateMonitorGroupIds: (data as unknown as { privateMonitorGroupIds?: string[] }).privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
+    privateCountdown30Term: null, privateAlgoLastBetTerm: null,
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -1392,6 +1397,81 @@ function buildHistory(session: TgSession): string[] {
   return session.recentResults.length >= 3
     ? session.recentResults.slice(-10)
     : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
+}
+
+function getPrivateMonitorActiveBets(): GroupBetEntry[] {
+  const term = getPrivateLiveTerm();
+  return term ? privateBets.filter(b => b.termContext === term) : privateBets.slice(0, 200);
+}
+
+function decidePrivateMonitorComboBet(session: TgSession): string | null {
+  const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
+  if (!labels.length) return null;
+
+  const activeBets = getPrivateMonitorActiveBets();
+  if (activeBets.length < 8) return null;
+
+  const weighted = activeBets.slice(0, 160);
+  const sumDir = (dirs: string[]) => weighted.reduce((sum, bet, index) => {
+    const weight = 1 + Math.max(0, 24 - index) * 0.04;
+    return dirs.includes(bet.direction) ? sum + bet.amount * weight : sum;
+  }, 0);
+
+  const bigAmt = sumDir(["大", "大单", "大双"]);
+  const smallAmt = sumDir(["小", "小单", "小双"]);
+  const oddAmt = sumDir(["单", "大单", "小单"]);
+  const evenAmt = sumDir(["双", "大双", "小双"]);
+  const comboTotals = {
+    大单: sumDir(["大单"]),
+    大双: sumDir(["大双"]),
+    小单: sumDir(["小单"]),
+    小双: sumDir(["小双"]),
+  };
+
+  const totalSize = bigAmt + smallAmt;
+  const totalParity = oddAmt + evenAmt;
+  const sizeBias = totalSize > 0 ? (smallAmt - bigAmt) / totalSize : 0;
+  const parityBias = totalParity > 0 ? (evenAmt - oddAmt) / totalParity : 0;
+
+  const scores: Record<string, number> = {};
+  labels.forEach(label => { scores[label] = 0; });
+
+  if (scores["大"] !== undefined) scores["大"] += sizeBias * 5.5;
+  if (scores["小"] !== undefined) scores["小"] -= sizeBias * 5.5;
+  if (scores["单"] !== undefined) scores["单"] += parityBias * 5.0;
+  if (scores["双"] !== undefined) scores["双"] -= parityBias * 5.0;
+
+  const comboAvg = Object.values(comboTotals).reduce((sum, value) => sum + value, 0) / 4 || 0;
+  (Object.keys(comboTotals) as Array<keyof typeof comboTotals>).forEach(label => {
+    if (scores[label] === undefined) return;
+    const comboBias = comboAvg > 0 ? (comboAvg - comboTotals[label]) / comboAvg : 0;
+    scores[label] += comboBias * 3.8;
+  });
+
+  const candidateSize = sizeBias >= 0 ? "大" : "小";
+  const candidateParity = parityBias >= 0 ? "单" : "双";
+  const candidateCombo = `${candidateSize}${candidateParity}`;
+
+  if (scores[candidateSize] !== undefined) scores[candidateSize] += Math.abs(sizeBias) * 1.8;
+  if (scores[candidateParity] !== undefined) scores[candidateParity] += Math.abs(parityBias) * 1.6;
+  if (scores[candidateCombo] !== undefined) {
+    scores[candidateCombo] += Math.abs(sizeBias) * 1.4 + Math.abs(parityBias) * 1.4;
+  }
+
+  const hottestCombo = Object.entries(comboTotals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+  if (hottestCombo && scores[hottestCombo] !== undefined) {
+    scores[hottestCombo] -= 2.2;
+  }
+
+  const best = labels
+    .map(label => ({ label, score: scores[label] ?? -999 }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.label.localeCompare(b.label, "zh-CN");
+    })[0];
+
+  session.lastRawAlgoDir = best?.label ?? null;
+  return best?.label ?? null;
 }
 
 // ─── Pattern detection & adaptive algorithm selection ─────────────────────────
@@ -3120,6 +3200,51 @@ async function placeAbcDigitBets(session: TgSession, plan: AbcDigitPlan): Promis
   if (betLog.length > 300) betLog.length = 300;
 }
 
+function isPrivateMonitorCountdown30(text: string): boolean {
+  const sec = PRIVATE_MONITOR_BET_COUNTDOWN_SEC;
+  return text.includes(`封盘剩余${sec}秒`)
+    || text.includes(`即将封盘，剩余${sec}秒`)
+    || text.includes(`即将封盘,剩余${sec}秒`)
+    || new RegExp(`(倒计时|剩余|还有|封盘).{0,8}${sec}秒`).test(text)
+    || new RegExp(`${sec}秒.{0,8}(封盘|截止|停止下注|开奖)`).test(text);
+}
+
+async function runPrivateMonitorAutoBet(session: TgSession, triggerTerm: number): Promise<void> {
+  if (!session.cfg.autoBet || !session.watchGroupId || session.cfg.gameMode !== "lottery") return;
+  if (!session.cfg.algorithms.includes("private_combo_ai")) return;
+  if (session.privateAlgoLastBetTerm === triggerTerm) return;
+
+  const { betLog } = session;
+  const nowMs = Date.now();
+  for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) stale.status = "lost";
+  if (betLog.some(b => b.status === "sent" && !b.isChase)) return;
+  if (session.betPlacedThisCycle) return;
+
+  if (session.cfg.chaseOnly) {
+    if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
+      await placeChaseOnly(session);
+      session.privateAlgoLastBetTerm = triggerTerm;
+    }
+    return;
+  }
+
+  const risk = checkRisk(session);
+  if (!risk.ok) {
+    if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
+      await placeChaseOnly(session);
+      session.privateAlgoLastBetTerm = triggerTerm;
+    }
+    return;
+  }
+
+  const direction = decidePrivateMonitorComboBet(session);
+  if (!direction) return;
+  session.lastAlgoUsed = "private_combo_ai";
+  session.lastBetPeriod = triggerTerm;
+  session.privateAlgoLastBetTerm = triggerTerm;
+  await placeAllBets(session, direction);
+}
+
 // ─── Kill-Group Mode ───────────────────────────────────────────────────────────
 // 四组杀组：AI 从 [大单/大双/小单/小双] 中挑出最可能不出的那一组杀掉，
 // 同时投注剩余三组。
@@ -3595,6 +3720,11 @@ async function runAutoBet(session: TgSession): Promise<void> {
     if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
       await placeChaseOnly(session);
     }
+    return;
+  }
+
+  if (session.cfg.gameMode === "lottery" && session.cfg.algorithms.includes("private_combo_ai")) {
+    logger.info("[private-combo-ai] waiting for private monitor 30s trigger");
     return;
   }
 
@@ -4968,6 +5098,8 @@ async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise
           privateCurrentTerm = t;
           privateBets.length = 0;
           privateLastBetAt = 0;
+          session.privateCountdown30Term = null;
+          session.privateAlgoLastBetTerm = null;
           pushPrivateAdminEvent("bets:reset", { term: privateCurrentTerm, lastBetAt: privateLastBetAt, bets: [] });
         }
         continue;
@@ -4978,6 +5110,11 @@ async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise
         const t = parseInt(stopTermMatch[1]!, 10);
         if (isFinite(t)) privateCurrentTerm = t;
         continue;
+      }
+
+      if (privateCurrentTerm && isPrivateMonitorCountdown30(text) && session.privateCountdown30Term !== privateCurrentTerm) {
+        session.privateCountdown30Term = privateCurrentTerm;
+        void runPrivateMonitorAutoBet(session, privateCurrentTerm);
       }
 
       const u = msg.sender as Api.User | null;
@@ -5348,6 +5485,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
       canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
       privateMonitorGroupIds: (existing as unknown as { privateMonitorGroupIds?: string[] } | undefined)?.privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
+      privateCountdown30Term: null, privateAlgoLastBetTerm: null,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
