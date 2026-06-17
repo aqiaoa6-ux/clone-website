@@ -401,7 +401,7 @@ export default function Hash2Page() {
                 />
               </div>
               <div>
-                <label className="block text-xs text-slate-500 mb-1">手数上限</label>
+                <label className="block text-xs text-slate-500 mb-1">不中切换手数</label>
                 <NumericDraftInput
                   value={currentPlan.handCount}
                   min={1}
@@ -409,15 +409,17 @@ export default function Hash2Page() {
                   onCommit={value => updatePlan(activePlan, { handCount: value })}
                   className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
                 />
+                <div className="mt-1 text-[11px] text-slate-500">当前方案打到这手还没中，就自动跳到下一方案。</div>
               </div>
               <div>
-                <label className="block text-xs text-slate-500 mb-1">止损</label>
+                <label className="block text-xs text-slate-500 mb-1">止损金额</label>
                 <NumericDraftInput
                   value={currentPlan.stopLoss}
                   min={0}
                   onCommit={value => updatePlan(activePlan, { stopLoss: value })}
                   className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm"
                 />
+                <div className="mt-1 text-[11px] text-slate-500">止损只负责停用提醒，不再作为跳转下一方案的条件。</div>
               </div>
               <div>
                 <label className="block text-xs text-slate-500 mb-1">止盈</label>

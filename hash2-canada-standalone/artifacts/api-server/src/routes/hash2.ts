@@ -425,14 +425,18 @@ function planRiskReason(plan: Hash2Plan, runtime: Hash2PlanRuntime): string | un
   return undefined;
 }
 
-function autoEnableNextPlanOnStopLoss(
+function isPlanSwitchReason(reason: string): boolean {
+  return reason.includes("手数上限");
+}
+
+function autoEnableNextPlanOnHandLimit(
   userId: number,
   config: Hash2Config,
   runtime: Hash2Runtime,
   sourcePlan: Hash2Plan,
   riskReason: string,
 ): boolean {
-  if (!riskReason.includes("止损")) return false;
+  if (!isPlanSwitchReason(riskReason)) return false;
   const nextPlanId = STOPLOSS_NEXT_PLAN_ID[sourcePlan.id];
   if (!nextPlanId) return false;
   const nextPlan = config.plans.find(plan => plan.id === nextPlanId);
@@ -446,7 +450,7 @@ function autoEnableNextPlanOnStopLoss(
     "warn",
   );
   saveConfig(userId, config);
-  logger.info({ userId, sourcePlan: sourcePlan.id, nextPlan: nextPlan.id }, "[hash2] auto enabled next plan after stop loss");
+  logger.info({ userId, sourcePlan: sourcePlan.id, nextPlan: nextPlan.id }, "[hash2] auto enabled next plan after hand limit");
   return true;
 }
 
@@ -504,7 +508,7 @@ function canRunAutoChainedPlan(plan: Hash2Plan, runtime: Hash2Runtime): boolean 
   const prevPlanId = STOPLOSS_PREV_PLAN_ID[plan.id];
   if (!prevPlanId) return true;
   const blockedReason = runtime.plans[prevPlanId]?.blockedReason ?? "";
-  return blockedReason.includes("止损");
+  return isPlanSwitchReason(blockedReason);
 }
 
 function fmtMoney(n: number): string {
@@ -656,11 +660,12 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ha
     state,
     normalizePlanLevelState(plan, state.betLevels, state.pendingAmounts, state.currentLevel, state.pendingAmount),
   );
+  if (isPlanSwitchReason(state.blockedReason ?? "")) return;
   const riskReason = planRiskReason(plan, state);
   if (riskReason) {
     state.blockedReason = riskReason;
     state.lastSentPeriod = period;
-    const autoEnabledNextPlan = autoEnableNextPlanOnStopLoss(userId, config, runtime, plan, riskReason);
+    const autoEnabledNextPlan = autoEnableNextPlanOnHandLimit(userId, config, runtime, plan, riskReason);
     const autoReturnedPlanOne = autoReturnToPlanOneOnTakeProfit(userId, config, runtime, plan, riskReason);
     if (state.lastRiskNotified !== riskReason) {
       state.lastRiskNotified = riskReason;
@@ -728,6 +733,7 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Hash2P
     normalizePlanLevelState(plan, state.betLevels, state.pendingAmounts, state.currentLevel, state.pendingAmount),
   );
   const maxLevel = Math.max(planLevelCount(plan) - 1, 0);
+  const usedMaxLevel = state.currentLevel >= maxLevel;
   let totalPnl = 0;
   const hits: string[] = [];
   for (const key of plan.bets) {
@@ -758,10 +764,12 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Hash2P
   state.pendingAmount = 0;
   state.updatedAt = Date.now();
 
-  const riskReason = planRiskReason(plan, state);
+  const riskReason = hits.length === 0 && usedMaxLevel
+    ? `已达手数上限 ${planLevelCount(plan)}`
+    : planRiskReason(plan, state);
   if (riskReason) {
     state.blockedReason = riskReason;
-    const autoEnabledNextPlan = autoEnableNextPlanOnStopLoss(userId, config, runtime, plan, riskReason);
+    const autoEnabledNextPlan = autoEnableNextPlanOnHandLimit(userId, config, runtime, plan, riskReason);
     const autoReturnedPlanOne = autoReturnToPlanOneOnTakeProfit(userId, config, runtime, plan, riskReason);
     if (state.lastRiskNotified !== riskReason) {
       state.lastRiskNotified = riskReason;
@@ -775,7 +783,7 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Hash2P
           : autoEnabledNextPlan
             ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}`
             : `${plan.name} ${riskReason}`,
-        riskReason.includes("止损") ? "error" : "success",
+        isPlanSwitchReason(riskReason) || riskReason.includes("止损") ? "error" : "success",
       );
     }
   } else {
