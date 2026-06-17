@@ -29,6 +29,8 @@ const ALGO_LABELS: Record<string, string> = {
   abc_trend:        "加拿大-ABC走势",
   abc_digit_ai:     "加拿大-ABC三位数字AI",
   abc_digit_cycle_ai:"加拿大-ABC轮打AI",
+  hash_abc_digit_ai:"哈希-ABC三位数字AI",
+  hash_abc_digit_cycle_ai:"哈希-ABC轮打AI",
   hash_follow:      "哈希-算法1",
   hash_reverse:     "哈希-算法2",
   hash_smart:       "哈希-算法3",
@@ -49,6 +51,8 @@ const ALGO_DESC: Record<string, string> = {
   abc_trend:        "加拿大ABC = 基于近24期走势，综合大小/单双/组合热度，自动选择 ABC 方向",
   abc_digit_ai:     "ABC三位数字 = 按 A/B/C 三个位分别分析近期开奖数字热度、遗漏、转移关系，自动选出每个位要投的 4-9 个号码",
   abc_digit_cycle_ai:"ABC轮打 = 保留原 ABC 数字 AI 的选号方式，但每期只打一位，按 A -> B -> C 轮换，降低持续同打挨打风险",
+  hash_abc_digit_ai:"哈希ABC三位数字 = 复用开奖频道里的 x+y+z 三位数字，按 A/B/C 分位分析热度、遗漏、转移关系，自动选出每个位要投的 4-9 个号码",
+  hash_abc_digit_cycle_ai:"哈希ABC轮打 = 保留哈希 ABC 数字 AI 的选号方式，但每期只打一位，按 A -> B -> C 轮换，降低持续同打挨打风险",
   hash_follow:      "哈希1 = 区块链龙形（顺龙1-5期，超6期反转，震荡跟尾）",
   hash_reverse:     "哈希2 = 双链均衡（三窗口加权回归，边界聚集时顺势突破）",
   hash_smart:       "哈希3 = MD5波段（短期动量×中期偏差×交替密度三维合力）",
@@ -561,7 +565,8 @@ function SettingsDrawer({ status, onClose, onSave }: {
               )}
             </div>
 
-            {gameMode === "lottery" && (algos.includes("abc_digit_ai") || algos.includes("abc_digit_cycle_ai")) && (
+            {((gameMode === "lottery" && (algos.includes("abc_digit_ai") || algos.includes("abc_digit_cycle_ai")))
+              || (gameMode === "hash" && (algos.includes("hash_abc_digit_ai") || algos.includes("hash_abc_digit_cycle_ai")))) && (
               <div className="mt-3 rounded-2xl border border-cyan-500/30 bg-cyan-500/5 p-3 space-y-3">
                 <div>
                   <div className="text-xs font-medium text-cyan-300">ABC 独立模板</div>

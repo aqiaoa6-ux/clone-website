@@ -203,6 +203,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
+  | "hash_abc_digit_ai" | "hash_abc_digit_cycle_ai"
   | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend" | "abc_digit_ai" | "abc_digit_cycle_ai";
 
 interface BetCfg {
@@ -494,6 +495,7 @@ interface HashResult {
   big: boolean;  // >= 14
   odd: boolean;  // value % 2 === 1
   label: string; // e.g. "大单", "小双"
+  digits?: [number, number, number];
 }
 
 const HASH_BET_LABELS: Record<string, string> = {
@@ -530,6 +532,16 @@ function extractDrawDigits(item: { sum1?: number; sum2?: number; sum3?: number }
   const digits = [item.sum1, item.sum2, item.sum3].map(v => Number(v));
   if (digits.some(v => !Number.isInteger(v) || v < 0 || v > 9)) return null;
   return digits as [number, number, number];
+}
+
+function extractHashDigitsFromText(text: string): [number, number, number] | null {
+  const match = text.match(/([0-9])\+([0-9])\+([0-9])=(\d{1,2})/);
+  if (!match) return null;
+  const digits = [Number(match[1]), Number(match[2]), Number(match[3])] as [number, number, number];
+  if (digits.some(v => !Number.isInteger(v) || v < 0 || v > 9)) return null;
+  const sum = digits[0] + digits[1] + digits[2];
+  if (sum !== Number(match[4])) return null;
+  return digits;
 }
 
 // ─── 独立走势缓存预热（不依赖 TG 会话，服务启动即运行）────────────────────────
@@ -1942,6 +1954,37 @@ function buildAbcDigitPlan(session: TgSession): AbcDigitPlan | null {
   return plan;
 }
 
+function buildHashDigitPositionHistory(session: TgSession, positionIndex: 0 | 1 | 2): number[] {
+  const source = hashHistoryCache.length > 0 ? hashHistoryCache : (session.hashResults ?? []);
+  return [...source]
+    .reverse()
+    .map(item => item.digits?.[positionIndex])
+    .filter((value): value is number => Number.isInteger(value));
+}
+
+function buildHashAbcDigitPlan(session: TgSession): AbcDigitPlan | null {
+  const historyA = buildHashDigitPositionHistory(session, 0);
+  const historyB = buildHashDigitPositionHistory(session, 1);
+  const historyC = buildHashDigitPositionHistory(session, 2);
+  const plan: AbcDigitPlan = { A: [], B: [], C: [] };
+
+  if (session.cfg.abcAEnabled) {
+    if (!historyA.length) return null;
+    plan.A = pickAbcDigits(historyA, session.cfg.abcACount);
+  }
+  if (session.cfg.abcBEnabled) {
+    if (!historyB.length) return null;
+    plan.B = pickAbcDigits(historyB, session.cfg.abcBCount);
+  }
+  if (session.cfg.abcCEnabled) {
+    if (!historyC.length) return null;
+    plan.C = pickAbcDigits(historyC, session.cfg.abcCCount);
+  }
+
+  if (!plan.A.length && !plan.B.length && !plan.C.length) return null;
+  return plan;
+}
+
 function getAbcDigitExcludedDigits(pickedDigits: number[]): number[] {
   const picked = new Set(pickedDigits);
   return Array.from({ length: 10 }, (_, digit) => digit).filter(digit => !picked.has(digit));
@@ -2016,6 +2059,43 @@ function buildAbcDigitCyclePlan(session: TgSession): AbcDigitPlan | null {
   const nextIndex = session.abcDigitCycleIndex % enabledPositions.length;
   const position = enabledPositions[nextIndex]!;
   const plan = buildAbcDigitSinglePositionPlan(session, position);
+  if (!plan) return null;
+
+  session.abcDigitCycleIndex = (nextIndex + 1) % enabledPositions.length;
+  return plan;
+}
+
+function buildHashAbcDigitSinglePositionPlan(session: TgSession, position: AbcDigitPosition): AbcDigitPlan | null {
+  const plan: AbcDigitPlan = { A: [], B: [], C: [] };
+  const positionIndex = position === "A" ? 0 : position === "B" ? 1 : 2;
+  const history = buildHashDigitPositionHistory(session, positionIndex);
+  if (!history.length) return null;
+
+  if (position === "A") plan.A = pickAbcDigits(history, session.cfg.abcACount);
+  if (position === "B") plan.B = pickAbcDigits(history, session.cfg.abcBCount);
+  if (position === "C") plan.C = pickAbcDigits(history, session.cfg.abcCCount);
+
+  const currentDigits = plan[position];
+  const count = position === "A" ? session.cfg.abcACount : position === "B" ? session.cfg.abcBCount : session.cfg.abcCCount;
+  const rebalancedDigits = rebalanceAbcDigitCycleDigits(
+    history,
+    currentDigits,
+    count,
+    session.abcDigitCycleLastKilled[position] ?? [],
+  );
+  plan[position] = rebalancedDigits;
+  session.abcDigitCycleLastKilled[position] = getAbcDigitExcludedDigits(rebalancedDigits);
+
+  return plan[position].length ? plan : null;
+}
+
+function buildHashAbcDigitCyclePlan(session: TgSession): AbcDigitPlan | null {
+  const enabledPositions = getEnabledAbcDigitPositions(session);
+  if (!enabledPositions.length) return null;
+
+  const nextIndex = session.abcDigitCycleIndex % enabledPositions.length;
+  const position = enabledPositions[nextIndex]!;
+  const plan = buildHashAbcDigitSinglePositionPlan(session, position);
   if (!plan) return null;
 
   session.abcDigitCycleIndex = (nextIndex + 1) % enabledPositions.length;
@@ -4133,7 +4213,7 @@ async function processKuaisanMessage(session: TgSession, text: string, msgId: nu
 
 // ─── Hash (哈希) functions ────────────────────────────────────────────────────
 
-function computeHashResult(value: number): HashResult {
+function computeHashResult(value: number, digits?: [number, number, number] | null): HashResult {
   const big = value >= 14;
   const odd = value % 2 === 1;
   let label: string;
@@ -4141,13 +4221,18 @@ function computeHashResult(value: number): HashResult {
   else if (big && !odd) label = "大双";
   else if (!big && odd) label = "小单";
   else label = "小双";
-  return { value, big, odd, label };
+  return digits ? { value, big, odd, label, digits } : { value, big, odd, label };
 }
 
 function evaluateHashBet(betLabel: string, r: HashResult): boolean {
   // 杀组合并格式 "大双+大单+小双"：任意一项命中即赢
   if (betLabel.includes("+")) {
     return betLabel.split("+").some(part => evaluateHashBet(part.trim(), r));
+  }
+  const abcMatch = betLabel.match(/^([ABC])(\d)$/);
+  if (abcMatch && r.digits) {
+    const posIndex = abcMatch[1] === "A" ? 0 : abcMatch[1] === "B" ? 1 : 2;
+    return r.digits[posIndex] === Number(abcMatch[2]);
   }
   switch (betLabel) {
     case "大": return r.big;
@@ -4177,6 +4262,25 @@ function settleHashBets(session: TgSession, result: HashResult): void {
       const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
       settleBet(session, { won, pnl, betId: bet.id, period: 0, isChase: true });
     } else {
+      const abcParts = bet.betContent
+        .split("+")
+        .map(s => s.trim())
+        .filter(part => /^([ABC])(\d)$/.test(part));
+      if (abcParts.length > 0 && result.digits) {
+        let hitCount = 0;
+        for (const part of abcParts) {
+          const abcMatch = part.match(/^([ABC])(\d)$/);
+          if (!abcMatch) continue;
+          const posIndex = abcMatch[1] === "A" ? 0 : abcMatch[1] === "B" ? 1 : 2;
+          if (result.digits[posIndex] === Number(abcMatch[2])) hitCount++;
+        }
+        const won = hitCount > 0;
+        const pnl = won
+          ? Math.round(bet.amount * (session.cfg.abcDigitOdds * hitCount - abcParts.length) * 100) / 100
+          : -bet.amount * abcParts.length;
+        settleBet(session, { won, pnl, betId: bet.id, period: 0 });
+        continue;
+      }
       const won = evaluateHashBet(bet.betContent, result);
       const pnl = won ? Math.round(bet.amount * (odds - 1) * 100) / 100 : -bet.amount;
       settleBet(session, { won, pnl, betId: bet.id, period: 0 });
@@ -4200,6 +4304,26 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
 
   const cfgAlgos = (session.cfg.algorithms ?? []) as AlgorithmId[];
   const hashAlgos = cfgAlgos.filter(a => a.startsWith("hash_"));
+  const hashAbcDigitAlgo = hashAlgos.find(algo => algo === "hash_abc_digit_cycle_ai" || algo === "hash_abc_digit_ai");
+
+  if (hashAbcDigitAlgo) {
+    if (!hasAbcDigitEnabled(session)) {
+      logger.warn("[hash-abc-digit-ai] all positions disabled, skip");
+      return;
+    }
+    const plan = hashAbcDigitAlgo === "hash_abc_digit_cycle_ai"
+      ? buildHashAbcDigitCyclePlan(session)
+      : buildHashAbcDigitPlan(session);
+    if (!plan) {
+      logger.warn("[hash-abc-digit-ai] insufficient digit history, skip");
+      return;
+    }
+    session.lastAlgoUsed = hashAbcDigitAlgo;
+    session.lastRawAlgoDir = summarizeAbcDigitPlan(plan);
+    await placeAbcDigitBets(session, plan);
+    return;
+  }
+
   const primary =
     (hashAlgos.includes("hash_kill_plus") ? "hash_kill_plus"
       : (hashAlgos.includes("hash_kill") ? "hash_kill"
@@ -4364,22 +4488,23 @@ async function processHashResultMsg(session: TgSession, text: string): Promise<v
 
   // ── 2. 开奖结果 caption → 解析数值，发布结果，并启动 50 秒延迟下注 ──
   // 主格式: "1051349期 9+8+5=22 大双 杂六"
-  const captionMatch = text.match(/(\d{4,})期\s*\d+\+\d+\+\d+=(\d{1,2})\s*(大单|大双|小单|小双)/);
+  const captionMatch = text.match(/(\d{4,})期\s*([0-9])\+([0-9])\+([0-9])=(\d{1,2})\s*(大单|大双|小单|小双)/);
   if (captionMatch) {
-    const val = parseInt(captionMatch[2]!);
+    const digits = [Number(captionMatch[2]), Number(captionMatch[3]), Number(captionMatch[4])] as [number, number, number];
+    const val = parseInt(captionMatch[5]!);
     if (val >= 0 && val <= 27) {
-      publishHashResult(session, computeHashResult(val));
+      publishHashResult(session, computeHashResult(val, digits));
       scheduleHashAutoBet(session);
       return;
     }
   }
 
   // 备用：只有 A+B+C=D 公式（无期号或无标签时）
-  const sumMatch = text.match(/\d+\+\d+\+\d+=(\d{1,2})/);
-  if (sumMatch) {
-    const val = parseInt(sumMatch[1]!);
+  const digits = extractHashDigitsFromText(text);
+  if (digits) {
+    const val = digits[0] + digits[1] + digits[2];
     if (val >= 0 && val <= 27) {
-      publishHashResult(session, computeHashResult(val));
+      publishHashResult(session, computeHashResult(val, digits));
       scheduleHashAutoBet(session);
       return;
     }
@@ -4467,11 +4592,13 @@ function startHashResultPoller(session: TgSession): void {
         const seededResults: HashResult[] = [];
         for (const msg of sorted) {
           const text = msg.message ?? "";
-          const captionMatch = text.match(/(\d{4,})期\s*\d+\+\d+\+\d+=(\d{1,2})\s*(大单|大双|小单|小双)/);
-          const sumMatch = !captionMatch && text.match(/\d+\+\d+\+\d+=(\d{1,2})/);
-          const raw = captionMatch ? captionMatch[2]! : (sumMatch ? sumMatch[1]! : "");
+          const captionMatch = text.match(/(\d{4,})期\s*([0-9])\+([0-9])\+([0-9])=(\d{1,2})\s*(大单|大双|小单|小双)/);
+          const seededDigits = captionMatch
+            ? [Number(captionMatch[2]), Number(captionMatch[3]), Number(captionMatch[4])] as [number, number, number]
+            : extractHashDigitsFromText(text);
+          const raw = captionMatch ? captionMatch[5]! : (seededDigits ? String(seededDigits[0] + seededDigits[1] + seededDigits[2]) : "");
           const val = raw !== "" ? parseInt(raw) : -1;
-          if (val >= 0 && val <= 27) seededResults.push(computeHashResult(val));
+          if (val >= 0 && val <= 27) seededResults.push(computeHashResult(val, seededDigits));
         }
         // 最新在前写入 session.hashResults（散点检测 fallback）
         session.hashResults = seededResults.reverse();
