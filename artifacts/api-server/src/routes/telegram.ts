@@ -1406,7 +1406,7 @@ function getPrivateMonitorActiveBets(): GroupBetEntry[] {
 
 function decidePrivateMonitorComboBet(session: TgSession): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
-  if (!labels.length) return null;
+  if (!labels.length && !session.cfg.dualGroupMode && !session.cfg.killGroupMode) return null;
 
   const activeBets = getPrivateMonitorActiveBets();
   if (activeBets.length < 8) return null;
@@ -1461,6 +1461,25 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
   const hottestCombo = Object.entries(comboTotals).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
   if (hottestCombo && scores[hottestCombo] !== undefined) {
     scores[hottestCombo] -= 2.2;
+  }
+
+  if (session.cfg.killGroupMode) {
+    const killed = (Object.entries(comboTotals) as Array<[KillGroupOption, number]>)
+      .map(([label]) => ({ label, score: scores[label] ?? -999 }))
+      .sort((a, b) => {
+        if (a.score !== b.score) return a.score - b.score;
+        return a.label.localeCompare(b.label, "zh-CN");
+      })[0]?.label ?? null;
+    session.lastRawAlgoDir = killed ? `kill:${killed}` : null;
+    return killed;
+  }
+
+  if (session.cfg.dualGroupMode) {
+    const groupA = (scores["大单"] ?? -999) + (scores["小双"] ?? -999);
+    const groupB = (scores["小单"] ?? -999) + (scores["大双"] ?? -999);
+    const pickedGroup = groupA >= groupB ? ABC_GROUP_A : ABC_GROUP_B;
+    session.lastRawAlgoDir = pickedGroup;
+    return pickedGroup;
   }
 
   const best = labels
@@ -3242,6 +3261,10 @@ async function runPrivateMonitorAutoBet(session: TgSession, triggerTerm: number)
   session.lastAlgoUsed = "private_combo_ai";
   session.lastBetPeriod = triggerTerm;
   session.privateAlgoLastBetTerm = triggerTerm;
+  if (session.cfg.killGroupMode && (KILL_GROUP_ALL as readonly string[]).includes(direction)) {
+    await placeKillGroupBets(session, direction as KillGroupOption);
+    return;
+  }
   await placeAllBets(session, direction);
 }
 
