@@ -320,6 +320,12 @@ export interface Hash2Runtime {
   updatedAt: number;
 }
 
+export interface StructuredBetLabelInfo {
+  bet: string;
+  tag: "顺势" | "逆势" | "震荡";
+  confidence: number;
+}
+
 export interface BetRecord {
   id: string;
   groupId: string;
@@ -337,6 +343,7 @@ export interface BetRecord {
   failReason?: string;
   isAdaptiveKillBet?: boolean;
   algoId?: string;
+  structuredLabels?: StructuredBetLabelInfo[];
 }
 
 export interface AlgoRate {

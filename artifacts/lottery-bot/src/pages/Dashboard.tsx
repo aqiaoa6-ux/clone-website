@@ -1696,6 +1696,15 @@ export default function Dashboard() {
                         <div className="text-slate-600 text-[10px] mt-0.5">
                           {fmtDate(b.timestamp)} · {b.lotteryResult ?? b.messageText.slice(0, 20)}
                         </div>
+                        {b.structuredLabels && b.structuredLabels.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-1">
+                            {b.structuredLabels.map(item => (
+                              <span key={`${b.id}-${item.bet}`} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-300">
+                                {item.bet} · {item.tag} {item.confidence}%
+                              </span>
+                            ))}
+                          </div>
+                        )}
                         {b.status === "failed" && b.failReason && (
                           <div className="text-red-400 text-[10px] mt-0.5 font-mono">{b.failReason}</div>
                         )}

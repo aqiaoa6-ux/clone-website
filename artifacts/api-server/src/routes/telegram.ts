@@ -307,6 +307,7 @@ interface BetRecord {
   isAdaptiveKillBet?: boolean; // adaptive_switch: this bet was placed in kill-group phase
   algoId?: string; // which algorithm placed this bet
   rawAlgoDir?: string; // algorithm direction BEFORE flip (for flip feedback-loop prevention)
+  structuredLabels?: StructuredBetLabelInfo[];
 }
 
 // Extract a short, human-readable error code from a GramJS/Telegram error.
@@ -399,6 +400,7 @@ export interface TgSession {
   lastSignalText: string;
   lastAIBet: string | null;
   lastRawAlgoDir: string | null; // raw algo direction before flip
+  lastStructuredBetLabels?: StructuredBetLabelInfo[];
   algoFlipCooldown: number;      // remaining bets in flip cooldown (re-eval blocked)
   // adaptive_switch algorithm state
   adaptiveSwitchKillMode: boolean; // false = 大小模式, true = 杀组模式
@@ -1538,6 +1540,20 @@ function mapR3ToEnabled(r3: string, enabled: string[]): string | null {
 
 type StructuredBetAxis = "A" | "B" | "C" | "S";
 type StructuredBetAttr = "大" | "小" | "单" | "双";
+type StructuredBetFamily = "size" | "parity";
+type StructuredTrendTag = "顺势" | "逆势" | "震荡";
+
+interface StructuredBetLabelInfo {
+  bet: string;
+  tag: StructuredTrendTag;
+  confidence: number;
+}
+
+interface StructuredSignal extends StructuredBetLabelInfo {
+  axis: StructuredBetAxis;
+  family: StructuredBetFamily;
+  strength: number;
+}
 
 function isStructuredBetPart(part: string): boolean {
   return /^(A|B|C|S)(大|小|单|双)$/.test(part.trim());
@@ -1571,55 +1587,189 @@ function digitLabel(value: number, type: "size" | "parity"): StructuredBetAttr {
   return value % 2 === 1 ? "单" : "双";
 }
 
+function oppositeStructuredAttr(attr: StructuredBetAttr, family: StructuredBetFamily): StructuredBetAttr {
+  if (family === "size") return attr === "大" ? "小" : "大";
+  return attr === "单" ? "双" : "单";
+}
+
 function recentDigits(session: TgSession, limit = 16): [number, number, number][] {
   return [...lotteryDigitHistoryCache, ...(session.recentDigitResults ?? [])].slice(-limit);
 }
 
-function scoreStructuredAxis(
-  items: number[],
-  type: "size" | "parity",
-  positive: StructuredBetAttr,
-  negative: StructuredBetAttr,
-): { pick: StructuredBetAttr; strength: number } {
-  if (!items.length) return { pick: positive, strength: 0 };
-  const short = items.slice(-6);
-  const mid = items.slice(-12);
-  const shortPositive = short.filter(value => digitLabel(value, type) === positive).length;
-  const midPositive = mid.filter(value => digitLabel(value, type) === positive).length;
-  const positiveScore = shortPositive * 1.3 + midPositive * 0.45;
-  const negativeScore = (short.length - shortPositive) * 1.3 + (mid.length - midPositive) * 0.45;
-  return positiveScore >= negativeScore
-    ? { pick: positive, strength: positiveScore - negativeScore }
-    : { pick: negative, strength: negativeScore - positiveScore };
+function clampConfidence(value: number, min = 55, max = 95): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
-function structuredCandidate(session: TgSession, axis: StructuredBetAxis): { bet: string; strength: number } | null {
-  const history = recentDigits(session, 18);
-  if (!history.length) return null;
-  if (axis === "S") {
-    const sums = history.map(([a, b, c]) => a + b + c);
-    const size = scoreStructuredAxis(sums, "size", "大", "小");
-    const parity = scoreStructuredAxis(sums, "parity", "单", "双");
-    const best = size.strength >= parity.strength ? size : parity;
-    return { bet: `S${best.pick}`, strength: best.strength };
+function analyzeStructuredSignal(axis: StructuredBetAxis, family: StructuredBetFamily, values: number[]): StructuredSignal | null {
+  if (!values.length) return null;
+  const labels = values.map(value => digitLabel(value, family));
+  const short = labels.slice(-8);
+  const last = short[short.length - 1]!;
+  const prev = short[short.length - 2] ?? null;
+  let streak = 0;
+  for (let i = short.length - 1; i >= 0 && short[i] === last; i--) streak++;
+
+  let alternations = 0;
+  for (let i = 1; i < short.length; i++) {
+    if (short[i] !== short[i - 1]) alternations++;
+  }
+  const altRatio = short.length > 1 ? alternations / (short.length - 1) : 0;
+
+  const shortCounts = short.reduce<Record<string, number>>((acc, label) => {
+    acc[label] = (acc[label] ?? 0) + 1;
+    return acc;
+  }, {});
+  const dominant = (Object.entries(shortCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? last) as StructuredBetAttr;
+  const dominantCount = shortCounts[dominant] ?? 0;
+  const dominance = short.length > 0 ? dominantCount / short.length : 0;
+  const warmGap = short.reverse().findIndex(label => label === last);
+  short.reverse();
+
+  let pick: StructuredBetAttr;
+  let tag: StructuredTrendTag;
+  let strength: number;
+  let confidence: number;
+
+  if (altRatio >= 0.65 && prev) {
+    pick = oppositeStructuredAttr(last, family);
+    tag = "震荡";
+    strength = 5 + altRatio * 4 + (last !== prev ? 1.2 : 0);
+    confidence = clampConfidence(60 + altRatio * 35 + (last !== prev ? 3 : 0), 60, 93);
+  } else if (streak >= 2 || dominance >= 0.62) {
+    pick = last;
+    tag = "顺势";
+    strength = 4.2 + streak * 1.8 + dominance * 3.2;
+    confidence = clampConfidence(58 + streak * 8 + dominance * 20, 58, 95);
+  } else {
+    pick = oppositeStructuredAttr(dominant, family);
+    tag = "逆势";
+    strength = 3.5 + (1 - dominance) * 4 + Math.max(0, warmGap) * 0.35;
+    confidence = clampConfidence(56 + (1 - dominance) * 28 + Math.max(0, warmGap) * 2.5, 56, 88);
   }
 
-  const posIndex = axis === "A" ? 0 : axis === "B" ? 1 : 2;
-  const values = history.map(item => item[posIndex]!);
-  const size = scoreStructuredAxis(values, "size", "大", "小");
-  const parity = scoreStructuredAxis(values, "parity", "单", "双");
-  const best = size.strength >= parity.strength ? size : parity;
-  return { bet: `${axis}${best.pick}`, strength: best.strength };
+  return {
+    axis,
+    family,
+    bet: `${axis}${pick}`,
+    tag,
+    confidence,
+    strength,
+  };
+}
+
+function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
+  const history = recentDigits(session, 18);
+  if (!history.length) return [];
+  const values = axis === "S"
+    ? history.map(([a, b, c]) => a + b + c)
+    : history.map(item => item[axis === "A" ? 0 : axis === "B" ? 1 : 2]!);
+  return [
+    analyzeStructuredSignal(axis, "size", values),
+    analyzeStructuredSignal(axis, "parity", values),
+  ].filter((item): item is StructuredSignal => item !== null);
+}
+
+function formatStructuredLabels(signals: StructuredSignal[]): StructuredBetLabelInfo[] {
+  return signals.map(signal => ({
+    bet: signal.bet,
+    tag: signal.tag,
+    confidence: signal.confidence,
+  }));
+}
+
+function structuredSignalAttr(signal: StructuredSignal): StructuredBetAttr {
+  return signal.bet.slice(1) as StructuredBetAttr;
+}
+
+function scoreStructuredCandidate(candidate: StructuredSignal, selected: StructuredSignal[]): number {
+  const candidateAttr = structuredSignalAttr(candidate);
+  let score = candidate.strength;
+
+  if (selected.some(item => item.axis === candidate.axis)) score -= 100;
+  if (!selected.some(item => item.family === candidate.family)) score += 1.4;
+  if (candidate.family === "parity" && !selected.some(item => item.family === "parity")) score += 1.8;
+  if (!selected.some(item => structuredSignalAttr(item) === candidateAttr)) score += 0.7;
+
+  const sameFamilySameAttr = selected.filter(item =>
+    item.family === candidate.family && structuredSignalAttr(item) === candidateAttr,
+  ).length;
+  if (sameFamilySameAttr > 0) score -= sameFamilySameAttr * 1.1;
+
+  const sizeSignals = selected.filter(item => item.family === "size");
+  if (candidate.family === "size" && sizeSignals.length > 0) {
+    const sameSideCount = sizeSignals.filter(item => structuredSignalAttr(item) === candidateAttr).length;
+    score -= sameSideCount * 1.3;
+  }
+
+  return score;
+}
+
+function pickStructuredCandidate(candidates: StructuredSignal[], selected: StructuredSignal[]): StructuredSignal | null {
+  return [...candidates]
+    .sort((a, b) => scoreStructuredCandidate(b, selected) - scoreStructuredCandidate(a, selected))[0] ?? null;
+}
+
+function rebalanceStructuredSelection(
+  selected: StructuredSignal[],
+  axisSignals: Record<StructuredBetAxis, StructuredSignal[]>,
+): StructuredSignal[] {
+  const next = [...selected];
+
+  const replaceWeakestPosition = (predicate: (signal: StructuredSignal) => boolean, replacements: StructuredSignal[]) => {
+    const weakest = next
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => item.axis !== "S" && predicate(item))
+      .sort((a, b) => a.item.strength - b.item.strength)[0];
+    if (!weakest) return;
+    const replacement = pickStructuredCandidate(replacements, next.filter((_, index) => index !== weakest.index));
+    if (replacement) next[weakest.index] = replacement;
+  };
+
+  if (!next.some(item => item.family === "parity")) {
+    replaceWeakestPosition(
+      () => true,
+      (["A", "B", "C"] as const)
+        .flatMap(axis => axisSignals[axis].filter(item => item.family === "parity")),
+    );
+  }
+
+  const sizeSignals = next.filter(item => item.family === "size");
+  const sameSizeSide = sizeSignals.length >= 2
+    && new Set(sizeSignals.map(item => structuredSignalAttr(item))).size === 1;
+  if (sameSizeSide) {
+    replaceWeakestPosition(
+      item => item.family === "size",
+      (["A", "B", "C"] as const)
+        .flatMap(axis => axisSignals[axis].filter(item => item.family === "parity")),
+    );
+  }
+
+  return next;
 }
 
 function canadaClone1(session: TgSession): string | null {
-  const axes: StructuredBetAxis[] = ["S", "A", "B", "C"];
-  const picks = axes
-    .map(axis => structuredCandidate(session, axis))
-    .filter((item): item is { bet: string; strength: number } => item !== null);
-  if (picks.length < 3) return null;
-  const ordered = picks.sort((a, b) => b.strength - a.strength);
-  const selected = [ordered[0]!, ...ordered.slice(1).sort((a, b) => b.strength - a.strength).slice(0, 2)];
+  const axisSignals: Record<StructuredBetAxis, StructuredSignal[]> = {
+    S: structuredSignalsForAxis(session, "S"),
+    A: structuredSignalsForAxis(session, "A"),
+    B: structuredSignalsForAxis(session, "B"),
+    C: structuredSignalsForAxis(session, "C"),
+  };
+
+  const sumBest = [...axisSignals.S].sort((a, b) => b.strength - a.strength)[0];
+  if (!sumBest) return null;
+
+  const positionCandidates = (["A", "B", "C"] as const)
+    .flatMap(axis => axisSignals[axis])
+    .sort((a, b) => b.strength - a.strength);
+  const firstPosition = pickStructuredCandidate(positionCandidates, [sumBest]);
+  if (!firstPosition) return null;
+
+  const secondPosition = pickStructuredCandidate(positionCandidates, [sumBest, firstPosition]);
+  if (!secondPosition) return null;
+
+  const selected = rebalanceStructuredSelection([sumBest, firstPosition, secondPosition], axisSignals);
+
+  session.lastStructuredBetLabels = formatStructuredLabels(selected);
   return selected.map(item => item.bet).join("+");
 }
 
@@ -3461,6 +3611,7 @@ function decideBet(session: TgSession, signalText: string): string | null {
   if (algoId === "canada_clone_1") {
     const raw = runAlgo(session, algoId, labels, signalText);
     session.lastRawAlgoDir = raw;
+    if (raw === null) session.lastStructuredBetLabels = undefined;
     if (raw !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
     return raw;
   }
@@ -3485,6 +3636,7 @@ function decideBetAuto(session: TgSession): string | null {
   if (algoId === "canada_clone_1") {
     const raw = runAlgo(session, algoId, labels);
     session.lastRawAlgoDir = raw;
+    if (raw === null) session.lastStructuredBetLabels = undefined;
     if (raw !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
     return raw;
   }
@@ -3929,6 +4081,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
 
   const algoId = session.lastAlgoUsed;
   const rawAlgoDir = session.lastRawAlgoDir ?? undefined;
+  const structuredLabels = structuredItems.length > 0 ? session.lastStructuredBetLabels : undefined;
   if (dualItems) {
     // 双组模式：合并为一条记录，betContent = "大单+小双"
     const dualRec: BetRecord = {
@@ -3949,6 +4102,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       ...(failReason ? { failReason } : {}),
       ...(algoId ? { algoId } : {}),
       ...(rawAlgoDir ? { rawAlgoDir } : {}),
+      ...(structuredLabels ? { structuredLabels } : {}),
     };
     betLog.unshift(structuredRec);
     pushEvent(session, "bet:new", { bet: structuredRec });
@@ -3965,6 +4119,8 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     betLog.unshift(mainRec);
     pushEvent(session, "bet:new", { bet: mainRec });
   }
+
+  if (structuredItems.length > 0) session.lastStructuredBetLabels = undefined;
 
   // Log individual chase records
   for (const { num, amount } of chaseEntries) {
