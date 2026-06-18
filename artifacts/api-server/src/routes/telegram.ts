@@ -934,6 +934,18 @@ function saveSession(session: TgSession): void {
   } catch { /* ignore */ }
 }
 
+function loadPersistedCfg(userId: number): BetCfg | null {
+  try {
+    const file = sessionFile(userId);
+    if (!fs.existsSync(file)) return null;
+    const raw = JSON.parse(fs.readFileSync(file, "utf-8")) as PersistedData;
+    if (!raw.cfg) return null;
+    return sanitizeCfg({ ...DEFAULT_CFG, ...raw.cfg });
+  } catch {
+    return null;
+  }
+}
+
 async function fetchGroups(client: TelegramClient): Promise<GroupInfo[]> {
   try {
     const dialogs = await client.getDialogs({ limit: 100 });
@@ -6668,6 +6680,13 @@ interface CanadaSimMode {
   killGroupMode: boolean;
 }
 
+interface CanadaSimModeInfo {
+  label: string;
+  labels: string[];
+  dualGroupMode: boolean;
+  killGroupMode: boolean;
+}
+
 function isBetOption(value: unknown): value is BetOption {
   return typeof value === "string" && Object.prototype.hasOwnProperty.call(BET_OPTION_LABELS, value);
 }
@@ -6681,6 +6700,47 @@ function resolveCanadaSimMode(cfg?: Partial<BetCfg>): CanadaSimMode {
     labels: labels.length > 0 ? labels : ["大", "小"],
     dualGroupMode: !!cfg?.dualGroupMode,
     killGroupMode: !!cfg?.killGroupMode,
+  };
+}
+
+function buildCanadaSimModeInfo(mode: CanadaSimMode): CanadaSimModeInfo {
+  if (mode.killGroupMode) {
+    return {
+      label: "杀组回测",
+      labels: [...KILL_GROUP_ALL].map(label => `杀${label}`),
+      dualGroupMode: false,
+      killGroupMode: true,
+    };
+  }
+  if (mode.dualGroupMode) {
+    return {
+      label: "双组回测",
+      labels: [ABC_GROUP_A, ABC_GROUP_B],
+      dualGroupMode: true,
+      killGroupMode: false,
+    };
+  }
+  if (mode.labels.every(label => label === "单" || label === "双")) {
+    return {
+      label: "单双回测",
+      labels: mode.labels,
+      dualGroupMode: false,
+      killGroupMode: false,
+    };
+  }
+  if (mode.labels.some(label => KILL_GROUP_ALL.includes(label as KillGroupOption))) {
+    return {
+      label: "组合回测",
+      labels: mode.labels,
+      dualGroupMode: false,
+      killGroupMode: false,
+    };
+  }
+  return {
+    label: "大小单双回测",
+    labels: mode.labels,
+    dualGroupMode: false,
+    killGroupMode: false,
   };
 }
 
@@ -6735,11 +6795,12 @@ function simulateCanadaAlgoStep(
 function simulateCanadaHistoryRows(
   fullHistory: string[],
   cfg?: Partial<Pick<BetCfg, "betOptions" | "dualGroupMode" | "killGroupMode">>,
-): { rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[] } {
+): { rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[]; mode: CanadaSimModeInfo } {
   const history = fullHistory
     .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
   const MIN_HIST = 5;
   const mode = resolveCanadaSimMode(cfg);
+  const modeInfo = buildCanadaSimModeInfo(mode);
   const summaryMap: Record<CanadaSimAlgoId, CanadaSimSummary> = Object.fromEntries(
     CANADA_SIM_ALGOS.map(algoId => [algoId, {
       algoId,
@@ -6759,7 +6820,7 @@ function simulateCanadaHistoryRows(
   const rows: CanadaSimHistoryRow[] = [];
 
   if (history.length <= MIN_HIST) {
-    return { rows, summary: CANADA_SIM_ALGOS.map(algoId => summaryMap[algoId]) };
+    return { rows, summary: CANADA_SIM_ALGOS.map(algoId => summaryMap[algoId]), mode: modeInfo };
   }
 
   const origCache = lotteryHistoryCache;
@@ -6807,7 +6868,7 @@ function simulateCanadaHistoryRows(
     };
   });
 
-  return { rows: rows.slice(-50).reverse(), summary };
+  return { rows: rows.slice(-50).reverse(), summary, mode: modeInfo };
 }
 
 router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
@@ -6917,8 +6978,9 @@ router.get("/tg/algo-rates", requireAuth, (req, res) => {
 router.get("/tg/canada-sim-history", requireAuth, (req, res) => {
   const fullHistory = [...lotteryHistoryCache];
   const session = tgSessions.get(req.user!.userId);
-  const { rows, summary } = simulateCanadaHistoryRows(fullHistory, session?.cfg);
-  res.json({ rows, summary, historyCount: fullHistory.length });
+  const cfg = session?.cfg ?? loadPersistedCfg(req.user!.userId) ?? DEFAULT_CFG;
+  const { rows, summary, mode } = simulateCanadaHistoryRows(fullHistory, cfg);
+  res.json({ rows, summary, mode, historyCount: fullHistory.length });
 });
 
 router.get("/tg/events", requireAuth, (req, res) => {

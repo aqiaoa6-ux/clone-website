@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { api, type LotteryData, type CanadaSimHistoryRow, type CanadaSimSummary, type CanadaSimAlgoEntry } from "../lib/api";
+import { api, type LotteryData, type CanadaSimHistoryRow, type CanadaSimSummary, type CanadaSimAlgoEntry, type CanadaSimModeInfo } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -164,6 +164,7 @@ export default function TrendPage() {
   const [items,       setItems]       = useState<DrawItem[]>([]);
   const [simRows,     setSimRows]     = useState<CanadaSimHistoryRow[]>([]);
   const [simSummary,  setSimSummary]  = useState<CanadaSimSummary[]>([]);
+  const [simMode,     setSimMode]     = useState<CanadaSimModeInfo | null>(null);
   const [loading,     setLoading]     = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -180,6 +181,7 @@ export default function TrendPage() {
       if (simRes.status === "fulfilled") {
         setSimRows(simRes.value.rows);
         setSimSummary(simRes.value.summary);
+        setSimMode(simRes.value.mode);
       }
       setLastUpdated(new Date());
     } catch { /* ignore */ }
@@ -200,7 +202,7 @@ export default function TrendPage() {
     `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
 
   return (
-    <div className="min-h-screen bg-[#0b0e1a] flex flex-col pb-20">
+    <div className="min-h-screen bg-[#0b0e1a] flex flex-col pb-28">
 
       {/* ── Header ── */}
       <div className="sticky top-0 z-30 bg-[#0b0e1a]/95 border-b border-[#1e2235] backdrop-blur px-4 py-3 flex items-center justify-between">
@@ -222,8 +224,22 @@ export default function TrendPage() {
           <div className="bg-[#0f1220] rounded-2xl border border-[#1e2235] p-3">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-white text-sm font-semibold">加拿大算法1-10 模拟回测</h2>
-              <span className="text-[10px] text-slate-500">基于近期开奖历史逐期模拟</span>
+              <span className="text-[10px] text-slate-500">
+                {simMode ? `${simMode.label} · 基于近期开奖历史逐期模拟` : "基于近期开奖历史逐期模拟"}
+              </span>
             </div>
+            {simMode && (
+              <div className="flex flex-wrap items-center gap-2 mb-3">
+                <span className="px-2 py-0.5 rounded-full text-[10px] bg-blue-500/15 text-blue-300">
+                  当前模式：{simMode.label}
+                </span>
+                {simMode.labels.map(label => (
+                  <span key={label} className="px-2 py-0.5 rounded-full text-[10px] bg-slate-500/15 text-slate-300">
+                    {label}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-10 gap-2">
               {CANADA_SIM_ORDER.map(algoId => {
                 const stat = summaryMap.get(algoId);
@@ -250,7 +266,7 @@ export default function TrendPage() {
         ) : (
           <div className="bg-[#0f1220] rounded-2xl overflow-hidden border border-[#1e2235]">
             <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse" style={{ minWidth: 1480 }}>
+              <table className="w-full text-xs border-collapse" style={{ minWidth: 1640 }}>
                 <thead>
                   <tr className="bg-[#131728] border-b border-[#1e2235]">
                     <th className="text-slate-400 font-medium px-2 py-2.5 text-center whitespace-nowrap">回合</th>
@@ -344,7 +360,9 @@ export default function TrendPage() {
         )}
 
         <p className="text-[10px] text-slate-600 text-center">
-          显示近 {display.length} 期 · 含加拿大算法1-10逐期模拟回测 · 每 30 秒自动刷新
+          显示近 {display.length} 期 · 含加拿大算法1-10逐期模拟回测
+          {simMode ? ` · 当前为${simMode.label}` : ""}
+          · 每 30 秒自动刷新
         </p>
       </div>
 
