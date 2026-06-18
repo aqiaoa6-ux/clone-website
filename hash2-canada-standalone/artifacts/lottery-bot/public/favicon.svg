@@ -1,3 +1,9 @@
 <svg width="180" height="180" viewBox="0 0 180 180" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="180" height="180" rx="36" fill="#FF3C00"/>
+<rect width="180" height="180" rx="36" fill="#1A1325"/>
+<ellipse cx="90" cy="99" rx="49" ry="58" fill="#C58A4B"/>
+<ellipse cx="76" cy="86" rx="6" ry="5" fill="#9C6A3C"/>
+<ellipse cx="105" cy="110" rx="5" ry="4" fill="#9C6A3C"/>
+<ellipse cx="88" cy="124" rx="4" ry="3" fill="#9C6A3C"/>
+<path d="M93 47C98 33 110 27 121 31C116 41 107 49 95 53L93 47Z" fill="#69C36D"/>
+<path d="M87 49C82 38 72 33 61 36C66 45 74 52 85 56L87 49Z" fill="#88D98F"/>
 </svg>

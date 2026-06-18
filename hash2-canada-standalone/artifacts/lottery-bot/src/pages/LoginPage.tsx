@@ -52,29 +52,22 @@ export default function LoginPage() {
             <div className="relative w-16 h-16">
               <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full drop-shadow-lg">
                 <defs>
-                  <radialGradient id="bg" cx="50%" cy="40%" r="55%">
-                    <stop offset="0%" stopColor="#4f46e5" />
-                    <stop offset="100%" stopColor="#1e1b4b" />
+                  <radialGradient id="potatoBg" cx="50%" cy="40%" r="60%">
+                    <stop offset="0%" stopColor="#2b1f3d" />
+                    <stop offset="100%" stopColor="#0f0b18" />
                   </radialGradient>
-                  <radialGradient id="glow" cx="50%" cy="50%" r="50%">
-                    <stop offset="0%" stopColor="#818cf8" stopOpacity="0.4" />
-                    <stop offset="100%" stopColor="#818cf8" stopOpacity="0" />
-                  </radialGradient>
-                  <linearGradient id="wing" x1="0%" y1="0%" x2="100%" y2="100%">
-                    <stop offset="0%" stopColor="#a5b4fc" />
-                    <stop offset="100%" stopColor="#6366f1" />
-                  </linearGradient>
                 </defs>
-                <circle cx="32" cy="32" r="30" fill="url(#bg)" />
-                <circle cx="32" cy="32" r="30" fill="url(#glow)" />
-                <circle cx="32" cy="32" r="29" stroke="#6366f1" strokeWidth="0.8" strokeOpacity="0.6" />
-                <path d="M14 34 Q24 22 36 28 Q44 32 50 26 Q46 36 36 36 Q28 36 22 40 Z" fill="url(#wing)" opacity="0.9" />
-                <path d="M18 38 Q26 30 34 34 Q40 37 46 32 Q43 40 34 40 Q26 40 20 44 Z" fill="#c7d2fe" opacity="0.4" />
-                <circle cx="32" cy="32" r="3" fill="#e0e7ff" />
+                <circle cx="32" cy="32" r="30" fill="url(#potatoBg)" />
+                <ellipse cx="32" cy="36" rx="16" ry="19" fill="#C58A4B" />
+                <ellipse cx="27" cy="31" rx="2.2" ry="1.8" fill="#9C6A3C" />
+                <ellipse cx="37" cy="39" rx="1.8" ry="1.4" fill="#9C6A3C" />
+                <ellipse cx="31" cy="44" rx="1.6" ry="1.3" fill="#9C6A3C" />
+                <path d="M33 18C35 12 40 10 45 11C43 16 39 20 34 21L33 18Z" fill="#69C36D" />
+                <path d="M30 19C28 14 23 12 18 14C20 18 24 22 29 23L30 19Z" fill="#88D98F" />
               </svg>
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-wide">暗影-飞投</h1>
+          <h1 className="text-2xl font-bold text-white tracking-wide">土豆飞投</h1>
           <p className="text-slate-400 text-sm mt-1">智能投注管理平台</p>
         </div>
 
