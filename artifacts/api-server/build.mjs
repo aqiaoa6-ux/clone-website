@@ -9,6 +9,7 @@ import { rm } from "node:fs/promises";
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
+const isProduction = process.env.NODE_ENV === "production";
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
@@ -29,6 +30,15 @@ async function buildAll() {
     // - use path traversal to read files (e.g. @google-cloud/secret-manager loads sibling .proto files)
     external: [
       "*.node",
+      "telegram",
+      "big-integer",
+      "express",
+      "cookie-parser",
+      "cors",
+      "drizzle-orm",
+      "pino",
+      "pino-http",
+      "pino-pretty",
       "sharp",
       "better-sqlite3",
       "sqlite3",
@@ -101,7 +111,7 @@ async function buildAll() {
       "puppeteer-core",
       "electron",
     ],
-    sourcemap: "linked",
+    sourcemap: isProduction ? false : "linked",
     plugins: [
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
       esbuildPluginPino({ transports: ["pino-pretty"] })
