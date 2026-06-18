@@ -149,6 +149,20 @@ function fmtDate(ts: number): string {
 
 function pnlColor(n: number) { return n > 0 ? "text-emerald-400" : n < 0 ? "text-red-400" : "text-slate-400"; }
 
+function structuredBetParts(record: BetRecord) {
+  if (!record.structuredLabels?.length) return [];
+  const ordered = record.betContent.split("+").map(item => item.trim()).filter(Boolean);
+  return ordered.map(part => {
+    const label = record.structuredLabels?.find(item => item.bet === part);
+    return {
+      bet: part,
+      amount: record.amount,
+      tag: label?.tag,
+      confidence: label?.confidence,
+    };
+  });
+}
+
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function StatCard({ label, value, sub, valueClass }: { label: string; value: string; sub?: string; valueClass?: string }) {
@@ -1688,23 +1702,45 @@ export default function Dashboard() {
                   {bets.slice(0, 30).map(b => (
                     <div key={b.id} className="flex items-center gap-3 px-4 py-3">
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-white text-sm font-semibold">{b.betContent}</span>
-                          <span className="text-slate-500 text-xs">{b.amount.toLocaleString()}</span>
-                          {b.period && <span className="text-slate-600 text-[10px]">{b.period}期</span>}
-                        </div>
+                        {structuredBetParts(b).length > 0 ? (
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-2">
+                              <span className="text-white text-sm font-semibold">三枪结构</span>
+                              {b.period && <span className="text-slate-600 text-[10px]">{b.period}期</span>}
+                            </div>
+                            <div className="grid gap-1.5">
+                              {structuredBetParts(b).map(item => (
+                                <div key={`${b.id}-${item.bet}`} className="flex items-center justify-between rounded-lg bg-[#0f1220] border border-[#252a3d] px-2.5 py-1.5">
+                                  <div className="flex items-center gap-2 min-w-0">
+                                    <span className="text-cyan-300 text-xs font-semibold shrink-0">{item.bet}</span>
+                                    <span className="text-slate-300 text-xs shrink-0">{item.amount.toLocaleString()}</span>
+                                    {item.tag && (
+                                      <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${
+                                        item.tag === "顺势"
+                                          ? "bg-emerald-500/15 text-emerald-300"
+                                          : item.tag === "逆势"
+                                            ? "bg-red-500/15 text-red-300"
+                                            : "bg-amber-500/15 text-amber-300"
+                                      }`}>
+                                        {item.tag}{typeof item.confidence === "number" ? ` ${item.confidence}%` : ""}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <span className="text-[10px] text-slate-500 shrink-0">固定金额</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="text-white text-sm font-semibold">{b.betContent}</span>
+                            <span className="text-slate-500 text-xs">{b.amount.toLocaleString()}</span>
+                            {b.period && <span className="text-slate-600 text-[10px]">{b.period}期</span>}
+                          </div>
+                        )}
                         <div className="text-slate-600 text-[10px] mt-0.5">
                           {fmtDate(b.timestamp)} · {b.lotteryResult ?? b.messageText.slice(0, 20)}
                         </div>
-                        {b.structuredLabels && b.structuredLabels.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {b.structuredLabels.map(item => (
-                              <span key={`${b.id}-${item.bet}`} className="text-[10px] px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-300">
-                                {item.bet} · {item.tag} {item.confidence}%
-                              </span>
-                            ))}
-                          </div>
-                        )}
                         {b.status === "failed" && b.failReason && (
                           <div className="text-red-400 text-[10px] mt-0.5 font-mono">{b.failReason}</div>
                         )}
