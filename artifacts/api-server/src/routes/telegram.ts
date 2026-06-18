@@ -1582,8 +1582,11 @@ function evaluateStructuredBetPart(part: string, digits: [number, number, number
   return value % 2 === 0;
 }
 
-function digitLabel(value: number, type: "size" | "parity"): StructuredBetAttr {
-  if (type === "size") return value >= 5 ? "大" : "小";
+function digitLabel(value: number, type: "size" | "parity", axis: StructuredBetAxis = "A"): StructuredBetAttr {
+  if (type === "size") {
+    if (axis === "S") return value >= 14 ? "大" : "小";
+    return value >= 5 ? "大" : "小";
+  }
   return value % 2 === 1 ? "单" : "双";
 }
 
@@ -1602,7 +1605,7 @@ function clampConfidence(value: number, min = 55, max = 95): number {
 
 function analyzeStructuredSignal(axis: StructuredBetAxis, family: StructuredBetFamily, values: number[]): StructuredSignal | null {
   if (!values.length) return null;
-  const labels = values.map(value => digitLabel(value, family));
+  const labels = values.map(value => digitLabel(value, family, axis));
   const short = labels.slice(-8);
   const last = short[short.length - 1]!;
   const prev = short[short.length - 2] ?? null;
