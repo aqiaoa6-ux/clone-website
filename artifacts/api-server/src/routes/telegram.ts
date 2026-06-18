@@ -780,6 +780,102 @@ function sessionFile(userId: number): string {
   return path.join(base, `.tg-session-${userId}.json`);
 }
 
+const globalPrivateMonitorGroupIds = new Set<string>();
+
+function privateMonitorGroupsFile(): string {
+  const base = process.env.DATA_DIR ?? process.cwd();
+  try { fs.mkdirSync(base, { recursive: true }); } catch {}
+  return path.join(base, ".private-monitor-groups.json");
+}
+
+function loadGlobalPrivateMonitorGroups(): void {
+  globalPrivateMonitorGroupIds.clear();
+  try {
+    const file = privateMonitorGroupsFile();
+    if (!fs.existsSync(file)) return;
+    const raw = JSON.parse(fs.readFileSync(file, "utf-8")) as { groupIds?: string[] };
+    for (const gid of raw.groupIds ?? []) {
+      if (typeof gid === "string" && gid.trim()) globalPrivateMonitorGroupIds.add(normalizeGroupId(gid));
+    }
+  } catch { /* ignore */ }
+}
+
+function saveGlobalPrivateMonitorGroups(): void {
+  try {
+    fs.writeFileSync(
+      privateMonitorGroupsFile(),
+      JSON.stringify({ groupIds: [...globalPrivateMonitorGroupIds] }, null, 2),
+      "utf-8",
+    );
+  } catch { /* ignore */ }
+}
+
+function listGlobalPrivateMonitorGroupIds(): string[] {
+  return [...globalPrivateMonitorGroupIds];
+}
+
+function hasGlobalPrivateMonitorGroup(groupId: string): boolean {
+  return [...globalPrivateMonitorGroupIds].some(gid => sameGroupId(gid, groupId));
+}
+
+function addGlobalPrivateMonitorGroup(groupId: string): string {
+  const gid = normalizeGroupId(groupId);
+  if (!hasGlobalPrivateMonitorGroup(gid)) {
+    globalPrivateMonitorGroupIds.add(gid);
+    saveGlobalPrivateMonitorGroups();
+  }
+  return gid;
+}
+
+function removeGlobalPrivateMonitorGroup(groupId: string): void {
+  const matched = [...globalPrivateMonitorGroupIds].find(gid => sameGroupId(gid, groupId));
+  if (!matched) return;
+  globalPrivateMonitorGroupIds.delete(matched);
+  saveGlobalPrivateMonitorGroups();
+}
+
+function findPollingSessionForPrivateGroup(groupId: string): TgSession | undefined {
+  for (const session of tgSessions.values()) {
+    if (Object.entries(session.privateMonitorPollers).some(([gid, active]) => active && sameGroupId(gid, groupId))) {
+      return session;
+    }
+  }
+  return undefined;
+}
+
+function ensureGlobalPrivateMonitorPollers(): void {
+  const globalGroups = listGlobalPrivateMonitorGroupIds();
+  for (const session of tgSessions.values()) {
+    for (const gid of Object.keys(session.privateMonitorPollers)) {
+      if (!globalGroups.some(globalGid => sameGroupId(globalGid, gid))) {
+        stopPrivateMonitorPoller(session, gid);
+      }
+    }
+  }
+
+  for (const gid of globalGroups) {
+    const existing = findPollingSessionForPrivateGroup(gid);
+    if (existing?.me) continue;
+    const target = [...tgSessions.values()].find(session => session.me && findGroupInSession(session, gid));
+    if (target) startPrivateMonitorPoller(target, gid);
+  }
+}
+
+function migrateLegacyPrivateMonitorGroups(): void {
+  let changed = false;
+  for (const session of tgSessions.values()) {
+    for (const gid of session.privateMonitorGroupIds) {
+      const normalized = normalizeGroupId(gid);
+      if (hasGlobalPrivateMonitorGroup(normalized)) continue;
+      globalPrivateMonitorGroupIds.add(normalized);
+      changed = true;
+    }
+  }
+  if (changed) saveGlobalPrivateMonitorGroups();
+}
+
+loadGlobalPrivateMonitorGroups();
+
 function saveSession(session: TgSession): void {
   try {
     const data: PersistedData = {
@@ -803,7 +899,6 @@ function saveSession(session: TgSession): void {
       } : undefined,
     };
     if (session.canadaMonitorGroupIds.length > 0) (data as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
-    if (session.privateMonitorGroupIds.length > 0) (data as unknown as Record<string, unknown>).privateMonitorGroupIds = session.privateMonitorGroupIds;
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
     // 同步到数据库（异步，失败不影响主流程）
     const sessionStr = data.sessionString;
@@ -953,8 +1048,6 @@ function destroySession(session: TgSession, reason: string): void {
     };
     if (session.canadaMonitorGroupIds.length > 0)
       (stub as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
-    if (session.privateMonitorGroupIds.length > 0)
-      (stub as unknown as Record<string, unknown>).privateMonitorGroupIds = session.privateMonitorGroupIds;
     fs.writeFileSync(sessionFile(session.userId), JSON.stringify(stub, null, 2), "utf-8");
   } catch { /* ok */ }
   logger.warn({ userId: session.userId, reason }, "[tg] fatal auth error — session destroyed, user must re-login");
@@ -981,6 +1074,7 @@ function startWatchdog(session: TgSession): void {
           if (session.watchGroupId) startGroupListener(session);
           startGlobalListener(session);
           await startKkpayListener(session);
+          ensureGlobalPrivateMonitorPollers();
           saveSession(session);
           pushEvent(session, "session:reconnected", { at: Date.now() });
         } catch (e2) {
@@ -1095,9 +1189,9 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
   if (connected) {
     if (session.watchGroupId) startGroupListener(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
-    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
+    ensureGlobalPrivateMonitorPollers();
     logger.info({ userId }, "[tg] session restored (online)");
   } else {
     logger.info({ userId }, "[tg] session restored (offline — watchdog will reconnect)");
@@ -1163,6 +1257,8 @@ async function restoreAllSessions(): Promise<void> {
   } catch (err) {
     logger.warn({ err }, "[tg] DB session restore failed");
   }
+  migrateLegacyPrivateMonitorGroups();
+  ensureGlobalPrivateMonitorPollers();
 }
 
 void restoreAllSessions();
@@ -1464,21 +1560,70 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
   }
 
   if (session.cfg.killGroupMode) {
-    // 新群杀组固定结构：
-    // 1. 始终保留「大双 + 小单」
-    // 2. 只在「大单 / 小双」之间二选一
-    // 3. 选择综合金额更少的那一组加入下注，另一组作为被杀组
-    const candidatePressure = {
-      大单: comboTotals["大单"] + Math.max(bigAmt, 0) * 0.32 + Math.max(oddAmt, 0) * 0.32,
-      小双: comboTotals["小双"] + Math.max(smallAmt, 0) * 0.32 + Math.max(evenAmt, 0) * 0.32,
+    const history = [...lotteryHistoryCache, ...session.recentResults]
+      .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
+      .slice(-18);
+
+    const monitorPressure: Record<KillGroupOption, number> = {
+      大单: comboTotals["大单"] + bigAmt * 0.22 + oddAmt * 0.22,
+      大双: comboTotals["大双"] + bigAmt * 0.22 + evenAmt * 0.22,
+      小单: comboTotals["小单"] + smallAmt * 0.22 + oddAmt * 0.22,
+      小双: comboTotals["小双"] + smallAmt * 0.22 + evenAmt * 0.22,
     };
-    const picked = (Object.entries(candidatePressure) as Array<[KillGroupOption, number]>)
+    const avgPressure = Object.values(monitorPressure).reduce((sum, value) => sum + value, 0) / 4 || 0;
+    const killScores: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
+
+    for (const opt of KILL_GROUP_ALL) {
+      const pressureBias = avgPressure > 0 ? (monitorPressure[opt] - avgPressure) / avgPressure : 0;
+      killScores[opt] += pressureBias * 5.2;
+    }
+
+    if (Math.abs(sizeBias) >= 0.12) {
+      const sizeSide = sizeBias > 0 ? ["小单", "小双"] : ["大单", "大双"];
+      for (const opt of sizeSide) killScores[opt as KillGroupOption] += Math.abs(sizeBias) * 2.4;
+    }
+    if (Math.abs(parityBias) >= 0.12) {
+      const parityTargets = parityBias > 0 ? ["大双", "小双"] : ["大单", "小单"];
+      for (const opt of parityTargets) killScores[opt as KillGroupOption] += Math.abs(parityBias) * 2.1;
+    }
+
+    if (history.length >= 4) {
+      for (const { size, w } of [{ size: 4, w: 3.2 }, { size: 8, w: 2.0 }, { size: 12, w: 1.1 }]) {
+        const slice = history.slice(-Math.min(size, history.length));
+        for (const opt of KILL_GROUP_ALL) {
+          const freq = slice.filter(r => r === opt).length / slice.length;
+          killScores[opt] += (freq - 0.25) * w * 4.2;
+        }
+      }
+
+      const latest = history[history.length - 1]!;
+      let streak = 0;
+      for (let i = history.length - 1; i >= 0 && history[i] === latest; i--) streak++;
+      if (streak >= 2) killScores[latest] -= 999;
+      else if (streak === 1) killScores[latest] -= 2.4;
+
+      for (const opt of KILL_GROUP_ALL) {
+        let absence = 0;
+        for (let i = history.length - 1; i >= 0 && history[i] !== opt; i--) absence++;
+        if (absence >= 8) killScores[opt] -= 10;
+        else if (absence >= 6) killScores[opt] -= 5;
+        else if (absence >= 4) killScores[opt] -= 1.8;
+      }
+    }
+
+    const coldestByMonitor = [...KILL_GROUP_ALL]
+      .sort((a, b) => monitorPressure[a] - monitorPressure[b]);
+    killScores[coldestByMonitor[0]!] -= 3.5;
+    killScores[coldestByMonitor[1]!] -= 1.2;
+
+    const killed = [...KILL_GROUP_ALL]
       .sort((a, b) => {
-        if (a[1] !== b[1]) return a[1] - b[1];
-        return a[0].localeCompare(b[0], "zh-CN");
-      })[0]?.[0] ?? null;
-    const killed = picked === "大单" ? "小双" : picked === "小双" ? "大单" : null;
-    session.lastRawAlgoDir = picked ? `fixed:大双+小单+${picked}` : null;
+        if (killScores[b] !== killScores[a]) return killScores[b] - killScores[a];
+        if (monitorPressure[b] !== monitorPressure[a]) return monitorPressure[b] - monitorPressure[a];
+        return a.localeCompare(b, "zh-CN");
+      })[0] ?? null;
+
+    session.lastRawAlgoDir = killed ? `dynamic-kill:${killed}` : null;
     return killed;
   }
 
@@ -5571,9 +5716,9 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     session.groups = await fetchGroups(session.client);
     if (session.watchGroupId) startGroupListener(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
-    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
+    ensureGlobalPrivateMonitorPollers();
     saveSession(session);
     startWatchdog(session);
     res.json({ ok: true, me: { id: me.id, firstName: me.firstName, lastName: me.lastName, username: me.username, phone: me.phone } });
@@ -5600,9 +5745,9 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     session.groups = await fetchGroups(session.client);
     if (session.watchGroupId) startGroupListener(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
-    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
+    ensureGlobalPrivateMonitorPollers();
     saveSession(session);
     startWatchdog(session);
     res.json({ ok: true, me: { id: me.id, firstName: me.firstName, lastName: me.lastName, username: me.username, phone: me.phone } });
@@ -6616,11 +6761,16 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
     } catch {}
     return undefined;
   };
-  for (const session of tgSessions.values()) {
-    for (const gid of session.privateMonitorGroupIds) {
-      const title = await resolveTitle(session, gid);
-      groups.push({ groupId: gid, groupTitle: title ?? "无法访问/未加入", userId: session.userId, active: !!session.privateMonitorPollers[gid] });
-    }
+  for (const gid of listGlobalPrivateMonitorGroupIds()) {
+    const pollingSession = findPollingSessionForPrivateGroup(gid);
+    const fallbackSession = pollingSession ?? [...tgSessions.values()].find(session => session.me && findGroupInSession(session, gid));
+    const title = fallbackSession ? await resolveTitle(fallbackSession, gid) : undefined;
+    groups.push({
+      groupId: gid,
+      groupTitle: title ?? "无法访问/未加入",
+      userId: pollingSession?.userId ?? fallbackSession?.userId ?? 0,
+      active: !!pollingSession,
+    });
   }
   res.json({ groups });
 });
@@ -6628,22 +6778,20 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
 router.post("/admin/private-monitor-groups/add", requireAdminSecret, (req, res) => {
   const { groupId } = req.body as { groupId?: string };
   if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
-  const target = findSessionForGroup(groupId);
-  if (!target) { res.status(400).json({ error: "没有已连接的 TG 账号" }); return; }
-  const gid = canonicalGroupId(target, groupId);
-  if (!target.privateMonitorGroupIds.some(g => sameGroupId(g, gid))) {
-    target.privateMonitorGroupIds.push(gid);
-    saveSession(target);
-  }
-  startPrivateMonitorPoller(target, gid);
+  const target = [...tgSessions.values()].find(session => session.me && findGroupInSession(session, groupId));
+  if (!target) { res.status(400).json({ error: "没有已连接的 TG 账号可访问该监控群" }); return; }
+  const gid = addGlobalPrivateMonitorGroup(canonicalGroupId(target, groupId));
+  ensureGlobalPrivateMonitorPollers();
+  const pollingSession = findPollingSessionForPrivateGroup(gid) ?? target;
   const title = findGroupInSession(target, gid)?.title;
   if (title) privateGroupTitleCache.set(gid, title);
-  res.json({ ok: true, groupId: gid, groupTitle: title ?? gid, userId: target.userId });
+  res.json({ ok: true, groupId: gid, groupTitle: title ?? gid, userId: pollingSession.userId });
 });
 
 router.post("/admin/private-monitor-groups/remove", requireAdminSecret, (req, res) => {
   const { groupId } = req.body as { groupId?: string };
   if (!groupId) { res.status(400).json({ error: "groupId required" }); return; }
+  removeGlobalPrivateMonitorGroup(groupId);
   for (const session of tgSessions.values()) {
     const idx = session.privateMonitorGroupIds.findIndex(g => sameGroupId(g, groupId));
     if (idx >= 0) {
@@ -6651,6 +6799,9 @@ router.post("/admin/private-monitor-groups/remove", requireAdminSecret, (req, re
       stopPrivateMonitorPoller(session, gid);
       session.privateMonitorGroupIds.splice(idx, 1);
       saveSession(session);
+    }
+    for (const gid of Object.keys(session.privateMonitorPollers)) {
+      if (sameGroupId(gid, groupId)) stopPrivateMonitorPoller(session, gid);
     }
   }
   res.json({ ok: true });
