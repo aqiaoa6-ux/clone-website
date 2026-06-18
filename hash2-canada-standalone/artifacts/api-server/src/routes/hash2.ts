@@ -89,6 +89,7 @@ const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i
 const STOPLOSS_NEXT_PLAN_ID: Record<string, string> = {
   "plan-1": "plan-2",
   "plan-2": "plan-3",
+  "plan-3": "plan-1",
 };
 const STOPLOSS_PREV_PLAN_ID: Record<string, string> = {
   "plan-2": "plan-1",
