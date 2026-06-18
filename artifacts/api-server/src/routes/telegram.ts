@@ -3233,6 +3233,19 @@ async function runPrivateMonitorAutoBet(session: TgSession, triggerTerm: number)
   if (!session.cfg.algorithms.includes("private_combo_ai")) return;
   if (session.privateAlgoLastBetTerm === triggerTerm) return;
 
+  if (session.currentCloseTimeMs > 0) {
+    const timeToClose = session.currentCloseTimeMs - Date.now();
+    const targetMs = PRIVATE_MONITOR_BET_COUNTDOWN_SEC * 1000;
+    // 新群算法只允许在接近 30 秒时触发，防止旧消息回放或跨期文案提前触发。
+    if (timeToClose < 0 || Math.abs(timeToClose - targetMs) > 20_000) {
+      logger.info(
+        { timeToCloseSec: Math.round(timeToClose / 1000), triggerTerm },
+        "[private-combo-ai] countdown mismatch, skip trigger",
+      );
+      return;
+    }
+  }
+
   const { betLog } = session;
   const nowMs = Date.now();
   for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) stale.status = "lost";
@@ -5191,10 +5204,17 @@ function schedulePrivateLoop(session: TgSession): void {
 function startPrivateMonitorPoller(session: TgSession, groupId: string): void {
   void (async () => {
     session.privateMonitorPollers[groupId] = true;
-    schedulePrivateLoop(session);
     if (!session.privateMonitorLastMsgIds[groupId]) {
-      void pollOnePrivateGroup(session, groupId);
+      try {
+        const peer = resolvePeerForClient(groupId);
+        const baseline = await session.client.getMessages(peer, { limit: 1 }) as Api.Message[];
+        if (baseline.length > 0) {
+          session.privateMonitorLastMsgIds[groupId] = baseline[0]!.id;
+          logger.info({ groupId, baseline: baseline[0]!.id }, "[private-mon] group registered");
+        }
+      } catch { /* ignore */ }
     }
+    schedulePrivateLoop(session);
   })();
 }
 
