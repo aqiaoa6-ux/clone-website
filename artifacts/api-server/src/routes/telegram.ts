@@ -1630,12 +1630,12 @@ function analyzeStructuredSignal(axis: StructuredBetAxis, family: StructuredBetF
   let strength: number;
   let confidence: number;
 
-  if (altRatio >= 0.65 && prev) {
+  if (altRatio >= 0.58 && prev) {
     pick = oppositeStructuredAttr(last, family);
     tag = "震荡";
-    strength = 5 + altRatio * 4 + (last !== prev ? 1.2 : 0);
+    strength = 4.8 + altRatio * 4.2 + (last !== prev ? 1.2 : 0);
     confidence = clampConfidence(52 + altRatio * 18 + (last !== prev ? 2 : 0), 52, 76);
-  } else if (streak >= 2 || dominance >= 0.62) {
+  } else if (streak >= 3 || (streak >= 2 && dominance >= 0.72) || dominance >= 0.78) {
     pick = last;
     tag = "顺势";
     strength = 4.2 + streak * 1.8 + dominance * 3.2;
@@ -1687,8 +1687,12 @@ function scoreStructuredCandidate(candidate: StructuredSignal, selected: Structu
 
   if (selected.some(item => item.axis === candidate.axis)) score -= 100;
   if (!selected.some(item => item.family === candidate.family)) score += 1.4;
+  if (candidate.family === "parity") score += 0.7;
   if (candidate.family === "parity" && !selected.some(item => item.family === "parity")) score += 1.8;
   if (!selected.some(item => structuredSignalAttr(item) === candidateAttr)) score += 0.7;
+  if (candidate.tag !== "顺势" && selected.length > 0 && selected.every(item => item.tag === "顺势")) score += 1.6;
+  if (candidate.tag === "震荡" && !selected.some(item => item.tag === "震荡")) score += 0.5;
+  if (candidate.tag === "逆势" && !selected.some(item => item.tag === "逆势")) score += 0.4;
 
   const sameFamilySameAttr = selected.filter(item =>
     item.family === candidate.family && structuredSignalAttr(item) === candidateAttr,
@@ -1741,6 +1745,14 @@ function rebalanceStructuredSelection(
       item => item.family === "size",
       (["A", "B", "C"] as const)
         .flatMap(axis => axisSignals[axis].filter(item => item.family === "parity")),
+    );
+  }
+
+  if (next.every(item => item.tag === "顺势")) {
+    replaceWeakestPosition(
+      () => true,
+      (["A", "B", "C"] as const)
+        .flatMap(axis => axisSignals[axis].filter(item => item.tag !== "顺势")),
     );
   }
 
