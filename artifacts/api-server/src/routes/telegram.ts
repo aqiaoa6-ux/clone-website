@@ -206,6 +206,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "hash_abc_digit_ai" | "hash_abc_digit_cycle_ai"
   | "private_combo_ai"
   | "canada_clone_1"
+  | "canada_ai_v1"
   | "canada_pro_1" | "canada_pro_2" | "canada_pro_3" | "canada_pro_4" | "canada_pro_5"
   | "canada_pro_6" | "canada_pro_7" | "canada_pro_8" | "canada_pro_9" | "canada_pro_10"
   | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend" | "abc_digit_ai" | "abc_digit_cycle_ai";
@@ -1677,6 +1678,148 @@ function buildStructuredAlternative(signal: StructuredSignal): StructuredSignal 
   };
 }
 
+function structuredFamilyAttrs(family: StructuredBetFamily): [StructuredBetAttr, StructuredBetAttr] {
+  return family === "size" ? ["大", "小"] : ["单", "双"];
+}
+
+interface StructuredAiFeature {
+  last: StructuredBetAttr;
+  prev: StructuredBetAttr | null;
+  shortRatio: number;
+  midRatio: number;
+  longRatio: number;
+  streak: number;
+  oppositeStreak: number;
+  altRatio: number;
+  gap: number;
+  reboundRate: number;
+}
+
+function buildStructuredAiFeature(
+  axis: StructuredBetAxis,
+  family: StructuredBetFamily,
+  target: StructuredBetAttr,
+  values: number[],
+): StructuredAiFeature {
+  const labels = values.map(value => digitLabel(value, family, axis));
+  const opposite = oppositeStructuredAttr(target, family);
+  const short = labels.slice(-8);
+  const mid = labels.slice(-14);
+  const long = labels.slice(-20);
+  const last = short[short.length - 1] ?? target;
+  const prev = short[short.length - 2] ?? null;
+  const ratio = (items: StructuredBetAttr[]) => items.length ? items.filter(item => item === target).length / items.length : 0;
+
+  let streak = 0;
+  for (let i = labels.length - 1; i >= 0 && labels[i] === target; i--) streak++;
+
+  let oppositeStreak = 0;
+  for (let i = labels.length - 1; i >= 0 && labels[i] === opposite; i--) oppositeStreak++;
+
+  let alternations = 0;
+  for (let i = 1; i < short.length; i++) {
+    if (short[i] !== short[i - 1]) alternations++;
+  }
+  const altRatio = short.length > 1 ? alternations / (short.length - 1) : 0;
+
+  const reversed = [...labels].reverse();
+  const gapIndex = reversed.findIndex(item => item === target);
+  const gap = gapIndex < 0 ? labels.length : gapIndex;
+
+  let opportunities = 0;
+  let rebounds = 0;
+  for (let i = 1; i < short.length; i++) {
+    if (short[i - 1] === opposite) {
+      opportunities++;
+      if (short[i] === target) rebounds++;
+    }
+  }
+
+  return {
+    last,
+    prev,
+    shortRatio: ratio(short),
+    midRatio: ratio(mid),
+    longRatio: ratio(long),
+    streak,
+    oppositeStreak,
+    altRatio,
+    gap,
+    reboundRate: opportunities > 0 ? rebounds / opportunities : 0,
+  };
+}
+
+function buildStructuredAiSideSignal(
+  axis: StructuredBetAxis,
+  family: StructuredBetFamily,
+  target: StructuredBetAttr,
+  values: number[],
+): StructuredSignal {
+  const feature = buildStructuredAiFeature(axis, family, target, values);
+  const opposite = oppositeStructuredAttr(target, family);
+  const followScore = target === feature.last
+    ? 2.2 + feature.streak * 1.35 + feature.shortRatio * 3 + feature.midRatio * 1.7 + feature.longRatio * 0.9
+    : 0;
+  const oscillationScore = feature.altRatio >= 0.55 && target === oppositeStructuredAttr(feature.last, family)
+    ? 2 + feature.altRatio * 3 + feature.reboundRate * 2.4 + (feature.prev === target ? 0.4 : 0)
+    : 0;
+  const reversalScore = target !== feature.last
+    ? 1.6 + (1 - feature.shortRatio) * 2 + Math.min(feature.gap, 6) * 0.4 + feature.oppositeStreak * 1.05 + feature.reboundRate * 1.7
+    : 0;
+  const overheatPenalty = target === feature.last && feature.shortRatio > 0.82
+    ? (feature.shortRatio - 0.82) * 5
+    : 0;
+  const unstablePenalty = target === feature.last && feature.altRatio > 0.48
+    ? (feature.altRatio - 0.48) * 2.2
+    : 0;
+  let tag: StructuredTrendTag = "逆势";
+  let dominantScore = reversalScore;
+  if (oscillationScore >= followScore && oscillationScore >= reversalScore) {
+    tag = "震荡";
+    dominantScore = oscillationScore;
+  } else if (followScore >= reversalScore) {
+    tag = "顺势";
+    dominantScore = followScore;
+  }
+
+  const strength = Math.max(0.8, followScore + oscillationScore + reversalScore - overheatPenalty - unstablePenalty);
+  const confidence = clampConfidence(49 + dominantScore * 4.2 + Math.abs(feature.shortRatio - 0.5) * 10, 49, 84);
+  return {
+    axis,
+    family,
+    bet: `${axis}${target}`,
+    tag,
+    confidence,
+    strength,
+  };
+}
+
+function buildStructuredAiFamilySignal(axis: StructuredBetAxis, family: StructuredBetFamily, values: number[]): StructuredSignal | null {
+  const [primaryAttr, secondaryAttr] = structuredFamilyAttrs(family);
+  const primary = buildStructuredAiSideSignal(axis, family, primaryAttr, values);
+  const secondary = buildStructuredAiSideSignal(axis, family, secondaryAttr, values);
+  const best = primary.strength >= secondary.strength ? primary : secondary;
+  const edge = Math.abs(primary.strength - secondary.strength);
+  return {
+    ...best,
+    confidence: clampConfidence(best.confidence + edge * 3.5, 50, 86),
+    strength: best.strength + edge * 0.45,
+  };
+}
+
+function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
+  const history = recentDigits(session, 24);
+  if (!history.length) return [];
+  const values = axis === "S"
+    ? history.map(([a, b, c]) => a + b + c)
+    : history.map(item => item[axis === "A" ? 0 : axis === "B" ? 1 : 2]!);
+  const families: StructuredBetFamily[] = axis === "S" ? ["size", "parity"] : ["parity", "size"];
+  return families
+    .map(family => buildStructuredAiFamilySignal(axis, family, values))
+    .filter((item): item is StructuredSignal => item !== null)
+    .flatMap(item => [item, buildStructuredAlternative(item)]);
+}
+
 function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
   const history = recentDigits(session, 18);
   if (!history.length) return [];
@@ -1806,6 +1949,50 @@ function canadaClone1(session: TgSession): string | null {
   if (!secondPosition) return null;
 
   const selected = rebalanceStructuredSelection([sumBest, firstPosition, secondPosition], axisSignals);
+
+  session.lastStructuredBetLabels = formatStructuredLabels(selected);
+  return selected.map(item => item.bet).join("+");
+}
+
+function scoreStructuredAiCandidate(candidate: StructuredSignal, selected: StructuredSignal[]): number {
+  let score = scoreStructuredCandidate(candidate, selected);
+  if (candidate.axis === "S" && candidate.family === "size") score += 2.1;
+  if (candidate.axis === "S" && candidate.family === "parity") score -= 1.1;
+  if (candidate.axis !== "S" && candidate.family === "parity") score += 1.5;
+  if ((candidate.axis === "B" || candidate.axis === "C") && candidate.family === "parity") score += 1.1;
+  if (candidate.axis === "A" && candidate.family === "size") score -= 0.8;
+  if (candidate.tag === "顺势") score -= 0.3;
+  if (candidate.tag === "震荡") score += 0.4;
+  return score;
+}
+
+function pickStructuredAiCandidate(candidates: StructuredSignal[], selected: StructuredSignal[]): StructuredSignal | null {
+  return [...candidates]
+    .sort((a, b) => scoreStructuredAiCandidate(b, selected) - scoreStructuredAiCandidate(a, selected))[0] ?? null;
+}
+
+function canadaAiV1(session: TgSession): string | null {
+  const axisSignals: Record<StructuredBetAxis, StructuredSignal[]> = {
+    S: structuredAiSignalsForAxis(session, "S"),
+    A: structuredAiSignalsForAxis(session, "A"),
+    B: structuredAiSignalsForAxis(session, "B"),
+    C: structuredAiSignalsForAxis(session, "C"),
+  };
+
+  const sumBest = pickStructuredAiCandidate(axisSignals.S.filter(item => item.family === "size"), []);
+  if (!sumBest) return null;
+
+  const positionCandidates = (["A", "B", "C"] as const)
+    .flatMap(axis => axisSignals[axis]);
+  const firstPosition = pickStructuredAiCandidate(positionCandidates, [sumBest]);
+  if (!firstPosition) return null;
+
+  const secondPool = positionCandidates.filter(item => item.axis !== firstPosition.axis);
+  const secondPosition = pickStructuredAiCandidate(secondPool, [sumBest, firstPosition]);
+  if (!secondPosition) return null;
+
+  const selected = rebalanceStructuredSelection([sumBest, firstPosition, secondPosition], axisSignals)
+    .sort((a, b) => (a.axis === "S" ? -1 : b.axis === "S" ? 1 : 0));
 
   session.lastStructuredBetLabels = formatStructuredLabels(selected);
   return selected.map(item => item.bet).join("+");
@@ -3566,6 +3753,7 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "streak_follow") return streakFollow(session);
   if (algoId === "abc_trend") return decideAbcTrend(session);
   if (algoId === "canada_clone_1") return canadaClone1(session);
+  if (algoId === "canada_ai_v1") return canadaAiV1(session);
   if (algoId === "canada_pro_1") return runCanadaProAlgo(session, labels, 1);
   if (algoId === "canada_pro_2") return runCanadaProAlgo(session, labels, 2);
   if (algoId === "canada_pro_3") return runCanadaProAlgo(session, labels, 3);
@@ -3646,7 +3834,7 @@ function applyAlgoFlip(session: TgSession, direction: string | null, labels: str
 function decideBet(session: TgSession, signalText: string): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   const algoId = selectAlgoByPattern(session);
-  if (algoId === "canada_clone_1") {
+  if (algoId === "canada_clone_1" || algoId === "canada_ai_v1") {
     const raw = runAlgo(session, algoId, labels, signalText);
     session.lastRawAlgoDir = raw;
     if (raw === null) session.lastStructuredBetLabels = undefined;
@@ -3671,7 +3859,7 @@ function decideBet(session: TgSession, signalText: string): string | null {
 function decideBetAuto(session: TgSession): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
   const algoId = selectAlgoByPattern(session);
-  if (algoId === "canada_clone_1") {
+  if (algoId === "canada_clone_1" || algoId === "canada_ai_v1") {
     const raw = runAlgo(session, algoId, labels);
     session.lastRawAlgoDir = raw;
     if (raw === null) session.lastStructuredBetLabels = undefined;
@@ -4849,7 +5037,7 @@ async function runAutoBet(session: TgSession): Promise<void> {
     return;
   }
 
-  if (session.cfg.algorithms.includes("canada_clone_1")) {
+  if (session.cfg.algorithms.includes("canada_clone_1") || session.cfg.algorithms.includes("canada_ai_v1")) {
     const direction = decideBetAuto(session);
     if (!direction) {
       logger.info("[canada-clone-1] no structured direction decided, skip");
@@ -6945,7 +7133,7 @@ router.delete("/tg/bets", requireCard, (req, res) => {
  */
 function backtestAlgo(algoId: AlgorithmId, fullHistory: string[]): { wins: number; losses: number; canSimulate: boolean } {
   // 信号算法需要外部信号文本，无法回测；random 无意义
-  if (algoId === "signal_follow" || algoId === "signal_reverse" || algoId === "random" || algoId === "canada_clone_1") {
+  if (algoId === "signal_follow" || algoId === "signal_reverse" || algoId === "random" || algoId === "canada_clone_1" || algoId === "canada_ai_v1") {
     return { wins: 0, losses: 0, canSimulate: false };
   }
 
