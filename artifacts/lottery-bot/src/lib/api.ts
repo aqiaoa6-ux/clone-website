@@ -77,6 +77,7 @@ export const api = {
     clearBets: () => api.del<{ ok: boolean }>("/tg/bets"),
     algoLeaderboard: () => api.get<{ stats: AlgoStat[] }>("/tg/algo-leaderboard"),
     algoRates: () => api.get<{ rates: AlgoRate[]; historyCount: number }>("/tg/algo-rates"),
+    canadaSimHistory: () => api.get<{ rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[]; historyCount: number }>("/tg/canada-sim-history"),
     setKkpay: (username: string) => api.post<{ ok: boolean }>("/tg/kkpay", { username }),
     debugGroup: () => api.get<{ ok: boolean; watchGroupId?: string; messages?: Array<{ id: number; text: string; ts: number; hasMedia: boolean }>; error?: string }>("/tg/debug-group"),
   },
@@ -361,6 +362,31 @@ export interface AlgoStat {
   total: number;
   winRate: string | null;
   pnl: number;
+}
+
+export interface CanadaSimAlgoEntry {
+  algoId: string;
+  prediction: string | null;
+  won: boolean | null;
+  skipped: boolean;
+  streak: number;
+}
+
+export interface CanadaSimHistoryRow {
+  actual: string;
+  algos: CanadaSimAlgoEntry[];
+}
+
+export interface CanadaSimSummary {
+  algoId: string;
+  wins: number;
+  losses: number;
+  skips: number;
+  total: number;
+  winRate: string | null;
+  currentStreak: number;
+  maxWinStreak: number;
+  maxLossStreak: number;
 }
 
 export interface TgChatMessage {

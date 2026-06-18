@@ -6057,6 +6057,161 @@ function backtestAlgo(algoId: AlgorithmId, fullHistory: string[]): { wins: numbe
   return { wins, losses, canSimulate: true };
 }
 
+type CanadaSimAlgoId = "ai_trend" | "steady_ai" | "canada_smart_plus" | "canada_kill" | "canada_kill_plus";
+
+interface CanadaSimRowAlgo {
+  algoId: CanadaSimAlgoId;
+  prediction: string | null;
+  won: boolean | null;
+  skipped: boolean;
+  streak: number;
+}
+
+interface CanadaSimHistoryRow {
+  actual: string;
+  algos: CanadaSimRowAlgo[];
+}
+
+interface CanadaSimSummary {
+  algoId: CanadaSimAlgoId;
+  wins: number;
+  losses: number;
+  skips: number;
+  total: number;
+  winRate: string | null;
+  currentStreak: number;
+  maxWinStreak: number;
+  maxLossStreak: number;
+}
+
+const CANADA_SIM_ALGOS: CanadaSimAlgoId[] = [
+  "ai_trend",
+  "steady_ai",
+  "canada_smart_plus",
+  "canada_kill",
+  "canada_kill_plus",
+];
+
+function createCanadaSimSession(algoId: CanadaSimAlgoId, pastSlice: string[]): TgSession {
+  return {
+    recentResults: pastSlice.slice(-30),
+    lastAIBet: null,
+    currentPattern: "neutral",
+    algIndex: 0,
+    betLog: [],
+    cfg: {
+      ...DEFAULT_CFG,
+      betOptions: ["big", "small"],
+      algorithms: [algoId],
+      dualGroupMode: false,
+      killGroupMode: false,
+      autoBet: false,
+    },
+  } as unknown as TgSession;
+}
+
+function simulateCanadaAlgoStep(algoId: CanadaSimAlgoId, pastSlice: string[], actual: KillGroupOption): { prediction: string | null; won: boolean | null; skipped: boolean } {
+  const fakeSession = createCanadaSimSession(algoId, pastSlice);
+
+  if (algoId === "ai_trend" || algoId === "steady_ai") {
+    const prediction = runAlgo(fakeSession, algoId, ["大", "小"]);
+    if (!prediction) return { prediction: null, won: null, skipped: true };
+    return {
+      prediction,
+      won: (prediction === "大" && actual.startsWith("大")) || (prediction === "小" && actual.startsWith("小")),
+      skipped: false,
+    };
+  }
+
+  if (algoId === "canada_kill") {
+    const raw3 = pastSlice
+      .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
+      .slice(-3);
+    const isScatter = raw3.length === 3 && new Set(raw3).size === 3;
+    if (isScatter) return { prediction: "散点跳过", won: null, skipped: true };
+  }
+
+  const killed = algoId === "canada_smart_plus"
+    ? canadaSmartPlus(fakeSession)
+    : canadaDecideKillGroupV2(fakeSession);
+  const prediction = KILL_GROUP_ALL.filter(opt => opt !== killed).join("+");
+  return { prediction, won: actual !== killed, skipped: false };
+}
+
+function simulateCanadaHistoryRows(fullHistory: string[]): { rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[] } {
+  const history = fullHistory
+    .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
+  const MIN_HIST = 5;
+  const summaryMap: Record<CanadaSimAlgoId, CanadaSimSummary> = Object.fromEntries(
+    CANADA_SIM_ALGOS.map(algoId => [algoId, {
+      algoId,
+      wins: 0,
+      losses: 0,
+      skips: 0,
+      total: 0,
+      winRate: null,
+      currentStreak: 0,
+      maxWinStreak: 0,
+      maxLossStreak: 0,
+    }]),
+  ) as Record<CanadaSimAlgoId, CanadaSimSummary>;
+  const streakMap: Record<CanadaSimAlgoId, number> = Object.fromEntries(
+    CANADA_SIM_ALGOS.map(algoId => [algoId, 0]),
+  ) as Record<CanadaSimAlgoId, number>;
+  const rows: CanadaSimHistoryRow[] = [];
+
+  if (history.length <= MIN_HIST) {
+    return { rows, summary: CANADA_SIM_ALGOS.map(algoId => summaryMap[algoId]) };
+  }
+
+  const origCache = lotteryHistoryCache;
+  try {
+    for (let i = MIN_HIST; i < history.length; i++) {
+      const pastSlice = history.slice(0, i);
+      const actual = history[i]!;
+      lotteryHistoryCache = pastSlice.slice(-50);
+
+      const algos = CANADA_SIM_ALGOS.map(algoId => {
+        const step = simulateCanadaAlgoStep(algoId, pastSlice, actual);
+        const summary = summaryMap[algoId];
+
+        if (step.skipped || step.won === null) {
+          summary.skips++;
+          streakMap[algoId] = 0;
+          return { algoId, prediction: step.prediction, won: null, skipped: true, streak: 0 };
+        }
+
+        summary.total++;
+        if (step.won) {
+          summary.wins++;
+          streakMap[algoId] = streakMap[algoId] > 0 ? streakMap[algoId] + 1 : 1;
+          summary.maxWinStreak = Math.max(summary.maxWinStreak, streakMap[algoId]);
+        } else {
+          summary.losses++;
+          streakMap[algoId] = streakMap[algoId] < 0 ? streakMap[algoId] - 1 : -1;
+          summary.maxLossStreak = Math.max(summary.maxLossStreak, Math.abs(streakMap[algoId]));
+        }
+        summary.currentStreak = streakMap[algoId];
+        return { algoId, prediction: step.prediction, won: step.won, skipped: false, streak: streakMap[algoId] };
+      });
+
+      rows.push({ actual, algos });
+    }
+  } finally {
+    lotteryHistoryCache = origCache;
+  }
+
+  const summary = CANADA_SIM_ALGOS.map(algoId => {
+    const item = summaryMap[algoId];
+    return {
+      ...item,
+      winRate: item.total > 0 ? ((item.wins / item.total) * 100).toFixed(1) : null,
+    };
+  });
+
+  return { rows: rows.slice(-50).reverse(), summary };
+}
+
 router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session) { res.json({ stats: [] }); return; }
@@ -6158,6 +6313,12 @@ router.get("/tg/algo-rates", requireAuth, (req, res) => {
   });
 
   res.json({ rates: rows, historyCount: fullHistory.length });
+});
+
+router.get("/tg/canada-sim-history", requireAuth, (_req, res) => {
+  const fullHistory = [...lotteryHistoryCache];
+  const { rows, summary } = simulateCanadaHistoryRows(fullHistory);
+  res.json({ rows, summary, historyCount: fullHistory.length });
 });
 
 router.get("/tg/events", requireAuth, (req, res) => {

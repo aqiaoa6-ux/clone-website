@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { api, type LotteryData } from "../lib/api";
+import { api, type LotteryData, type CanadaSimHistoryRow, type CanadaSimSummary, type CanadaSimAlgoEntry } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -80,16 +80,71 @@ function streakInfo(items: DrawItem[]): string {
   return count >= 2 ? `连${count}期${label}` : "";
 }
 
+const CANADA_SIM_ORDER = ["ai_trend", "steady_ai", "canada_smart_plus", "canada_kill", "canada_kill_plus"] as const;
+
+const CANADA_SIM_LABELS: Record<(typeof CANADA_SIM_ORDER)[number], string> = {
+  ai_trend: "算法1",
+  steady_ai: "算法2",
+  canada_smart_plus: "算法3",
+  canada_kill: "算法4",
+  canada_kill_plus: "算法5",
+};
+
+function fmtCurrentStreak(streak: number): string {
+  if (streak > 0) return `${streak}连中`;
+  if (streak < 0) return `${Math.abs(streak)}连未`;
+  return "无连";
+}
+
+function drawLabel(item: DrawItem): string {
+  return `${item.big ? "大" : "小"}${item.odd ? "单" : "双"}`;
+}
+
+function SimCell({ entry }: { entry?: CanadaSimAlgoEntry }) {
+  if (!entry) return <span className="text-[10px] text-slate-600">-</span>;
+  const isWin = entry.won === true;
+  const isLoss = entry.won === false;
+  const badgeCls = entry.skipped
+    ? "bg-slate-500/15 text-slate-400"
+    : isWin
+      ? "bg-emerald-500/15 text-emerald-400"
+      : isLoss
+        ? "bg-rose-500/15 text-rose-400"
+        : "bg-slate-500/15 text-slate-400";
+  const badgeText = entry.skipped ? "跳" : isWin ? "中" : isLoss ? "未" : "-";
+  const streakText = entry.skipped || entry.streak === 0 ? "" : entry.streak > 0 ? `中${entry.streak}` : `未${Math.abs(entry.streak)}`;
+
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${badgeCls}`}>{badgeText}</span>
+      {streakText && <span className="text-[10px] text-slate-500 whitespace-nowrap">{streakText}</span>}
+      {entry.prediction && <span className="text-[10px] text-slate-600 whitespace-nowrap">{entry.prediction}</span>}
+    </div>
+  );
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function TrendPage() {
   const [items,       setItems]       = useState<DrawItem[]>([]);
+  const [simRows,     setSimRows]     = useState<CanadaSimHistoryRow[]>([]);
+  const [simSummary,  setSimSummary]  = useState<CanadaSimSummary[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const data = await api.lottery.fengpan();
-      setItems(parseData(data));
+      const [lotteryRes, simRes] = await Promise.allSettled([
+        api.lottery.fengpan(),
+        api.tg.canadaSimHistory(),
+      ]);
+      if (lotteryRes.status === "fulfilled") {
+        const data = lotteryRes.value as LotteryData;
+        setItems(parseData(data));
+      }
+      if (simRes.status === "fulfilled") {
+        setSimRows(simRes.value.rows);
+        setSimSummary(simRes.value.summary);
+      }
       setLastUpdated(new Date());
     } catch { /* ignore */ }
     finally { setLoading(false); }
@@ -103,6 +158,7 @@ export default function TrendPage() {
 
   const display = items.slice(0, 50);
   const streak  = streakInfo(items);
+  const summaryMap = new Map(simSummary.map(item => [item.algoId, item]));
 
   const fmt = (d: Date) =>
     `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}:${d.getSeconds().toString().padStart(2, "0")}`;
@@ -126,6 +182,30 @@ export default function TrendPage() {
 
       <div className="px-3 py-3 space-y-3">
 
+        {simSummary.length > 0 && (
+          <div className="bg-[#0f1220] rounded-2xl border border-[#1e2235] p-3">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-white text-sm font-semibold">加拿大算法1-5 模拟回测</h2>
+              <span className="text-[10px] text-slate-500">基于近期开奖历史逐期模拟</span>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+              {CANADA_SIM_ORDER.map(algoId => {
+                const stat = summaryMap.get(algoId);
+                return (
+                  <div key={algoId} className="rounded-xl border border-[#1e2235] bg-[#111526] p-2.5">
+                    <div className="text-[11px] text-slate-400">{CANADA_SIM_LABELS[algoId]}</div>
+                    <div className="text-sm font-bold text-white mt-1">{stat?.winRate ? `${stat.winRate}%` : "-"}</div>
+                    <div className="text-[10px] text-slate-500 mt-1">{stat ? fmtCurrentStreak(stat.currentStreak) : "暂无"}</div>
+                    <div className="text-[10px] text-slate-600 mt-1">
+                      {stat ? `${stat.wins}中/${stat.losses}未/${stat.skips}跳` : ""}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* ── History table ── */}
         {loading ? (
           <div className="text-center text-slate-500 text-sm py-10">加载中...</div>
@@ -134,7 +214,7 @@ export default function TrendPage() {
         ) : (
           <div className="bg-[#0f1220] rounded-2xl overflow-hidden border border-[#1e2235]">
             <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse" style={{ minWidth: 480 }}>
+              <table className="w-full text-xs border-collapse" style={{ minWidth: 980 }}>
                 <thead>
                   <tr className="bg-[#131728] border-b border-[#1e2235]">
                     <th className="text-slate-400 font-medium px-2 py-2.5 text-center whitespace-nowrap">回合</th>
@@ -144,6 +224,11 @@ export default function TrendPage() {
                     <th className="text-slate-400 font-medium px-2 py-2.5 text-center whitespace-nowrap">形态</th>
                     <th className="text-slate-400 font-medium px-2 py-2.5 text-center whitespace-nowrap">龙虎</th>
                     <th className="text-slate-400 font-medium px-2 py-2.5 text-center whitespace-nowrap">边路</th>
+                    {CANADA_SIM_ORDER.map(algoId => (
+                      <th key={algoId} className="text-slate-400 font-medium px-2 py-2.5 text-center whitespace-nowrap">
+                        {CANADA_SIM_LABELS[algoId]}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
@@ -153,6 +238,9 @@ export default function TrendPage() {
                     const dt  = dragonTiger(item.a, item.c);
                     const er  = edgeRoad(item.sum);
                     const isLatest = idx === 0;
+                    const actual = drawLabel(item);
+                    const simRow = simRows[idx] && simRows[idx]!.actual === actual ? simRows[idx]! : simRows[idx];
+                    const simMap = new Map((simRow?.algos ?? []).map(entry => [entry.algoId, entry]));
                     return (
                       <tr
                         key={item.term}
@@ -191,6 +279,11 @@ export default function TrendPage() {
                         <td className={`px-2 py-2 text-center text-xs ${shp.cls}`}>{shp.label}</td>
                         <td className={`px-2 py-2 text-center text-xs font-medium ${dt.cls}`}>{dt.label}</td>
                         <td className={`px-2 py-2 text-center text-xs ${er.cls}`}>{er.label}</td>
+                        {CANADA_SIM_ORDER.map(algoId => (
+                          <td key={algoId} className="px-2 py-2 text-center">
+                            <SimCell entry={simMap.get(algoId)} />
+                          </td>
+                        ))}
                       </tr>
                     );
                   })}
@@ -201,7 +294,7 @@ export default function TrendPage() {
         )}
 
         <p className="text-[10px] text-slate-600 text-center">
-          显示近 {display.length} 期 · 每 30 秒自动刷新
+          显示近 {display.length} 期 · 含加拿大算法1-5逐期模拟回测 · 每 30 秒自动刷新
         </p>
       </div>
 
