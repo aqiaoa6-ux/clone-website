@@ -367,6 +367,7 @@ export interface TgSession {
   lastAlgoUsed?: AlgorithmId;
   currentPattern?: MarketPattern;
   recentResults: string[];
+  recentDigitResults?: Array<[number, number, number]>;
   betPlacedThisCycle: boolean;
   chasePlacedThisCycle: boolean;
   lastBetPeriod?: number;
