@@ -369,12 +369,13 @@ function derivePlanCurrentLevel(levels: Record<string, number>): number {
 }
 
 function planLevelCount(plan: Hash2Plan): number {
+  const maxHands = Math.min(Math.max(plan.handCount, 1), HASH2_MAX_HANDS);
   let lastConfiguredLevel = 0;
-  for (let i = 0; i < Math.min(plan.amountLevels.length, HASH2_MAX_HANDS); i++) {
+  for (let i = 0; i < Math.min(plan.amountLevels.length, maxHands); i++) {
     const amount = Number(plan.amountLevels[i] ?? 0);
     if (Number.isFinite(amount) && amount > 0) lastConfiguredLevel = i + 1;
   }
-  return Math.min(Math.max(Math.max(plan.handCount, lastConfiguredLevel), 1), HASH2_MAX_HANDS);
+  return Math.max(Math.max(lastConfiguredLevel, 1), maxHands);
 }
 
 function normalizePlanLevelState(
