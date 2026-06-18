@@ -437,16 +437,21 @@ function autoEnableNextPlanOnHandLimit(
   riskReason: string,
 ): boolean {
   if (!isPlanSwitchReason(riskReason)) return false;
+  const currentPlan = config.plans.find(plan => plan.id === sourcePlan.id);
   const nextPlanId = STOPLOSS_NEXT_PLAN_ID[sourcePlan.id];
-  if (!nextPlanId) return false;
+  if (!currentPlan || !nextPlanId) return false;
   const nextPlan = config.plans.find(plan => plan.id === nextPlanId);
-  if (!nextPlan || nextPlan.enabled) return false;
+  if (!nextPlan) return false;
+  const nextPlanRuntime = runtime.plans[nextPlan.id] ?? defaultPlanRuntime();
+  runtime.plans[nextPlan.id] = nextPlanRuntime;
+  currentPlan.enabled = false;
   nextPlan.enabled = true;
+  resetPlanRuntimeForRestart(nextPlan, nextPlanRuntime);
   config.updatedAt = Date.now();
   runtime.updatedAt = Date.now();
   runtime.lastAlert = makeAlert(
     nextPlan,
-    `${sourcePlan.name} ${riskReason}，已自动开启${nextPlan.name}`,
+    `${sourcePlan.name} ${riskReason}，已切换到${nextPlan.name}第一手`,
     "warn",
   );
   saveConfig(userId, config);
@@ -678,7 +683,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ha
         autoReturnedPlanOne
           ? `${plan.name} ${riskReason}，已回到方案1第一手`
           : autoEnabledNextPlan
-            ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}`
+            ? `${plan.name} ${riskReason}，已切换到${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}第一手`
             : `${plan.name} ${riskReason}`,
         riskReason.includes("止损") ? "error" : "success",
       );
@@ -781,7 +786,7 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Hash2P
         autoReturnedPlanOne
           ? `${plan.name} ${riskReason}，已回到方案1第一手`
           : autoEnabledNextPlan
-            ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}`
+            ? `${plan.name} ${riskReason}，已切换到${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}第一手`
             : `${plan.name} ${riskReason}`,
         isPlanSwitchReason(riskReason) || riskReason.includes("止损") ? "error" : "success",
       );
@@ -795,8 +800,7 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Hash2P
 async function processUserHash2(session: TgSession): Promise<void> {
   const userId = session.userId;
   const config = loadConfig(userId);
-  const enabledPlans = config.plans.filter(plan => plan.enabled);
-  if (enabledPlans.length === 0) return;
+  if (!config.plans.some(plan => plan.enabled)) return;
   const runtime = loadRuntime(userId, config);
   const channel = HASH2_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
   let changed = false;
@@ -809,7 +813,7 @@ async function processUserHash2(session: TgSession): Promise<void> {
     }) as Api.Message[];
     if (!msgs.length) {
       if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "hash2_channel_empty") {
-        const plan = enabledPlans[0]!;
+        const plan = config.plans.find(item => item.enabled) ?? config.plans[0]!;
         runtime.lastAlert = {
           id: "hash2_channel_empty",
           planId: plan.id,
@@ -834,7 +838,8 @@ async function processUserHash2(session: TgSession): Promise<void> {
         runtime.activePeriod = parsed.period;
       } else {
         runtime.activePeriod = String((Number(parsed.result.period) || 0) + 1);
-        for (const plan of enabledPlans) {
+        const activePlans = loadConfig(userId).plans.filter(plan => plan.enabled);
+        for (const plan of activePlans) {
           const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
           runtime.plans[plan.id] = state;
           await settlePlanResult(session, userId, plan, state, runtime, parsed.result);

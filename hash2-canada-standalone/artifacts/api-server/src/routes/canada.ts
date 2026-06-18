@@ -438,16 +438,21 @@ function autoEnableNextPlanOnHandLimit(
   riskReason: string,
 ): boolean {
   if (!isPlanSwitchReason(riskReason)) return false;
+  const currentPlan = config.plans.find(plan => plan.id === sourcePlan.id);
   const nextPlanId = STOPLOSS_NEXT_PLAN_ID[sourcePlan.id];
-  if (!nextPlanId) return false;
+  if (!currentPlan || !nextPlanId) return false;
   const nextPlan = config.plans.find(plan => plan.id === nextPlanId);
-  if (!nextPlan || nextPlan.enabled) return false;
+  if (!nextPlan) return false;
+  const nextPlanRuntime = runtime.plans[nextPlan.id] ?? defaultPlanRuntime();
+  runtime.plans[nextPlan.id] = nextPlanRuntime;
+  currentPlan.enabled = false;
   nextPlan.enabled = true;
+  resetPlanRuntimeForRestart(nextPlan, nextPlanRuntime);
   config.updatedAt = Date.now();
   runtime.updatedAt = Date.now();
   runtime.lastAlert = makeAlert(
     nextPlan,
-    `${sourcePlan.name} ${riskReason}，已自动开启${nextPlan.name}`,
+    `${sourcePlan.name} ${riskReason}，已切换到${nextPlan.name}第一手`,
     "warn",
   );
   saveConfig(userId, config);
@@ -700,7 +705,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
         autoReturnedPlanOne
           ? `${plan.name} ${riskReason}，已回到方案1第一手`
           : autoEnabledNextPlan
-            ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}`
+            ? `${plan.name} ${riskReason}，已切换到${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}第一手`
             : `${plan.name} ${riskReason}`,
         riskReason.includes("止损") ? "error" : "success",
       );
@@ -803,7 +808,7 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
         autoReturnedPlanOne
           ? `${plan.name} ${riskReason}，已回到方案1第一手`
           : autoEnabledNextPlan
-            ? `${plan.name} ${riskReason}，已自动开启${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}`
+            ? `${plan.name} ${riskReason}，已切换到${config.plans.find(item => item.id === STOPLOSS_NEXT_PLAN_ID[plan.id])?.name ?? "下一方案"}第一手`
             : `${plan.name} ${riskReason}`,
         isPlanSwitchReason(riskReason) || riskReason.includes("止损") ? "error" : "success",
       );
@@ -817,9 +822,8 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
 async function processUserCanada(session: TgSession): Promise<void> {
   const userId = session.userId;
   const config = loadConfig(userId);
-  const enabledPlans = config.plans.filter(plan => plan.enabled);
   const runtime = loadRuntime(userId, config);
-  const primaryPlan = enabledPlans[0] ?? config.plans[0] ?? defaultPlan(0);
+  const primaryPlan = config.plans.find(plan => plan.enabled) ?? config.plans[0] ?? defaultPlan(0);
   let changed = false;
   const prevMsgId = runtime.lastChannelMsgId;
   const prevActive = runtime.activePeriod;
@@ -874,8 +878,9 @@ async function processUserCanada(session: TgSession): Promise<void> {
         parsedAny = true;
         runtime.lastChannelMsgId = term;
         runtime.activePeriod = String((Number(parsed.period) || 0) + 1);
-        if (enabledPlans.length > 0) {
-          for (const plan of enabledPlans) {
+        const activePlans = loadConfig(userId).plans.filter(plan => plan.enabled);
+        if (activePlans.length > 0) {
+          for (const plan of activePlans) {
             const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
             runtime.plans[plan.id] = state;
             await settlePlanResult(session, userId, plan, state, runtime, parsed);
