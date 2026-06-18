@@ -168,7 +168,7 @@ export default function AdminPage() {
   // ── shop tab ──
   interface ShopCfg { kkpayId: string; kkpaySecret: string; domain: string; productName: string; priceDailyUsdt: string; priceWeeklyUsdt: string; priceMonthlyUsdt: string; enabled: boolean; botToken: string }
   interface ShopOrder { id: number; orderId: string; username: string; cardType: string; amountUsdt: string; status: string; createdAt: string; paidAt: string | null; payUrl: string | null }
-  const [shopCfg, setShopCfg] = useState<ShopCfg>({ kkpayId: "", kkpaySecret: "", domain: "", productName: "暗影飞投-卡密", priceDailyUsdt: "1", priceWeeklyUsdt: "5", priceMonthlyUsdt: "15", enabled: false, botToken: "" });
+  const [shopCfg, setShopCfg] = useState<ShopCfg>({ kkpayId: "", kkpaySecret: "", domain: "", productName: "土豆飞投-卡密", priceDailyUsdt: "1", priceWeeklyUsdt: "5", priceMonthlyUsdt: "15", enabled: false, botToken: "" });
   const [shopOrders, setShopOrders] = useState<ShopOrder[]>([]);
   const [loadingShop, setLoadingShop] = useState(false);
   const [savingShop, setSavingShop] = useState(false);
@@ -1869,7 +1869,7 @@ export default function AdminPage() {
                     <div>
                       <label className="text-xs text-slate-500 mb-1 block">商品名称</label>
                       <input value={shopCfg.productName} onChange={e => setShopCfg(p => ({ ...p, productName: e.target.value }))}
-                        placeholder="暗影飞投-卡密"
+                        placeholder="土豆飞投-卡密"
                         className="w-full bg-[#0f1220] border border-[#252a3d] rounded-xl px-3 py-2 text-white text-sm focus:outline-none focus:border-blue-500" />
                     </div>
                     <div className="grid grid-cols-3 gap-2">

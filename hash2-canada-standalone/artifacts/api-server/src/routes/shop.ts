@@ -64,7 +64,12 @@ function extractKkpayPayUrl(rawText: string): { ok: true; payUrl: string } | { o
 
 async function getConfig() {
   const rows = await db.select().from(shopConfig).limit(1);
-  return rows[0] ?? null;
+  const cfg = rows[0] ?? null;
+  if (!cfg) return null;
+  return {
+    ...cfg,
+    productName: cfg.productName === "暗影飞投-卡密" ? "土豆飞投-卡密" : cfg.productName,
+  };
 }
 
 async function tgApi(token: string, method: string, body: Record<string, unknown>) {
@@ -118,7 +123,7 @@ router.get("/admin/shop/config", requireAdminSecret, async (req, res) => {
       kkpayId: cfg?.kkpayId ?? "",
       kkpaySecret: cfg?.kkpaySecret ?? "",
       domain: cfg?.domain ?? "",
-      productName: cfg?.productName ?? "暗影飞投-卡密",
+      productName: cfg?.productName ?? "土豆飞投-卡密",
       priceDailyUsdt: cfg?.priceDailyUsdt ?? "1",
       priceWeeklyUsdt: cfg?.priceWeeklyUsdt ?? "5",
       priceMonthlyUsdt: cfg?.priceMonthlyUsdt ?? "15",
@@ -141,7 +146,7 @@ router.post("/admin/shop/config", requireAdminSecret, async (req, res) => {
       kkpayId: String(kkpayId ?? ""),
       kkpaySecret: String(kkpaySecret ?? ""),
       domain: String(domain ?? "").replace(/\/$/, ""),
-      productName: String(productName ?? "暗影飞投-卡密"),
+      productName: String(productName ?? "土豆飞投-卡密"),
       priceDailyUsdt: String(priceDailyUsdt ?? "1"),
       priceWeeklyUsdt: String(priceWeeklyUsdt ?? "5"),
       priceMonthlyUsdt: String(priceMonthlyUsdt ?? "15"),
@@ -471,7 +476,7 @@ router.post("/shop/tg-webhook", async (req, res) => {
       const text = (update.message.text ?? "").trim();
       const cmd = text.split("@")[0]!.toLowerCase();
 
-      const welcomeText = `🌑 <b>暗影飞投 - 卡密商店</b>\n\n选择要购买的卡密类型：\n\n☀️ 天卡 — ${cfg.priceDailyUsdt} USDT · 1天\n⭐ 周卡 — ${cfg.priceWeeklyUsdt} USDT · 7天\n👑 月卡 — ${cfg.priceMonthlyUsdt} USDT · 30天\n\n支持 USDT 支付，付款后自动发卡。`;
+      const welcomeText = `🥔 <b>土豆飞投 - 卡密商店</b>\n\n选择要购买的卡密类型：\n\n☀️ 天卡 — ${cfg.priceDailyUsdt} USDT · 1天\n⭐ 周卡 — ${cfg.priceWeeklyUsdt} USDT · 7天\n👑 月卡 — ${cfg.priceMonthlyUsdt} USDT · 30天\n\n支持 USDT 支付，付款后自动发卡。`;
 
       if (cmd === "/start" || cmd === "/help") {
         await tgSend(token, chatId, welcomeText, { reply_markup: menuKeyboard });
