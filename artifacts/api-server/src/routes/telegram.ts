@@ -1464,13 +1464,21 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
   }
 
   if (session.cfg.killGroupMode) {
-    const killed = (Object.entries(comboTotals) as Array<[KillGroupOption, number]>)
-      .map(([label]) => ({ label, score: scores[label] ?? -999 }))
+    // 新群杀组固定结构：
+    // 1. 始终保留「大双 + 小单」
+    // 2. 只在「大单 / 小双」之间二选一
+    // 3. 选择综合金额更少的那一组加入下注，另一组作为被杀组
+    const candidatePressure = {
+      大单: comboTotals["大单"] + Math.max(bigAmt, 0) * 0.32 + Math.max(oddAmt, 0) * 0.32,
+      小双: comboTotals["小双"] + Math.max(smallAmt, 0) * 0.32 + Math.max(evenAmt, 0) * 0.32,
+    };
+    const picked = (Object.entries(candidatePressure) as Array<[KillGroupOption, number]>)
       .sort((a, b) => {
-        if (a.score !== b.score) return a.score - b.score;
-        return a.label.localeCompare(b.label, "zh-CN");
-      })[0]?.label ?? null;
-    session.lastRawAlgoDir = killed ? `kill:${killed}` : null;
+        if (a[1] !== b[1]) return a[1] - b[1];
+        return a[0].localeCompare(b[0], "zh-CN");
+      })[0]?.[0] ?? null;
+    const killed = picked === "大单" ? "小双" : picked === "小双" ? "大单" : null;
+    session.lastRawAlgoDir = picked ? `fixed:大双+小单+${picked}` : null;
     return killed;
   }
 
