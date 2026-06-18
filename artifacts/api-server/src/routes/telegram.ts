@@ -1657,6 +1657,23 @@ function analyzeStructuredSignal(axis: StructuredBetAxis, family: StructuredBetF
   };
 }
 
+function buildStructuredAlternative(signal: StructuredSignal): StructuredSignal {
+  const altTag: StructuredTrendTag = signal.tag === "顺势"
+    ? "逆势"
+    : signal.tag === "逆势"
+      ? "顺势"
+      : "震荡";
+  const penalty = signal.tag === "顺势" ? 1.2 : signal.tag === "逆势" ? 0.9 : 0.7;
+  return {
+    axis: signal.axis,
+    family: signal.family,
+    bet: `${signal.axis}${oppositeStructuredAttr(structuredSignalAttr(signal), signal.family)}`,
+    tag: altTag,
+    confidence: clampConfidence(signal.confidence - (signal.tag === "顺势" ? 8 : 6), 45, 72),
+    strength: Math.max(0.8, signal.strength - penalty),
+  };
+}
+
 function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
   const history = recentDigits(session, 18);
   if (!history.length) return [];
@@ -1666,7 +1683,9 @@ function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): 
   return [
     analyzeStructuredSignal(axis, "size", values),
     analyzeStructuredSignal(axis, "parity", values),
-  ].filter((item): item is StructuredSignal => item !== null);
+  ]
+    .filter((item): item is StructuredSignal => item !== null)
+    .flatMap(item => [item, buildStructuredAlternative(item)]);
 }
 
 function formatStructuredLabels(signals: StructuredSignal[]): StructuredBetLabelInfo[] {
@@ -1686,6 +1705,10 @@ function scoreStructuredCandidate(candidate: StructuredSignal, selected: Structu
   let score = candidate.strength;
 
   if (selected.some(item => item.axis === candidate.axis)) score -= 100;
+  if (candidate.axis === "S" && candidate.family === "size") score += 1.6;
+  if (candidate.axis === "S" && candidate.family === "parity") score -= 0.6;
+  if (candidate.axis !== "S" && candidate.family === "parity") score += 1.2;
+  if (candidate.axis !== "S" && candidate.family === "size") score -= 0.4;
   if (!selected.some(item => item.family === candidate.family)) score += 1.4;
   if (candidate.family === "parity") score += 0.7;
   if (candidate.family === "parity" && !selected.some(item => item.family === "parity")) score += 1.8;
