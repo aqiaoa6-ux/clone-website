@@ -2039,278 +2039,277 @@ function selectCanadaLabel(ctx: CanadaMarketContext, scores: Record<string, numb
   })[0] ?? null;
 }
 
-function pickCanadaByWeights(
-  session: TgSession,
-  labels: string[],
-  limit: number,
-  weights: CanadaScoreWeights,
-  mutate?: (ctx: CanadaMarketContext, scores: Record<string, number>) => void,
-): string | null {
+function buildCanadaCtx(session: TgSession, labels: string[], limit: number): CanadaMarketContext | null {
   const mapped = buildMappedLabelHistory(session, labels, limit);
-  if (!mapped.length) return labels[0] ?? null;
-  const ctx = buildCanadaMarketContext(labels, mapped);
-  const scores = scoreCanadaLabels(ctx, weights);
-  mutate?.(ctx, scores);
+  if (!mapped.length) return null;
+  return buildCanadaMarketContext(labels, mapped);
+}
+
+function createCanadaScores(labels: string[]): Record<string, number> {
+  return Object.fromEntries(labels.map(label => [label, 0])) as Record<string, number>;
+}
+
+function chooseCanadaByScores(session: TgSession, ctx: CanadaMarketContext, scores: Record<string, number>): string | null {
   return selectCanadaLabel(ctx, scores, session.cfg.killGroupMode);
 }
 
+function canadaWarmGap(metric: CanadaLabelMetric, labelCount: number): number {
+  return metric.gap >= 2 && metric.gap <= Math.max(5, labelCount + 1) ? metric.gap - 1 : 0;
+}
+
+function canadaExtremeCold(metric: CanadaLabelMetric, labelCount: number): number {
+  return metric.gap > labelCount + 2 ? metric.gap - (labelCount + 2) : 0;
+}
+
+function getCanadaDominantLabel(ctx: CanadaMarketContext): string | null {
+  return [...ctx.labels].sort((a, b) => {
+    const ma = ctx.metrics[a]!;
+    const mb = ctx.metrics[b]!;
+    const diff =
+      (mb.shortCount * 2 + mb.midCount + mb.tailStreak + mb.recentWeight * 0.15) -
+      (ma.shortCount * 2 + ma.midCount + ma.tailStreak + ma.recentWeight * 0.15);
+    if (diff !== 0) return diff;
+    return a.localeCompare(b, "zh-CN");
+  })[0] ?? null;
+}
+
 function canadaPro1(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 10, {
-    hotShort: 1.9,
-    hotMid: 1.1,
-    hotLong: 0.5,
-    recency: 0.95,
-    gap: -0.08,
-    warmGap: 0.15,
-    deficitShort: 0.2,
-    deficitMid: 0.1,
-    transition1: 1.1,
-    transition2: 0.75,
-    trendFollow: 1.35,
-    altSwitch: 0.45,
-    overheat: 1.1,
-    extremeCold: 0.8,
-    dominanceFollow: 1.1,
-    hotPenalty: 0.45,
-    sameTail: 0.7,
-  });
+  const ctx = buildCanadaCtx(session, labels, 14);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  const dominant = getCanadaDominantLabel(ctx);
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    scores[label] =
+      metric.shortCount * 1.75 +
+      metric.midCount * 0.95 +
+      metric.recentWeight * 0.65 +
+      metric.transition1 * 0.85 +
+      metric.transition2 * 0.65 +
+      metric.tailStreak * 1.05 -
+      canadaExtremeCold(metric, labels.length) * 1.2;
+    if (dominant === label && ctx.dominance >= 0.56) scores[label] += 1.8;
+    if (ctx.last === label && ctx.altRatio <= 0.42) scores[label] += 1.4 + Math.min(ctx.lastStreak, 4) * 0.45;
+    if (ctx.last === label && ctx.lastStreak >= 4) scores[label] -= 1.2;
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro2(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 12, {
-    hotShort: -0.2,
-    hotMid: 0.15,
-    hotLong: 0.15,
-    recency: 0.18,
-    gap: 0.35,
-    warmGap: 1.35,
-    deficitShort: 2.1,
-    deficitMid: 1.3,
-    transition1: 0.55,
-    transition2: 0.2,
-    trendFollow: 0.15,
-    altSwitch: 1.45,
-    overheat: 1.95,
-    extremeCold: 1.65,
-    dominanceFollow: 0.15,
-    hotPenalty: 1.2,
-    sameTail: -0.15,
-  });
+  const ctx = buildCanadaCtx(session, labels, 12);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    const shortDeficit = Math.max(0, ctx.expectedShort - metric.shortCount);
+    const midDeficit = Math.max(0, ctx.expectedMid - metric.midCount);
+    scores[label] =
+      canadaWarmGap(metric, labels.length) * 1.75 +
+      shortDeficit * 1.85 +
+      midDeficit * 0.95 -
+      metric.shortCount * 1.15 -
+      metric.recentWeight * 0.42 -
+      metric.tailStreak * 1.35 -
+      canadaExtremeCold(metric, labels.length) * 1.7;
+    if (ctx.last === label) scores[label] -= 1.25 + ctx.lastStreak * 0.35;
+    if (ctx.altRatio >= 0.62 && ctx.last && label !== ctx.last) scores[label] += 1.15;
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro3(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 12, {
-    hotShort: 2.05,
-    hotMid: 0.95,
-    hotLong: 0.35,
-    recency: 1.05,
-    gap: -0.14,
-    warmGap: 0.05,
-    deficitShort: 0.1,
-    deficitMid: 0.1,
-    transition1: 0.95,
-    transition2: 0.65,
-    trendFollow: 1.7,
-    altSwitch: 0.25,
-    overheat: 0.8,
-    extremeCold: 0.9,
-    dominanceFollow: 1.3,
-    hotPenalty: 0.3,
-    sameTail: 1.2,
-  }, (ctx, scores) => {
-    if (ctx.last && ctx.lastStreak >= 4) scores[ctx.last] = (scores[ctx.last] ?? 0) - 1.8;
-  });
+  const ctx = buildCanadaCtx(session, labels, 10);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  const dominant = getCanadaDominantLabel(ctx);
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    scores[label] =
+      metric.tailStreak * 1.95 +
+      metric.shortCount * 1.25 +
+      metric.recentWeight * 0.72 +
+      metric.transition1 * 0.55;
+    if (ctx.last === label) scores[label] += 1.6 + ctx.lastStreak * 0.5;
+    if (ctx.altRatio >= 0.68 && ctx.last === label) scores[label] -= 2.4;
+    if (dominant === label && ctx.dominance >= 0.6) scores[label] += 1.1;
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro4(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 10, {
-    hotShort: -0.55,
-    hotMid: -0.05,
-    hotLong: 0.1,
-    recency: -0.05,
-    gap: 0.25,
-    warmGap: 1.1,
-    deficitShort: 1.85,
-    deficitMid: 0.8,
-    transition1: 0.25,
-    transition2: 0.1,
-    trendFollow: 0.05,
-    altSwitch: 1.55,
-    overheat: 2.25,
-    extremeCold: 1.55,
-    dominanceFollow: -0.1,
-    hotPenalty: 1.45,
-    sameTail: -0.35,
-  }, (ctx, scores) => {
-    if (ctx.last && ctx.lastStreak >= 3) scores[ctx.last] = (scores[ctx.last] ?? 0) - 2.2;
-  });
+  const ctx = buildCanadaCtx(session, labels, 10);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  const dominant = getCanadaDominantLabel(ctx);
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    const shortDeficit = Math.max(0, ctx.expectedShort - metric.shortCount);
+    const midDeficit = Math.max(0, ctx.expectedMid - metric.midCount);
+    scores[label] =
+      canadaWarmGap(metric, labels.length) * 1.25 +
+      shortDeficit * 1.35 +
+      midDeficit * 0.9 +
+      metric.gap * 0.25 -
+      metric.tailStreak * 1.65 -
+      metric.shortCount * 0.9 -
+      metric.transition1 * 0.2;
+    if (ctx.last === label) scores[label] -= 1.8 + Math.max(0, ctx.lastStreak - 1) * 0.7;
+    if (ctx.lastStreak >= 3 && ctx.last && label !== ctx.last) scores[label] += 0.9;
+    if (dominant === label && ctx.dominance >= 0.58) scores[label] -= 1.25;
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro5(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 16, {
-    hotShort: 0.7,
-    hotMid: 0.9,
-    hotLong: 0.35,
-    recency: 0.5,
-    gap: 0.05,
-    warmGap: 0.3,
-    deficitShort: 0.25,
-    deficitMid: 0.2,
-    transition1: 1.7,
-    transition2: 2.25,
-    trendFollow: 0.8,
-    altSwitch: 0.55,
-    overheat: 1.0,
-    extremeCold: 0.9,
-    dominanceFollow: 0.55,
-    hotPenalty: 0.55,
-    sameTail: 0.25,
-  });
+  const ctx = buildCanadaCtx(session, labels, 18);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  const maxTransition2 = Math.max(...labels.map(label => ctx.metrics[label]!.transition2), 0);
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    scores[label] =
+      metric.transition2 * 2.7 +
+      metric.transition1 * 1.45 +
+      metric.recentWeight * 0.3 +
+      metric.midCount * 0.25;
+    if (ctx.last === label && ctx.lastStreak >= 2) scores[label] += 0.7;
+    if (maxTransition2 <= 0.2) scores[label] += metric.shortCount * 0.85 + metric.recentWeight * 0.35;
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro6(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 16, {
-    hotShort: 0.1,
-    hotMid: 0.75,
-    hotLong: 0.45,
-    recency: 0.25,
-    gap: 0.28,
-    warmGap: 1.55,
-    deficitShort: 0.65,
-    deficitMid: 1.1,
-    transition1: 0.4,
-    transition2: 0.15,
-    trendFollow: 0.2,
-    altSwitch: 0.95,
-    overheat: 1.15,
-    extremeCold: 2.3,
-    dominanceFollow: 0.1,
-    hotPenalty: 0.9,
-    sameTail: 0.1,
-  });
+  const ctx = buildCanadaCtx(session, labels, 18);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  const pairLeader = [...labels].sort((a, b) => ctx.metrics[b]!.transition2 - ctx.metrics[a]!.transition2)[0] ?? null;
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    const shortDeficit = Math.max(0, ctx.expectedShort - metric.shortCount);
+    scores[label] =
+      canadaWarmGap(metric, labels.length) * 1.15 +
+      shortDeficit * 0.95 +
+      metric.gap * 0.18 -
+      metric.transition2 * 2.2 -
+      metric.transition1 * 1.1 -
+      metric.recentWeight * 0.25;
+    if (pairLeader === label) scores[label] -= 1.35;
+    if (ctx.altRatio >= 0.6 && ctx.last && label !== ctx.last) scores[label] += 0.75;
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro7(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 16, {
-    hotShort: 0.8,
-    hotMid: 0.7,
-    hotLong: 0.3,
-    recency: 0.45,
-    gap: 0.04,
-    warmGap: 0.35,
-    deficitShort: 0.35,
-    deficitMid: 0.25,
-    transition1: 1.15,
-    transition2: 1.55,
-    trendFollow: 0.95,
-    altSwitch: 0.75,
-    overheat: 1.0,
-    extremeCold: 1.0,
-    dominanceFollow: 0.5,
-    hotPenalty: 0.45,
-    sameTail: 0.3,
-  }, (ctx, scores) => {
-    const trending = ctx.altRatio <= 0.4 || ctx.lastStreak >= 2 || ctx.dominance >= 0.58;
-    if (ctx.last) {
-      if (trending) scores[ctx.last] = (scores[ctx.last] ?? 0) + 1.3;
-      else scores[ctx.last] = (scores[ctx.last] ?? 0) - 1.2;
+  const ctx = buildCanadaCtx(session, labels, 12);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    if (ctx.altRatio >= 0.62) {
+      scores[label] =
+        (ctx.last && label !== ctx.last ? 2.2 : -2.1) +
+        metric.transition2 * 1.2 +
+        metric.transition1 * 0.8 +
+        canadaWarmGap(metric, labels.length) * 0.7;
+    } else {
+      scores[label] =
+        metric.transition2 * 1.1 +
+        metric.transition1 * 0.9 +
+        metric.shortCount * 0.4 +
+        metric.recentWeight * 0.25;
+      if (ctx.last === label && ctx.altRatio <= 0.4) scores[label] += 0.8;
     }
-  });
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro8(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 14, {
-    hotShort: 0.35,
-    hotMid: 0.45,
-    hotLong: 0.25,
-    recency: 0.25,
-    gap: 0.12,
-    warmGap: 0.95,
-    deficitShort: 0.95,
-    deficitMid: 0.7,
-    transition1: 0.6,
-    transition2: 0.55,
-    trendFollow: 0.45,
-    altSwitch: 1.65,
-    overheat: 1.85,
-    extremeCold: 1.15,
-    dominanceFollow: 0.15,
-    hotPenalty: 0.85,
-    sameTail: 0.1,
-  }, (ctx, scores) => {
-    if (ctx.altRatio >= 0.7 && ctx.last) {
-      scores[ctx.last] = (scores[ctx.last] ?? 0) - 2;
-    }
-  });
+  const ctx = buildCanadaCtx(session, labels, 20);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  const dominant = getCanadaDominantLabel(ctx);
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    scores[label] =
+      metric.longCount * 1.15 +
+      metric.midCount * 0.95 +
+      metric.recentWeight * 0.42 +
+      metric.transition1 * 0.35;
+    if (dominant === label) scores[label] += 2.2;
+    if (ctx.altRatio <= 0.4 && ctx.last === label) scores[label] += 1.1;
+    if (canadaExtremeCold(metric, labels.length) > 0) scores[label] -= 1.3;
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro9(session: TgSession, labels: string[]): string | null {
-  return pickCanadaByWeights(session, labels, 18, {
-    hotShort: 0.25,
-    hotMid: 0.7,
-    hotLong: 0.55,
-    recency: 0.35,
-    gap: 0.08,
-    warmGap: 1.1,
-    deficitShort: 1.15,
-    deficitMid: 1.25,
-    transition1: 0.75,
-    transition2: 0.45,
-    trendFollow: 0.55,
-    altSwitch: 0.9,
-    overheat: 1.4,
-    extremeCold: 2.1,
-    dominanceFollow: 0.2,
-    hotPenalty: 0.9,
-    sameTail: 0.2,
-  }, (ctx, scores) => {
-    const overlyHot = ctx.labels.filter(label => ctx.metrics[label]!.shortCount >= Math.ceil(ctx.expectedShort) + 2);
-    for (const label of overlyHot) scores[label] = (scores[label] ?? 0) - 1.1;
-  });
+  const ctx = buildCanadaCtx(session, labels, 20);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    const shortDeficit = Math.max(0, ctx.expectedShort - metric.shortCount);
+    const midDeficit = Math.max(0, ctx.expectedMid - metric.midCount);
+    scores[label] =
+      canadaWarmGap(metric, labels.length) * 1.95 +
+      shortDeficit * 1.45 +
+      midDeficit * 1.2 +
+      metric.gap * 0.12 +
+      metric.longCount * 0.18 -
+      canadaExtremeCold(metric, labels.length) * 2.55 -
+      metric.shortCount * 0.65 -
+      metric.tailStreak * 0.4;
+    if (ctx.last === label) scores[label] -= 0.55;
+    if (metric.gap >= 3 && metric.gap <= Math.max(5, labels.length + 1)) scores[label] += 0.85;
+  }
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function canadaPro10(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 18);
-  if (!mapped.length) return labels[0] ?? null;
-  const ctx = buildCanadaMarketContext(labels, mapped);
-  const scores = scoreCanadaLabels(ctx, {
-    hotShort: 0.9,
-    hotMid: 0.75,
-    hotLong: 0.35,
-    recency: 0.45,
-    gap: 0.1,
-    warmGap: 0.65,
-    deficitShort: 0.7,
-    deficitMid: 0.55,
-    transition1: 1.0,
-    transition2: 0.95,
-    trendFollow: 0.9,
-    altSwitch: 0.85,
-    overheat: 1.2,
-    extremeCold: 1.2,
-    dominanceFollow: 0.55,
-    hotPenalty: 0.75,
-    sameTail: 0.35,
-  });
+  const ctx = buildCanadaCtx(session, labels, 20);
+  if (!ctx) return labels[0] ?? null;
+  const scores = createCanadaScores(labels);
 
-  const votes: Array<{ label: string | null; weight: number }> = [
-    { label: canadaPro1(session, labels), weight: ctx.altRatio <= 0.4 ? 1.35 : 0.75 },
-    { label: canadaPro2(session, labels), weight: ctx.altRatio >= 0.62 ? 1.25 : 0.85 },
-    { label: canadaPro3(session, labels), weight: ctx.lastStreak >= 2 ? 1.25 : 0.85 },
-    { label: canadaPro4(session, labels), weight: ctx.lastStreak >= 3 ? 1.2 : 0.8 },
-    { label: canadaPro5(session, labels), weight: 1.1 },
-    { label: canadaPro6(session, labels), weight: 0.95 },
-    { label: canadaPro7(session, labels), weight: 1.15 },
-    { label: canadaPro8(session, labels), weight: ctx.altRatio >= 0.7 ? 1.25 : 0.9 },
-    { label: canadaPro9(session, labels), weight: 1.0 },
-  ];
+  const regimeVotes: Array<{ label: string | null; weight: number }> =
+    ctx.altRatio >= 0.68
+      ? [
+          { label: canadaPro2(session, labels), weight: 1.35 },
+          { label: canadaPro4(session, labels), weight: 1.25 },
+          { label: canadaPro7(session, labels), weight: 1.55 },
+          { label: canadaPro9(session, labels), weight: 1.2 },
+        ]
+      : (ctx.lastStreak >= 3 || ctx.dominance >= 0.6)
+        ? [
+            { label: canadaPro1(session, labels), weight: 1.35 },
+            { label: canadaPro3(session, labels), weight: 1.45 },
+            { label: canadaPro8(session, labels), weight: 1.25 },
+            { label: canadaPro5(session, labels), weight: 0.95 },
+          ]
+        : [
+            { label: canadaPro5(session, labels), weight: 1.35 },
+            { label: canadaPro6(session, labels), weight: 1.2 },
+            { label: canadaPro7(session, labels), weight: 1.05 },
+            { label: canadaPro9(session, labels), weight: 1.15 },
+            { label: canadaPro1(session, labels), weight: 0.9 },
+          ];
 
-  for (const vote of votes) {
+  for (const label of labels) {
+    const metric = ctx.metrics[label]!;
+    scores[label] =
+      metric.transition2 * 0.95 +
+      metric.transition1 * 0.65 +
+      metric.recentWeight * 0.24 +
+      metric.shortCount * 0.18 +
+      canadaWarmGap(metric, labels.length) * 0.35 -
+      canadaExtremeCold(metric, labels.length) * 0.8;
+  }
+
+  for (const vote of regimeVotes) {
     if (!vote.label) continue;
     scores[vote.label] = (scores[vote.label] ?? 0) + vote.weight;
   }
 
-  return selectCanadaLabel(ctx, scores, session.cfg.killGroupMode);
+  return chooseCanadaByScores(session, ctx, scores);
 }
 
 function runCanadaProAlgo(session: TgSession, labels: string[], variant: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10): string | null {
