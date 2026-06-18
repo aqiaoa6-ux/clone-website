@@ -1634,17 +1634,17 @@ function analyzeStructuredSignal(axis: StructuredBetAxis, family: StructuredBetF
     pick = oppositeStructuredAttr(last, family);
     tag = "震荡";
     strength = 5 + altRatio * 4 + (last !== prev ? 1.2 : 0);
-    confidence = clampConfidence(60 + altRatio * 35 + (last !== prev ? 3 : 0), 60, 93);
+    confidence = clampConfidence(52 + altRatio * 18 + (last !== prev ? 2 : 0), 52, 76);
   } else if (streak >= 2 || dominance >= 0.62) {
     pick = last;
     tag = "顺势";
     strength = 4.2 + streak * 1.8 + dominance * 3.2;
-    confidence = clampConfidence(58 + streak * 8 + dominance * 20, 58, 95);
+    confidence = clampConfidence(51 + streak * 4.5 + dominance * 12, 51, 82);
   } else {
     pick = oppositeStructuredAttr(dominant, family);
     tag = "逆势";
     strength = 3.5 + (1 - dominance) * 4 + Math.max(0, warmGap) * 0.35;
-    confidence = clampConfidence(56 + (1 - dominance) * 28 + Math.max(0, warmGap) * 2.5, 56, 88);
+    confidence = clampConfidence(50 + (1 - dominance) * 16 + Math.max(0, warmGap) * 1.2, 50, 78);
   }
 
   return {
@@ -4054,16 +4054,22 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   // Compose message
   // Dual group: "大单 100  小双 100  0/chase"
   // Normal:     "0/chase  大 100"
+  const structuredLabels = structuredItems.length > 0 ? session.lastStructuredBetLabels : undefined;
   const betParts: string[] = dualItems
     ? dualItems.map(opt => `${opt} ${mainAmount}`)
     : structuredItems.length > 0
       ? structuredItems.map(opt => `${opt} ${mainAmount}`)
       : [`${direction} ${mainAmount}`];
-  const parts: string[] = [
-    ...chaseEntries.map(c => `${c.num}/${chaseEffectiveAmount(session, String(c.num), c.amount)}`),
-    ...betParts,
-  ];
-  const message = parts.join("  ");
+  const structuredLines = structuredItems.length > 0
+    ? structuredItems.map(opt => {
+      const label = structuredLabels?.find(item => item.bet === opt);
+      return `${opt} ${mainAmount}${label ? ` ${label.tag} ${label.confidence}%` : ""}`;
+    })
+    : [];
+  const chaseParts = chaseEntries.map(c => `${c.num}/${chaseEffectiveAmount(session, String(c.num), c.amount)}`);
+  const message = structuredLines.length > 0
+    ? [...structuredLines, ...chaseParts].join("\n")
+    : [...chaseParts, ...betParts].join("  ");
 
   const now = Date.now();
   let succeeded = false;
@@ -4081,7 +4087,6 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
 
   const algoId = session.lastAlgoUsed;
   const rawAlgoDir = session.lastRawAlgoDir ?? undefined;
-  const structuredLabels = structuredItems.length > 0 ? session.lastStructuredBetLabels : undefined;
   if (dualItems) {
     // 双组模式：合并为一条记录，betContent = "大单+小双"
     const dualRec: BetRecord = {
