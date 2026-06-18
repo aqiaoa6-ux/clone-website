@@ -52,22 +52,26 @@ export default function LoginPage() {
             <div className="relative w-16 h-16">
               <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full drop-shadow-lg">
                 <defs>
-                  <radialGradient id="potatoBg" cx="50%" cy="40%" r="60%">
-                    <stop offset="0%" stopColor="#2b1f3d" />
-                    <stop offset="100%" stopColor="#0f0b18" />
+                  <radialGradient id="wealthBg" cx="50%" cy="40%" r="60%">
+                    <stop offset="0%" stopColor="#3A2A08" />
+                    <stop offset="100%" stopColor="#120E05" />
                   </radialGradient>
+                  <linearGradient id="coinGold" x1="20" y1="16" x2="44" y2="48">
+                    <stop offset="0%" stopColor="#FFE27A" />
+                    <stop offset="100%" stopColor="#D69B12" />
+                  </linearGradient>
                 </defs>
-                <circle cx="32" cy="32" r="30" fill="url(#potatoBg)" />
-                <ellipse cx="32" cy="36" rx="16" ry="19" fill="#C58A4B" />
-                <ellipse cx="27" cy="31" rx="2.2" ry="1.8" fill="#9C6A3C" />
-                <ellipse cx="37" cy="39" rx="1.8" ry="1.4" fill="#9C6A3C" />
-                <ellipse cx="31" cy="44" rx="1.6" ry="1.3" fill="#9C6A3C" />
-                <path d="M33 18C35 12 40 10 45 11C43 16 39 20 34 21L33 18Z" fill="#69C36D" />
-                <path d="M30 19C28 14 23 12 18 14C20 18 24 22 29 23L30 19Z" fill="#88D98F" />
+                <circle cx="32" cy="32" r="30" fill="url(#wealthBg)" />
+                <circle cx="32" cy="32" r="16" fill="url(#coinGold)" />
+                <circle cx="32" cy="32" r="13" stroke="#FFF3BF" strokeWidth="2" strokeOpacity="0.8" />
+                <path d="M32 22V42" stroke="#8A5A00" strokeWidth="3" strokeLinecap="round" />
+                <path d="M24 32H40" stroke="#8A5A00" strokeWidth="3" strokeLinecap="round" />
+                <path d="M18 17L24 11" stroke="#69C36D" strokeWidth="4" strokeLinecap="round" />
+                <path d="M24 12C28 12 31 14 32 18C28 18 25 17 22 15L24 12Z" fill="#7BD67E" />
               </svg>
             </div>
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-wide">土豆飞投</h1>
+          <h1 className="text-2xl font-bold text-white tracking-wide">发财-飞投</h1>
           <p className="text-slate-400 text-sm mt-1">智能投注管理平台</p>
         </div>
 

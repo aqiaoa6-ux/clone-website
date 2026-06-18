@@ -5,7 +5,7 @@ export const shopConfig = pgTable("shop_config", {
   kkpayId: text("kkpay_id").notNull().default(""),
   kkpaySecret: text("kkpay_secret").notNull().default(""),
   domain: text("domain").notNull().default(""),
-  productName: text("product_name").notNull().default("土豆飞投-卡密"),
+  productName: text("product_name").notNull().default("发财-飞投-卡密"),
   priceDailyUsdt: text("price_daily_usdt").notNull().default("1"),
   priceWeeklyUsdt: text("price_weekly_usdt").notNull().default("5"),
   priceMonthlyUsdt: text("price_monthly_usdt").notNull().default("15"),
