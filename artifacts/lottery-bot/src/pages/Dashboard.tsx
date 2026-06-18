@@ -26,6 +26,16 @@ const ALGO_LABELS: Record<string, string> = {
   ks_smart:         "快三-均值回归",
   ai_trend:         "加拿大-算法1（旧版）",
   steady_ai:        "加拿大-算法2（旧版）",
+  canada_pro_1:     "加拿大-算法1",
+  canada_pro_2:     "加拿大-算法2",
+  canada_pro_3:     "加拿大-算法3",
+  canada_pro_4:     "加拿大-算法4",
+  canada_pro_5:     "加拿大-算法5",
+  canada_pro_6:     "加拿大-算法6",
+  canada_pro_7:     "加拿大-算法7",
+  canada_pro_8:     "加拿大-算法8",
+  canada_pro_9:     "加拿大-算法9",
+  canada_pro_10:    "加拿大-算法10",
   abc_trend:        "加拿大-ABC走势",
   abc_digit_ai:     "加拿大-ABC三位数字AI",
   abc_digit_cycle_ai:"加拿大-ABC轮打AI",
@@ -39,6 +49,12 @@ const ALGO_LABELS: Record<string, string> = {
   hash_smart_plus:  "哈希-算法6 🧠 三算法融合",
   canada_smart_plus:"加拿大-算法3 🧠 融合杀组",
 };
+
+const LEGACY_CANADA_ALGOS = new Set(["ai_trend", "steady_ai", "canada_smart_plus", "canada_kill", "canada_kill_plus"]);
+
+const VISIBLE_ALGO_LABELS = Object.fromEntries(
+  Object.entries(ALGO_LABELS).filter(([algoId]) => !LEGACY_CANADA_ALGOS.has(algoId)),
+);
 
 const ALGO_DESC: Record<string, string> = {
   signal_follow:    "通用跟信号 = 跟随群内信号方向（带简单反转保护）",
@@ -63,10 +79,14 @@ const ALGO_DESC: Record<string, string> = {
   canada_smart_plus:"加拿大3 🧠 = 融合杀组（冷门原版 + 近热V2 按形态选择，偏稳健）",
 };
 
-const AVAILABLE_ALGOS = new Set(Object.keys(ALGO_LABELS));
+const AVAILABLE_ALGOS = new Set(Object.keys(VISIBLE_ALGO_LABELS));
 
-function normalizeAlgos(a: string[]) {
-  return a.filter(x => AVAILABLE_ALGOS.has(x));
+function normalizeAlgos(a: string[], gameMode: "lottery" | "kuaisan" | "hash" = "lottery") {
+  const filtered = a.filter(x => AVAILABLE_ALGOS.has(x));
+  if (filtered.length > 0) return filtered;
+  if (gameMode === "hash") return ["hash_follow"];
+  if (gameMode === "kuaisan") return ["ks_follow"];
+  return ["abc_trend"];
 }
 
 function normalizeChaseNumbers(entries: Array<{ num: string; amount: string }>, chaseDoubleOnLoss: boolean) {
@@ -323,7 +343,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
   const [maxLoss, setMaxLoss] = useState(String(status.maxConsecutiveLosses ?? 5));
   const [cooldown, setCooldown] = useState(String(status.cooldownSeconds ?? 0));
   const [algoFlip, setAlgoFlip] = useState(String((status as unknown as { algoFlipOnLoss?: number }).algoFlipOnLoss ?? 4));
-  const [algos, setAlgos] = useState<string[]>(normalizeAlgos(status.algorithms ?? ["signal_follow"]));
+  const [algos, setAlgos] = useState<string[]>(normalizeAlgos(status.algorithms ?? [], (status.gameMode ?? "lottery") as "lottery" | "kuaisan" | "hash"));
   const [betOpts, setBetOpts] = useState<string[]>(status.betOptions ?? ["big", "small"]);
   const [dualGroupMode, setDualGroupMode] = useState<boolean>(!!(status as unknown as { dualGroupMode?: boolean }).dualGroupMode);
   const [killGroupMode, setKillGroupMode] = useState<boolean>(!!(status as unknown as { killGroupMode?: boolean }).killGroupMode);
@@ -377,7 +397,7 @@ function SettingsDrawer({ status, onClose, onSave }: {
         betAmount: Number(betAmount), strategy, betMultiplier: Number(multiplier),
         stopLoss: Number(stopLoss), targetProfit: Number(targetProfit),
         maxConsecutiveLosses: Number(maxLoss), cooldownSeconds: Number(cooldown),
-        algorithms: normalizeAlgos(algos), betOptions: betOpts, dualGroupMode, killGroupMode,
+        algorithms: normalizeAlgos(algos, gameMode), betOptions: betOpts, dualGroupMode, killGroupMode,
         amountLevels: levels.map(Number),
         stepBackOnWin,
         odds: Number(oddsBigSmall),
@@ -554,17 +574,10 @@ function SettingsDrawer({ status, onClose, onSave }: {
             <div>
               <label className={labelCls}>算法选择</label>
               <div className="flex flex-wrap gap-2">
-                {Object.entries(ALGO_LABELS).map(([k, v]) => (
+                {Object.entries(VISIBLE_ALGO_LABELS).map(([k, v]) => (
                   <span key={k} className={tagCls(algos.includes(k))} onClick={() => toggleAlgo(k)}>{v}</span>
                 ))}
               </div>
-              {algos.length > 0 && (
-                <div className="mt-2 space-y-1">
-                  {algos.filter(k => ALGO_DESC[k]).map(k => (
-                    <div key={k} className="text-[11px] text-slate-400 leading-snug">{ALGO_DESC[k]}</div>
-                  ))}
-                </div>
-              )}
             </div>
 
             {((gameMode === "lottery" && (algos.includes("abc_digit_ai") || algos.includes("abc_digit_cycle_ai")))

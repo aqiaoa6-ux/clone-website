@@ -205,6 +205,8 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
   | "hash_abc_digit_ai" | "hash_abc_digit_cycle_ai"
   | "private_combo_ai"
+  | "canada_pro_1" | "canada_pro_2" | "canada_pro_3" | "canada_pro_4" | "canada_pro_5"
+  | "canada_pro_6" | "canada_pro_7" | "canada_pro_8" | "canada_pro_9" | "canada_pro_10"
   | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend" | "abc_digit_ai" | "abc_digit_cycle_ai";
 
 interface BetCfg {
@@ -243,6 +245,29 @@ interface BetCfg {
   abcBCount: number;
   abcCCount: number;
   abcDigitOdds: number;
+}
+
+const LEGACY_CANADA_ALGOS = new Set<AlgorithmId>([
+  "ai_trend",
+  "steady_ai",
+  "canada_kill",
+  "canada_kill_plus",
+  "canada_smart_plus",
+]);
+
+function sanitizeAlgorithms(algos: AlgorithmId[] | undefined, gameMode: BetCfg["gameMode"]): AlgorithmId[] {
+  const filtered = (algos ?? []).filter(algo => !LEGACY_CANADA_ALGOS.has(algo));
+  if (filtered.length > 0) return filtered;
+  if (gameMode === "hash") return ["hash_follow"];
+  if (gameMode === "kuaisan") return ["ks_follow"];
+  return ["abc_trend"];
+}
+
+function sanitizeCfg(cfg: BetCfg): BetCfg {
+  return {
+    ...cfg,
+    algorithms: sanitizeAlgorithms(cfg.algorithms, cfg.gameMode),
+  };
 }
 
 interface GroupInfo {
@@ -440,7 +465,7 @@ const DEFAULT_CFG: BetCfg = {
   amountLevels: [100, 200, 400, 800, 1600, 3200],
   stepBackOnWin: true,
   betOptions: ["big", "small"],
-  algorithms: ["ai_trend"],
+  algorithms: ["abc_trend"],
   algoFlipOnLoss: 2,
   odds: 1.98,
   oddsBigOdd: 1.98,
@@ -1137,7 +1162,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     client, stringSession,
     phone: data.phone ?? "",
     groups: connected ? await fetchGroups(client) : [],
-    cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG },
+    cfg: sanitizeCfg(data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG }),
     betLog: [], sseClients: new Set(),
     messageHandler: null, messageHandlerBuilder: null,
     kkpayHandler: null, kkpayHandlerBuilder: null,
@@ -1777,6 +1802,158 @@ function antiStreak(session: TgSession): string | null {
     }
   }
   return freqPick(mapped, labels, false);
+}
+
+function buildMappedLabelHistory(session: TgSession, labels: string[], limit = 20): string[] {
+  return buildHistory(session)
+    .map(r => mapR3ToEnabled(r, labels))
+    .filter((x): x is string => x !== null)
+    .slice(-limit);
+}
+
+function getLastSeenGap(mapped: string[], label: string): number {
+  const idx = [...mapped].reverse().findIndex(item => item === label);
+  return idx === -1 ? mapped.length + 3 : idx;
+}
+
+function pickByScore(labels: string[], scores: Record<string, number>, mapped: string[], descending: boolean): string | null {
+  return [...labels].sort((a, b) => {
+    const diff = descending ? (scores[b] ?? -999) - (scores[a] ?? -999) : (scores[a] ?? 999) - (scores[b] ?? 999);
+    if (diff !== 0) return diff;
+    const gapDiff = getLastSeenGap(mapped, b) - getLastSeenGap(mapped, a);
+    if (gapDiff !== 0) return gapDiff;
+    return a.localeCompare(b, "zh-CN");
+  })[0] ?? null;
+}
+
+function pickWeightedLabel(labels: string[], mapped: string[], favorCold = false): string | null {
+  if (!mapped.length) return labels[0] ?? null;
+  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
+  mapped.forEach((label, index) => {
+    scores[label] = (scores[label] ?? 0) + (1 + index * 0.28);
+  });
+  return pickByScore(labels, scores, mapped, !favorCold);
+}
+
+function pickMinorityLabel(labels: string[], mapped: string[]): string | null {
+  if (!mapped.length) return labels[0] ?? null;
+  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
+  for (const label of mapped) scores[label] = (scores[label] ?? 0) + 1;
+  return pickByScore(labels, scores, mapped, false);
+}
+
+function pickAlternativeLabel(labels: string[], current: string, mapped: string[]): string | null {
+  const others = labels.filter(label => label !== current);
+  if (!others.length) return current;
+  return [...others].sort((a, b) => {
+    const gapDiff = getLastSeenGap(mapped, b) - getLastSeenGap(mapped, a);
+    if (gapDiff !== 0) return gapDiff;
+    return a.localeCompare(b, "zh-CN");
+  })[0] ?? current;
+}
+
+function pickPairTransition(labels: string[], mapped: string[]): string | null {
+  if (mapped.length < 4) return pickWeightedLabel(labels, mapped);
+  const a = mapped[mapped.length - 2]!;
+  const b = mapped[mapped.length - 1]!;
+  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
+  for (let i = 0; i <= mapped.length - 3; i++) {
+    if (mapped[i] === a && mapped[i + 1] === b) {
+      const next = mapped[i + 2]!;
+      scores[next] = (scores[next] ?? 0) + 1 + i * 0.12;
+    }
+  }
+  return Object.values(scores).some(score => score > 0)
+    ? pickByScore(labels, scores, mapped, true)
+    : pickWeightedLabel(labels, mapped);
+}
+
+function canadaPro1(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 4);
+  if (!mapped.length) return labels[0] ?? null;
+  const recent = mapped.slice(-3);
+  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
+  for (const label of recent) scores[label] = (scores[label] ?? 0) + 1;
+  return pickByScore(labels, scores, mapped, true) ?? recent[recent.length - 1] ?? null;
+}
+
+function canadaPro2(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 6);
+  return pickMinorityLabel(labels, mapped);
+}
+
+function canadaPro3(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 8);
+  if (!mapped.length) return labels[0] ?? null;
+  const last = mapped[mapped.length - 1]!;
+  const streak = abcStreakTail(mapped, item => item === last);
+  if (streak >= 2) return last;
+  return pickWeightedLabel(labels, mapped);
+}
+
+function canadaPro4(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 8);
+  if (!mapped.length) return labels[0] ?? null;
+  const last = mapped[mapped.length - 1]!;
+  const streak = abcStreakTail(mapped, item => item === last);
+  if (streak >= 3) return pickAlternativeLabel(labels, last, mapped);
+  return pickMinorityLabel(labels, mapped.slice(-4));
+}
+
+function canadaPro5(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 10);
+  return pickWeightedLabel(labels, mapped);
+}
+
+function canadaPro6(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 12);
+  return pickWeightedLabel(labels, mapped, true);
+}
+
+function canadaPro7(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 14);
+  return pickPairTransition(labels, mapped);
+}
+
+function canadaPro8(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 8);
+  if (!mapped.length) return labels[0] ?? null;
+  let alternations = 0;
+  for (let i = 1; i < mapped.length; i++) if (mapped[i] !== mapped[i - 1]) alternations++;
+  const ratio = mapped.length > 1 ? alternations / (mapped.length - 1) : 0;
+  const last = mapped[mapped.length - 1]!;
+  if (ratio >= 0.66) return pickAlternativeLabel(labels, last, mapped);
+  return canadaPro1(session, labels);
+}
+
+function canadaPro9(session: TgSession, labels: string[]): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, 16);
+  if (!mapped.length) return labels[0] ?? null;
+  const last = mapped[mapped.length - 1]!;
+  const streak = abcStreakTail(mapped, item => item === last);
+  if (streak >= 2) return pickAlternativeLabel(labels, last, mapped);
+  return [...labels].sort((a, b) => {
+    const diff = getLastSeenGap(mapped, b) - getLastSeenGap(mapped, a);
+    if (diff !== 0) return diff;
+    return a.localeCompare(b, "zh-CN");
+  })[0] ?? null;
+}
+
+function canadaPro10(session: TgSession, labels: string[]): string | null {
+  const votes = [
+    canadaPro1(session, labels),
+    canadaPro3(session, labels),
+    canadaPro5(session, labels),
+    canadaPro7(session, labels),
+    canadaPro8(session, labels),
+  ].filter((value): value is string => !!value);
+  if (!votes.length) return labels[0] ?? null;
+  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
+  votes.forEach((label, index) => {
+    scores[label] = (scores[label] ?? 0) + (index === votes.length - 1 ? 1.2 : 1);
+  });
+  const mapped = buildMappedLabelHistory(session, labels, 12);
+  return pickByScore(labels, scores, mapped, true);
 }
 
 const ABC_RAW_LABELS = ["大单", "大双", "小单", "小双"] as const;
@@ -2721,6 +2898,16 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "anti_streak") return antiStreak(session);
   if (algoId === "streak_follow") return streakFollow(session);
   if (algoId === "abc_trend") return decideAbcTrend(session);
+  if (algoId === "canada_pro_1") return canadaPro1(session, labels);
+  if (algoId === "canada_pro_2") return canadaPro2(session, labels);
+  if (algoId === "canada_pro_3") return canadaPro3(session, labels);
+  if (algoId === "canada_pro_4") return canadaPro4(session, labels);
+  if (algoId === "canada_pro_5") return canadaPro5(session, labels);
+  if (algoId === "canada_pro_6") return canadaPro6(session, labels);
+  if (algoId === "canada_pro_7") return canadaPro7(session, labels);
+  if (algoId === "canada_pro_8") return canadaPro8(session, labels);
+  if (algoId === "canada_pro_9") return canadaPro9(session, labels);
+  if (algoId === "canada_pro_10") return canadaPro10(session, labels);
   if (algoId === "signal_follow" || algoId === "signal_reverse") {
     const p = parseBetLabel(signalText);
     if (!p) return null;
@@ -4370,7 +4557,7 @@ async function runKuaisanAutoBet(session: TgSession): Promise<void> {
   // signal_follow/signal_reverse need a live signal text; they always return null for kuaisan.
   // Fall back to ks_bb for those algos only.
   const SIGNAL_ALGOS: AlgorithmId[] = ["signal_follow", "signal_reverse"];
-  const rawAlgoId = (session.cfg.algorithms[session.algIndex % Math.max(session.cfg.algorithms.length, 1)] ?? "ai_trend") as AlgorithmId;
+  const rawAlgoId = (session.cfg.algorithms[session.algIndex % Math.max(session.cfg.algorithms.length, 1)] ?? "abc_trend") as AlgorithmId;
   const algoId: AlgorithmId = SIGNAL_ALGOS.includes(rawAlgoId) ? "ks_bb" : rawAlgoId;
   // Override betOptions so all internal algo functions use kuaisan bet labels
   const ksSession: TgSession = { ...session, cfg: { ...session.cfg, betOptions: (session.cfg.kuaisanBetOptions ?? ["big", "small"]) as BetOption[] } };
@@ -5663,7 +5850,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       phoneCodeHash: result.phoneCodeHash,
       groups: [],
       // 保留原有配置和群组，避免重新登录时丢失设置
-      cfg: existing?.cfg ? { ...existing.cfg } : { ...DEFAULT_CFG },
+      cfg: sanitizeCfg(existing?.cfg ? { ...existing.cfg } : { ...DEFAULT_CFG }),
       watchGroupId: existing?.watchGroupId,
       betLog: [], sseClients: existing?.sseClients ?? new Set(),
       messageHandler: null, messageHandlerBuilder: null,
@@ -5862,6 +6049,7 @@ router.post("/tg/set-group", requireCard, (req, res) => {
 router.get("/tg/config", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session) { res.json({ cfg: DEFAULT_CFG }); return; }
+  session.cfg = sanitizeCfg(session.cfg);
   res.json({ cfg: session.cfg, consecutiveLosses: session.consecutiveLosses, sessionPnl: session.sessionPnl, currentBet: session.currentBet });
 });
 
@@ -5870,7 +6058,7 @@ router.post("/tg/config", requireCard, (req, res) => {
   if (!session) { res.json({ ok: true }); return; }
   const body = req.body as Partial<BetCfg> & { startLevel?: number };
   const prev = { ...session.cfg };
-  session.cfg = {
+  session.cfg = sanitizeCfg({
     autoBet: body.autoBet ?? prev.autoBet,
     betAmount: body.betAmount ?? prev.betAmount,
     strategy: body.strategy ?? prev.strategy,
@@ -5906,7 +6094,7 @@ router.post("/tg/config", requireCard, (req, res) => {
     abcBCount: clampAbcPickCount(body.abcBCount ?? prev.abcBCount, prev.abcBCount),
     abcCCount: clampAbcPickCount(body.abcCCount ?? prev.abcCCount, prev.abcCCount),
     abcDigitOdds: normalizeAbcDigitOdds(body.abcDigitOdds ?? prev.abcDigitOdds, prev.abcDigitOdds),
-  };
+  });
   session.cfg.chaseNumbers = normalizeChaseNumbers(session.cfg.chaseNumbers);
   if (body.chaseNumbers !== undefined || body.chaseAmountLevels !== undefined || body.chaseDoubleOnLoss !== undefined) {
     rebuildChaseLevels(session, body.chaseNumbers !== undefined);
@@ -6057,7 +6245,9 @@ function backtestAlgo(algoId: AlgorithmId, fullHistory: string[]): { wins: numbe
   return { wins, losses, canSimulate: true };
 }
 
-type CanadaSimAlgoId = "ai_trend" | "steady_ai" | "canada_smart_plus" | "canada_kill" | "canada_kill_plus";
+type CanadaSimAlgoId =
+  | "canada_pro_1" | "canada_pro_2" | "canada_pro_3" | "canada_pro_4" | "canada_pro_5"
+  | "canada_pro_6" | "canada_pro_7" | "canada_pro_8" | "canada_pro_9" | "canada_pro_10";
 
 interface CanadaSimRowAlgo {
   algoId: CanadaSimAlgoId;
@@ -6085,11 +6275,16 @@ interface CanadaSimSummary {
 }
 
 const CANADA_SIM_ALGOS: CanadaSimAlgoId[] = [
-  "ai_trend",
-  "steady_ai",
-  "canada_smart_plus",
-  "canada_kill",
-  "canada_kill_plus",
+  "canada_pro_1",
+  "canada_pro_2",
+  "canada_pro_3",
+  "canada_pro_4",
+  "canada_pro_5",
+  "canada_pro_6",
+  "canada_pro_7",
+  "canada_pro_8",
+  "canada_pro_9",
+  "canada_pro_10",
 ];
 
 function createCanadaSimSession(algoId: CanadaSimAlgoId, pastSlice: string[]): TgSession {
@@ -6112,30 +6307,13 @@ function createCanadaSimSession(algoId: CanadaSimAlgoId, pastSlice: string[]): T
 
 function simulateCanadaAlgoStep(algoId: CanadaSimAlgoId, pastSlice: string[], actual: KillGroupOption): { prediction: string | null; won: boolean | null; skipped: boolean } {
   const fakeSession = createCanadaSimSession(algoId, pastSlice);
-
-  if (algoId === "ai_trend" || algoId === "steady_ai") {
-    const prediction = runAlgo(fakeSession, algoId, ["大", "小"]);
-    if (!prediction) return { prediction: null, won: null, skipped: true };
-    return {
-      prediction,
-      won: (prediction === "大" && actual.startsWith("大")) || (prediction === "小" && actual.startsWith("小")),
-      skipped: false,
-    };
-  }
-
-  if (algoId === "canada_kill") {
-    const raw3 = pastSlice
-      .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
-      .slice(-3);
-    const isScatter = raw3.length === 3 && new Set(raw3).size === 3;
-    if (isScatter) return { prediction: "散点跳过", won: null, skipped: true };
-  }
-
-  const killed = algoId === "canada_smart_plus"
-    ? canadaSmartPlus(fakeSession)
-    : canadaDecideKillGroupV2(fakeSession);
-  const prediction = KILL_GROUP_ALL.filter(opt => opt !== killed).join("+");
-  return { prediction, won: actual !== killed, skipped: false };
+  const prediction = runAlgo(fakeSession, algoId, ["大", "小"]);
+  if (!prediction) return { prediction: null, won: null, skipped: true };
+  return {
+    prediction,
+    won: (prediction === "大" && actual.startsWith("大")) || (prediction === "小" && actual.startsWith("小")),
+    skipped: false,
+  };
 }
 
 function simulateCanadaHistoryRows(fullHistory: string[]): { rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[] } {
@@ -6260,8 +6438,9 @@ router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
 
 // 所有可回测算法（不依赖外部信号），任意登录用户可访问，无需持有卡密
 const ALL_SIMULATABLE_ALGOS: AlgorithmId[] = [
-  "adaptive_switch", "steady_ai", "ai_trend", "streak_follow",
-  "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend",
+  "adaptive_switch", "streak_follow", "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend",
+  "canada_pro_1", "canada_pro_2", "canada_pro_3", "canada_pro_4", "canada_pro_5",
+  "canada_pro_6", "canada_pro_7", "canada_pro_8", "canada_pro_9", "canada_pro_10",
 ];
 
 router.get("/tg/algo-rates", requireAuth, (req, res) => {

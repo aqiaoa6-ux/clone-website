@@ -80,14 +80,30 @@ function streakInfo(items: DrawItem[]): string {
   return count >= 2 ? `连${count}期${label}` : "";
 }
 
-const CANADA_SIM_ORDER = ["ai_trend", "steady_ai", "canada_smart_plus", "canada_kill", "canada_kill_plus"] as const;
+const CANADA_SIM_ORDER = [
+  "canada_pro_1",
+  "canada_pro_2",
+  "canada_pro_3",
+  "canada_pro_4",
+  "canada_pro_5",
+  "canada_pro_6",
+  "canada_pro_7",
+  "canada_pro_8",
+  "canada_pro_9",
+  "canada_pro_10",
+] as const;
 
 const CANADA_SIM_LABELS: Record<(typeof CANADA_SIM_ORDER)[number], string> = {
-  ai_trend: "算法1",
-  steady_ai: "算法2",
-  canada_smart_plus: "算法3",
-  canada_kill: "算法4",
-  canada_kill_plus: "算法5",
+  canada_pro_1: "算法1",
+  canada_pro_2: "算法2",
+  canada_pro_3: "算法3",
+  canada_pro_4: "算法4",
+  canada_pro_5: "算法5",
+  canada_pro_6: "算法6",
+  canada_pro_7: "算法7",
+  canada_pro_8: "算法8",
+  canada_pro_9: "算法9",
+  canada_pro_10: "算法10",
 };
 
 function fmtCurrentStreak(streak: number): string {
@@ -121,6 +137,26 @@ function SimCell({ entry }: { entry?: CanadaSimAlgoEntry }) {
       {entry.prediction && <span className="text-[10px] text-slate-600 whitespace-nowrap">{entry.prediction}</span>}
     </div>
   );
+}
+
+function getBestAlgoForRow(row: CanadaSimHistoryRow | undefined, summaryMap: Map<string, CanadaSimSummary>) {
+  if (!row) return null;
+  const winners = row.algos.filter(entry => entry.won === true && !entry.skipped);
+  if (winners.length === 0) return null;
+  return [...winners].sort((a, b) => {
+    const aStat = summaryMap.get(a.algoId);
+    const bStat = summaryMap.get(b.algoId);
+    const aRate = aStat?.winRate ? Number(aStat.winRate) : 0;
+    const bRate = bStat?.winRate ? Number(bStat.winRate) : 0;
+    if (bRate !== aRate) return bRate - aRate;
+    const aStreak = aStat?.currentStreak ?? 0;
+    const bStreak = bStat?.currentStreak ?? 0;
+    if (bStreak !== aStreak) return bStreak - aStreak;
+    const aMax = aStat?.maxWinStreak ?? 0;
+    const bMax = bStat?.maxWinStreak ?? 0;
+    if (bMax !== aMax) return bMax - aMax;
+    return a.algoId.localeCompare(b.algoId, "zh-CN");
+  })[0] ?? null;
 }
 
 // ─── Main page ────────────────────────────────────────────────────────────────
@@ -185,10 +221,10 @@ export default function TrendPage() {
         {simSummary.length > 0 && (
           <div className="bg-[#0f1220] rounded-2xl border border-[#1e2235] p-3">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-white text-sm font-semibold">加拿大算法1-5 模拟回测</h2>
+              <h2 className="text-white text-sm font-semibold">加拿大算法1-10 模拟回测</h2>
               <span className="text-[10px] text-slate-500">基于近期开奖历史逐期模拟</span>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+            <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-10 gap-2">
               {CANADA_SIM_ORDER.map(algoId => {
                 const stat = summaryMap.get(algoId);
                 return (
@@ -214,7 +250,7 @@ export default function TrendPage() {
         ) : (
           <div className="bg-[#0f1220] rounded-2xl overflow-hidden border border-[#1e2235]">
             <div className="overflow-x-auto">
-              <table className="w-full text-xs border-collapse" style={{ minWidth: 980 }}>
+              <table className="w-full text-xs border-collapse" style={{ minWidth: 1480 }}>
                 <thead>
                   <tr className="bg-[#131728] border-b border-[#1e2235]">
                     <th className="text-slate-400 font-medium px-2 py-2.5 text-center whitespace-nowrap">回合</th>
@@ -229,6 +265,7 @@ export default function TrendPage() {
                         {CANADA_SIM_LABELS[algoId]}
                       </th>
                     ))}
+                    <th className="text-amber-300 font-medium px-2 py-2.5 text-center whitespace-nowrap">本期最佳算法</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -241,6 +278,7 @@ export default function TrendPage() {
                     const actual = drawLabel(item);
                     const simRow = simRows[idx] && simRows[idx]!.actual === actual ? simRows[idx]! : simRows[idx];
                     const simMap = new Map((simRow?.algos ?? []).map(entry => [entry.algoId, entry]));
+                    const bestAlgo = getBestAlgoForRow(simRow, summaryMap);
                     return (
                       <tr
                         key={item.term}
@@ -284,6 +322,18 @@ export default function TrendPage() {
                             <SimCell entry={simMap.get(algoId)} />
                           </td>
                         ))}
+                        <td className="px-2 py-2 text-center">
+                          {bestAlgo ? (
+                            <div className="flex flex-col items-center gap-1">
+                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 whitespace-nowrap">
+                                {CANADA_SIM_LABELS[bestAlgo.algoId as keyof typeof CANADA_SIM_LABELS]}
+                              </span>
+                              {bestAlgo.prediction && <span className="text-[10px] text-amber-100/80 whitespace-nowrap">{bestAlgo.prediction}</span>}
+                            </div>
+                          ) : (
+                            <span className="text-[10px] text-slate-500">本期全未</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}
@@ -294,7 +344,7 @@ export default function TrendPage() {
         )}
 
         <p className="text-[10px] text-slate-600 text-center">
-          显示近 {display.length} 期 · 含加拿大算法1-5逐期模拟回测 · 每 30 秒自动刷新
+          显示近 {display.length} 期 · 含加拿大算法1-10逐期模拟回测 · 每 30 秒自动刷新
         </p>
       </div>
 
