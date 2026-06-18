@@ -1804,9 +1804,24 @@ function antiStreak(session: TgSession): string | null {
   return freqPick(mapped, labels, false);
 }
 
+function resolveCanadaProLabels(session: TgSession, labels: string[]): string[] {
+  if (session.cfg.killGroupMode) return [...KILL_GROUP_ALL];
+  if (session.cfg.dualGroupMode) return [ABC_GROUP_A, ABC_GROUP_B];
+  return labels;
+}
+
+function mapCanadaProHistoryLabel(label: string, labels: string[]): string | null {
+  if (labels.includes(ABC_GROUP_A) || labels.includes(ABC_GROUP_B)) {
+    if (label === "大单" || label === "小双") return ABC_GROUP_A;
+    if (label === "小单" || label === "大双") return ABC_GROUP_B;
+    return null;
+  }
+  return mapR3ToEnabled(label, labels);
+}
+
 function buildMappedLabelHistory(session: TgSession, labels: string[], limit = 20): string[] {
   return buildHistory(session)
-    .map(r => mapR3ToEnabled(r, labels))
+    .map(r => mapCanadaProHistoryLabel(r, labels))
     .filter((x): x is string => x !== null)
     .slice(-limit);
 }
@@ -1816,144 +1831,492 @@ function getLastSeenGap(mapped: string[], label: string): number {
   return idx === -1 ? mapped.length + 3 : idx;
 }
 
-function pickByScore(labels: string[], scores: Record<string, number>, mapped: string[], descending: boolean): string | null {
-  return [...labels].sort((a, b) => {
-    const diff = descending ? (scores[b] ?? -999) - (scores[a] ?? -999) : (scores[a] ?? 999) - (scores[b] ?? 999);
-    if (diff !== 0) return diff;
-    const gapDiff = getLastSeenGap(mapped, b) - getLastSeenGap(mapped, a);
+interface CanadaLabelMetric {
+  shortCount: number;
+  midCount: number;
+  longCount: number;
+  recentWeight: number;
+  gap: number;
+  transition1: number;
+  transition2: number;
+  tailStreak: number;
+}
+
+interface CanadaMarketContext {
+  labels: string[];
+  mapped: string[];
+  metrics: Record<string, CanadaLabelMetric>;
+  last: string | null;
+  prev: string | null;
+  lastStreak: number;
+  altRatio: number;
+  dominance: number;
+  expectedShort: number;
+  expectedMid: number;
+  expectedLong: number;
+}
+
+interface CanadaScoreWeights {
+  hotShort: number;
+  hotMid: number;
+  hotLong: number;
+  recency: number;
+  gap: number;
+  warmGap: number;
+  deficitShort: number;
+  deficitMid: number;
+  transition1: number;
+  transition2: number;
+  trendFollow: number;
+  altSwitch: number;
+  overheat: number;
+  extremeCold: number;
+  dominanceFollow: number;
+  hotPenalty: number;
+  sameTail: number;
+}
+
+function calcCanadaAltRatio(mapped: string[]): number {
+  if (mapped.length <= 1) return 0;
+  let alternations = 0;
+  for (let i = 1; i < mapped.length; i++) {
+    if (mapped[i] !== mapped[i - 1]) alternations++;
+  }
+  return alternations / (mapped.length - 1);
+}
+
+function buildCanadaMarketContext(labels: string[], mapped: string[]): CanadaMarketContext {
+  const short = mapped.slice(-6);
+  const mid = mapped.slice(-12);
+  const long = mapped.slice(-20);
+  const last = mapped[mapped.length - 1] ?? null;
+  const prev = mapped[mapped.length - 2] ?? null;
+  const metrics: Record<string, CanadaLabelMetric> = Object.fromEntries(
+    labels.map(label => [label, {
+      shortCount: 0,
+      midCount: 0,
+      longCount: 0,
+      recentWeight: 0,
+      gap: getLastSeenGap(mapped, label),
+      transition1: 0,
+      transition2: 0,
+      tailStreak: abcStreakTail(mapped, item => item === label),
+    }]),
+  ) as Record<string, CanadaLabelMetric>;
+
+  short.forEach(label => { if (metrics[label]) metrics[label]!.shortCount++; });
+  mid.forEach(label => { if (metrics[label]) metrics[label]!.midCount++; });
+  long.forEach(label => { if (metrics[label]) metrics[label]!.longCount++; });
+  mapped.forEach((label, index) => {
+    if (metrics[label]) metrics[label]!.recentWeight += 0.75 + index * 0.18;
+  });
+
+  if (last) {
+    for (let i = 0; i < mapped.length - 1; i++) {
+      if (mapped[i] === last) {
+        const next = mapped[i + 1]!;
+        if (metrics[next]) metrics[next]!.transition1 += 1 + i * 0.08;
+      }
+    }
+  }
+
+  if (prev && last) {
+    for (let i = 0; i < mapped.length - 2; i++) {
+      if (mapped[i] === prev && mapped[i + 1] === last) {
+        const next = mapped[i + 2]!;
+        if (metrics[next]) metrics[next]!.transition2 += 1 + i * 0.12;
+      }
+    }
+  }
+
+  const dominant = short.reduce<Record<string, number>>((acc, label) => {
+    acc[label] = (acc[label] ?? 0) + 1;
+    return acc;
+  }, {});
+  const dominance = short.length > 0
+    ? Math.max(...Object.values(dominant), 0) / short.length
+    : 0;
+
+  return {
+    labels,
+    mapped,
+    metrics,
+    last,
+    prev,
+    lastStreak: last ? abcStreakTail(mapped, item => item === last) : 0,
+    altRatio: calcCanadaAltRatio(mapped.slice(-8)),
+    dominance,
+    expectedShort: short.length > 0 ? short.length / Math.max(labels.length, 1) : 0,
+    expectedMid: mid.length > 0 ? mid.length / Math.max(labels.length, 1) : 0,
+    expectedLong: long.length > 0 ? long.length / Math.max(labels.length, 1) : 0,
+  };
+}
+
+function scoreCanadaLabels(ctx: CanadaMarketContext, weights: CanadaScoreWeights): Record<string, number> {
+  return Object.fromEntries(ctx.labels.map(label => {
+    const metric = ctx.metrics[label]!;
+    const shortDeficit = Math.max(0, ctx.expectedShort - metric.shortCount);
+    const midDeficit = Math.max(0, ctx.expectedMid - metric.midCount);
+    const hotPenalty = Math.max(0, metric.shortCount - Math.ceil(ctx.expectedShort));
+    const warmGap = metric.gap >= 2 && metric.gap <= Math.max(5, ctx.labels.length + 1)
+      ? metric.gap - 1
+      : 0;
+    const extremeCold = metric.gap > ctx.labels.length + 2
+      ? metric.gap - (ctx.labels.length + 2)
+      : 0;
+
+    let score =
+      metric.shortCount * weights.hotShort +
+      metric.midCount * weights.hotMid +
+      metric.longCount * weights.hotLong +
+      metric.recentWeight * weights.recency +
+      metric.gap * weights.gap +
+      warmGap * weights.warmGap +
+      shortDeficit * weights.deficitShort +
+      midDeficit * weights.deficitMid +
+      metric.transition1 * weights.transition1 +
+      metric.transition2 * weights.transition2 +
+      metric.tailStreak * weights.sameTail -
+      hotPenalty * weights.hotPenalty -
+      extremeCold * weights.extremeCold;
+
+    if (ctx.altRatio >= 0.66 && ctx.last) {
+      score += label === ctx.last
+        ? -weights.altSwitch * (0.7 + ctx.altRatio)
+        : weights.altSwitch * (0.45 + ctx.altRatio);
+    }
+
+    if (ctx.altRatio <= 0.34 && ctx.last) {
+      score += label === ctx.last
+        ? weights.trendFollow * (1 + Math.min(ctx.lastStreak, 4) * 0.25)
+        : -weights.trendFollow * 0.2;
+    }
+
+    if (ctx.lastStreak >= 3 && ctx.last === label) {
+      score -= weights.overheat * (ctx.lastStreak - 2);
+    }
+
+    if (ctx.dominance >= 0.58 && ctx.last) {
+      score += label === ctx.last
+        ? weights.dominanceFollow * (ctx.dominance - 0.5) * 10
+        : -weights.dominanceFollow * 0.25;
+    }
+
+    return [label, score];
+  })) as Record<string, number>;
+}
+
+function selectCanadaLabel(ctx: CanadaMarketContext, scores: Record<string, number>, preferLow: boolean): string | null {
+  return [...ctx.labels].sort((a, b) => {
+    const scoreDiff = preferLow
+      ? (scores[a] ?? 999) - (scores[b] ?? 999)
+      : (scores[b] ?? -999) - (scores[a] ?? -999);
+    if (scoreDiff !== 0) return scoreDiff;
+
+    const aMetric = ctx.metrics[a]!;
+    const bMetric = ctx.metrics[b]!;
+    const gapDiff = preferLow ? aMetric.gap - bMetric.gap : bMetric.gap - aMetric.gap;
     if (gapDiff !== 0) return gapDiff;
+
+    const transDiff = preferLow
+      ? aMetric.transition2 - bMetric.transition2
+      : bMetric.transition2 - aMetric.transition2;
+    if (transDiff !== 0) return transDiff;
+
     return a.localeCompare(b, "zh-CN");
   })[0] ?? null;
 }
 
-function pickWeightedLabel(labels: string[], mapped: string[], favorCold = false): string | null {
+function pickCanadaByWeights(
+  session: TgSession,
+  labels: string[],
+  limit: number,
+  weights: CanadaScoreWeights,
+  mutate?: (ctx: CanadaMarketContext, scores: Record<string, number>) => void,
+): string | null {
+  const mapped = buildMappedLabelHistory(session, labels, limit);
   if (!mapped.length) return labels[0] ?? null;
-  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
-  mapped.forEach((label, index) => {
-    scores[label] = (scores[label] ?? 0) + (1 + index * 0.28);
-  });
-  return pickByScore(labels, scores, mapped, !favorCold);
-}
-
-function pickMinorityLabel(labels: string[], mapped: string[]): string | null {
-  if (!mapped.length) return labels[0] ?? null;
-  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
-  for (const label of mapped) scores[label] = (scores[label] ?? 0) + 1;
-  return pickByScore(labels, scores, mapped, false);
-}
-
-function pickAlternativeLabel(labels: string[], current: string, mapped: string[]): string | null {
-  const others = labels.filter(label => label !== current);
-  if (!others.length) return current;
-  return [...others].sort((a, b) => {
-    const gapDiff = getLastSeenGap(mapped, b) - getLastSeenGap(mapped, a);
-    if (gapDiff !== 0) return gapDiff;
-    return a.localeCompare(b, "zh-CN");
-  })[0] ?? current;
-}
-
-function pickPairTransition(labels: string[], mapped: string[]): string | null {
-  if (mapped.length < 4) return pickWeightedLabel(labels, mapped);
-  const a = mapped[mapped.length - 2]!;
-  const b = mapped[mapped.length - 1]!;
-  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
-  for (let i = 0; i <= mapped.length - 3; i++) {
-    if (mapped[i] === a && mapped[i + 1] === b) {
-      const next = mapped[i + 2]!;
-      scores[next] = (scores[next] ?? 0) + 1 + i * 0.12;
-    }
-  }
-  return Object.values(scores).some(score => score > 0)
-    ? pickByScore(labels, scores, mapped, true)
-    : pickWeightedLabel(labels, mapped);
+  const ctx = buildCanadaMarketContext(labels, mapped);
+  const scores = scoreCanadaLabels(ctx, weights);
+  mutate?.(ctx, scores);
+  return selectCanadaLabel(ctx, scores, session.cfg.killGroupMode);
 }
 
 function canadaPro1(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 4);
-  if (!mapped.length) return labels[0] ?? null;
-  const recent = mapped.slice(-3);
-  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
-  for (const label of recent) scores[label] = (scores[label] ?? 0) + 1;
-  return pickByScore(labels, scores, mapped, true) ?? recent[recent.length - 1] ?? null;
+  return pickCanadaByWeights(session, labels, 10, {
+    hotShort: 1.9,
+    hotMid: 1.1,
+    hotLong: 0.5,
+    recency: 0.95,
+    gap: -0.08,
+    warmGap: 0.15,
+    deficitShort: 0.2,
+    deficitMid: 0.1,
+    transition1: 1.1,
+    transition2: 0.75,
+    trendFollow: 1.35,
+    altSwitch: 0.45,
+    overheat: 1.1,
+    extremeCold: 0.8,
+    dominanceFollow: 1.1,
+    hotPenalty: 0.45,
+    sameTail: 0.7,
+  });
 }
 
 function canadaPro2(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 6);
-  return pickMinorityLabel(labels, mapped);
+  return pickCanadaByWeights(session, labels, 12, {
+    hotShort: -0.2,
+    hotMid: 0.15,
+    hotLong: 0.15,
+    recency: 0.18,
+    gap: 0.35,
+    warmGap: 1.35,
+    deficitShort: 2.1,
+    deficitMid: 1.3,
+    transition1: 0.55,
+    transition2: 0.2,
+    trendFollow: 0.15,
+    altSwitch: 1.45,
+    overheat: 1.95,
+    extremeCold: 1.65,
+    dominanceFollow: 0.15,
+    hotPenalty: 1.2,
+    sameTail: -0.15,
+  });
 }
 
 function canadaPro3(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 8);
-  if (!mapped.length) return labels[0] ?? null;
-  const last = mapped[mapped.length - 1]!;
-  const streak = abcStreakTail(mapped, item => item === last);
-  if (streak >= 2) return last;
-  return pickWeightedLabel(labels, mapped);
+  return pickCanadaByWeights(session, labels, 12, {
+    hotShort: 2.05,
+    hotMid: 0.95,
+    hotLong: 0.35,
+    recency: 1.05,
+    gap: -0.14,
+    warmGap: 0.05,
+    deficitShort: 0.1,
+    deficitMid: 0.1,
+    transition1: 0.95,
+    transition2: 0.65,
+    trendFollow: 1.7,
+    altSwitch: 0.25,
+    overheat: 0.8,
+    extremeCold: 0.9,
+    dominanceFollow: 1.3,
+    hotPenalty: 0.3,
+    sameTail: 1.2,
+  }, (ctx, scores) => {
+    if (ctx.last && ctx.lastStreak >= 4) scores[ctx.last] = (scores[ctx.last] ?? 0) - 1.8;
+  });
 }
 
 function canadaPro4(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 8);
-  if (!mapped.length) return labels[0] ?? null;
-  const last = mapped[mapped.length - 1]!;
-  const streak = abcStreakTail(mapped, item => item === last);
-  if (streak >= 3) return pickAlternativeLabel(labels, last, mapped);
-  return pickMinorityLabel(labels, mapped.slice(-4));
+  return pickCanadaByWeights(session, labels, 10, {
+    hotShort: -0.55,
+    hotMid: -0.05,
+    hotLong: 0.1,
+    recency: -0.05,
+    gap: 0.25,
+    warmGap: 1.1,
+    deficitShort: 1.85,
+    deficitMid: 0.8,
+    transition1: 0.25,
+    transition2: 0.1,
+    trendFollow: 0.05,
+    altSwitch: 1.55,
+    overheat: 2.25,
+    extremeCold: 1.55,
+    dominanceFollow: -0.1,
+    hotPenalty: 1.45,
+    sameTail: -0.35,
+  }, (ctx, scores) => {
+    if (ctx.last && ctx.lastStreak >= 3) scores[ctx.last] = (scores[ctx.last] ?? 0) - 2.2;
+  });
 }
 
 function canadaPro5(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 10);
-  return pickWeightedLabel(labels, mapped);
+  return pickCanadaByWeights(session, labels, 16, {
+    hotShort: 0.7,
+    hotMid: 0.9,
+    hotLong: 0.35,
+    recency: 0.5,
+    gap: 0.05,
+    warmGap: 0.3,
+    deficitShort: 0.25,
+    deficitMid: 0.2,
+    transition1: 1.7,
+    transition2: 2.25,
+    trendFollow: 0.8,
+    altSwitch: 0.55,
+    overheat: 1.0,
+    extremeCold: 0.9,
+    dominanceFollow: 0.55,
+    hotPenalty: 0.55,
+    sameTail: 0.25,
+  });
 }
 
 function canadaPro6(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 12);
-  return pickWeightedLabel(labels, mapped, true);
+  return pickCanadaByWeights(session, labels, 16, {
+    hotShort: 0.1,
+    hotMid: 0.75,
+    hotLong: 0.45,
+    recency: 0.25,
+    gap: 0.28,
+    warmGap: 1.55,
+    deficitShort: 0.65,
+    deficitMid: 1.1,
+    transition1: 0.4,
+    transition2: 0.15,
+    trendFollow: 0.2,
+    altSwitch: 0.95,
+    overheat: 1.15,
+    extremeCold: 2.3,
+    dominanceFollow: 0.1,
+    hotPenalty: 0.9,
+    sameTail: 0.1,
+  });
 }
 
 function canadaPro7(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 14);
-  return pickPairTransition(labels, mapped);
+  return pickCanadaByWeights(session, labels, 16, {
+    hotShort: 0.8,
+    hotMid: 0.7,
+    hotLong: 0.3,
+    recency: 0.45,
+    gap: 0.04,
+    warmGap: 0.35,
+    deficitShort: 0.35,
+    deficitMid: 0.25,
+    transition1: 1.15,
+    transition2: 1.55,
+    trendFollow: 0.95,
+    altSwitch: 0.75,
+    overheat: 1.0,
+    extremeCold: 1.0,
+    dominanceFollow: 0.5,
+    hotPenalty: 0.45,
+    sameTail: 0.3,
+  }, (ctx, scores) => {
+    const trending = ctx.altRatio <= 0.4 || ctx.lastStreak >= 2 || ctx.dominance >= 0.58;
+    if (ctx.last) {
+      if (trending) scores[ctx.last] = (scores[ctx.last] ?? 0) + 1.3;
+      else scores[ctx.last] = (scores[ctx.last] ?? 0) - 1.2;
+    }
+  });
 }
 
 function canadaPro8(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 8);
-  if (!mapped.length) return labels[0] ?? null;
-  let alternations = 0;
-  for (let i = 1; i < mapped.length; i++) if (mapped[i] !== mapped[i - 1]) alternations++;
-  const ratio = mapped.length > 1 ? alternations / (mapped.length - 1) : 0;
-  const last = mapped[mapped.length - 1]!;
-  if (ratio >= 0.66) return pickAlternativeLabel(labels, last, mapped);
-  return canadaPro1(session, labels);
+  return pickCanadaByWeights(session, labels, 14, {
+    hotShort: 0.35,
+    hotMid: 0.45,
+    hotLong: 0.25,
+    recency: 0.25,
+    gap: 0.12,
+    warmGap: 0.95,
+    deficitShort: 0.95,
+    deficitMid: 0.7,
+    transition1: 0.6,
+    transition2: 0.55,
+    trendFollow: 0.45,
+    altSwitch: 1.65,
+    overheat: 1.85,
+    extremeCold: 1.15,
+    dominanceFollow: 0.15,
+    hotPenalty: 0.85,
+    sameTail: 0.1,
+  }, (ctx, scores) => {
+    if (ctx.altRatio >= 0.7 && ctx.last) {
+      scores[ctx.last] = (scores[ctx.last] ?? 0) - 2;
+    }
+  });
 }
 
 function canadaPro9(session: TgSession, labels: string[]): string | null {
-  const mapped = buildMappedLabelHistory(session, labels, 16);
-  if (!mapped.length) return labels[0] ?? null;
-  const last = mapped[mapped.length - 1]!;
-  const streak = abcStreakTail(mapped, item => item === last);
-  if (streak >= 2) return pickAlternativeLabel(labels, last, mapped);
-  return [...labels].sort((a, b) => {
-    const diff = getLastSeenGap(mapped, b) - getLastSeenGap(mapped, a);
-    if (diff !== 0) return diff;
-    return a.localeCompare(b, "zh-CN");
-  })[0] ?? null;
+  return pickCanadaByWeights(session, labels, 18, {
+    hotShort: 0.25,
+    hotMid: 0.7,
+    hotLong: 0.55,
+    recency: 0.35,
+    gap: 0.08,
+    warmGap: 1.1,
+    deficitShort: 1.15,
+    deficitMid: 1.25,
+    transition1: 0.75,
+    transition2: 0.45,
+    trendFollow: 0.55,
+    altSwitch: 0.9,
+    overheat: 1.4,
+    extremeCold: 2.1,
+    dominanceFollow: 0.2,
+    hotPenalty: 0.9,
+    sameTail: 0.2,
+  }, (ctx, scores) => {
+    const overlyHot = ctx.labels.filter(label => ctx.metrics[label]!.shortCount >= Math.ceil(ctx.expectedShort) + 2);
+    for (const label of overlyHot) scores[label] = (scores[label] ?? 0) - 1.1;
+  });
 }
 
 function canadaPro10(session: TgSession, labels: string[]): string | null {
-  const votes = [
-    canadaPro1(session, labels),
-    canadaPro3(session, labels),
-    canadaPro5(session, labels),
-    canadaPro7(session, labels),
-    canadaPro8(session, labels),
-  ].filter((value): value is string => !!value);
-  if (!votes.length) return labels[0] ?? null;
-  const scores: Record<string, number> = Object.fromEntries(labels.map(label => [label, 0]));
-  votes.forEach((label, index) => {
-    scores[label] = (scores[label] ?? 0) + (index === votes.length - 1 ? 1.2 : 1);
+  const mapped = buildMappedLabelHistory(session, labels, 18);
+  if (!mapped.length) return labels[0] ?? null;
+  const ctx = buildCanadaMarketContext(labels, mapped);
+  const scores = scoreCanadaLabels(ctx, {
+    hotShort: 0.9,
+    hotMid: 0.75,
+    hotLong: 0.35,
+    recency: 0.45,
+    gap: 0.1,
+    warmGap: 0.65,
+    deficitShort: 0.7,
+    deficitMid: 0.55,
+    transition1: 1.0,
+    transition2: 0.95,
+    trendFollow: 0.9,
+    altSwitch: 0.85,
+    overheat: 1.2,
+    extremeCold: 1.2,
+    dominanceFollow: 0.55,
+    hotPenalty: 0.75,
+    sameTail: 0.35,
   });
-  const mapped = buildMappedLabelHistory(session, labels, 12);
-  return pickByScore(labels, scores, mapped, true);
+
+  const votes: Array<{ label: string | null; weight: number }> = [
+    { label: canadaPro1(session, labels), weight: ctx.altRatio <= 0.4 ? 1.35 : 0.75 },
+    { label: canadaPro2(session, labels), weight: ctx.altRatio >= 0.62 ? 1.25 : 0.85 },
+    { label: canadaPro3(session, labels), weight: ctx.lastStreak >= 2 ? 1.25 : 0.85 },
+    { label: canadaPro4(session, labels), weight: ctx.lastStreak >= 3 ? 1.2 : 0.8 },
+    { label: canadaPro5(session, labels), weight: 1.1 },
+    { label: canadaPro6(session, labels), weight: 0.95 },
+    { label: canadaPro7(session, labels), weight: 1.15 },
+    { label: canadaPro8(session, labels), weight: ctx.altRatio >= 0.7 ? 1.25 : 0.9 },
+    { label: canadaPro9(session, labels), weight: 1.0 },
+  ];
+
+  for (const vote of votes) {
+    if (!vote.label) continue;
+    scores[vote.label] = (scores[vote.label] ?? 0) + vote.weight;
+  }
+
+  return selectCanadaLabel(ctx, scores, session.cfg.killGroupMode);
+}
+
+function runCanadaProAlgo(session: TgSession, labels: string[], variant: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10): string | null {
+  const effectiveLabels = resolveCanadaProLabels(session, labels);
+  if (!effectiveLabels.length) return null;
+  switch (variant) {
+    case 1: return canadaPro1(session, effectiveLabels);
+    case 2: return canadaPro2(session, effectiveLabels);
+    case 3: return canadaPro3(session, effectiveLabels);
+    case 4: return canadaPro4(session, effectiveLabels);
+    case 5: return canadaPro5(session, effectiveLabels);
+    case 6: return canadaPro6(session, effectiveLabels);
+    case 7: return canadaPro7(session, effectiveLabels);
+    case 8: return canadaPro8(session, effectiveLabels);
+    case 9: return canadaPro9(session, effectiveLabels);
+    case 10: return canadaPro10(session, effectiveLabels);
+    default: return null;
+  }
 }
 
 const ABC_RAW_LABELS = ["大单", "大双", "小单", "小双"] as const;
@@ -2898,16 +3261,16 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "anti_streak") return antiStreak(session);
   if (algoId === "streak_follow") return streakFollow(session);
   if (algoId === "abc_trend") return decideAbcTrend(session);
-  if (algoId === "canada_pro_1") return canadaPro1(session, labels);
-  if (algoId === "canada_pro_2") return canadaPro2(session, labels);
-  if (algoId === "canada_pro_3") return canadaPro3(session, labels);
-  if (algoId === "canada_pro_4") return canadaPro4(session, labels);
-  if (algoId === "canada_pro_5") return canadaPro5(session, labels);
-  if (algoId === "canada_pro_6") return canadaPro6(session, labels);
-  if (algoId === "canada_pro_7") return canadaPro7(session, labels);
-  if (algoId === "canada_pro_8") return canadaPro8(session, labels);
-  if (algoId === "canada_pro_9") return canadaPro9(session, labels);
-  if (algoId === "canada_pro_10") return canadaPro10(session, labels);
+  if (algoId === "canada_pro_1") return runCanadaProAlgo(session, labels, 1);
+  if (algoId === "canada_pro_2") return runCanadaProAlgo(session, labels, 2);
+  if (algoId === "canada_pro_3") return runCanadaProAlgo(session, labels, 3);
+  if (algoId === "canada_pro_4") return runCanadaProAlgo(session, labels, 4);
+  if (algoId === "canada_pro_5") return runCanadaProAlgo(session, labels, 5);
+  if (algoId === "canada_pro_6") return runCanadaProAlgo(session, labels, 6);
+  if (algoId === "canada_pro_7") return runCanadaProAlgo(session, labels, 7);
+  if (algoId === "canada_pro_8") return runCanadaProAlgo(session, labels, 8);
+  if (algoId === "canada_pro_9") return runCanadaProAlgo(session, labels, 9);
+  if (algoId === "canada_pro_10") return runCanadaProAlgo(session, labels, 10);
   if (algoId === "signal_follow" || algoId === "signal_reverse") {
     const p = parseBetLabel(signalText);
     if (!p) return null;
@@ -4146,7 +4509,18 @@ async function runAutoBet(session: TgSession): Promise<void> {
   }
 
   const cfgAlgos = (session.cfg.algorithms ?? []) as AlgorithmId[];
+  const canadaProAlgos = cfgAlgos.filter(a => /^canada_pro_\d+$/.test(a));
   const canadaAlgos = cfgAlgos.filter(a => a === "canada_kill" || a === "canada_kill_plus" || a === "canada_smart_plus");
+  if (session.cfg.killGroupMode && canadaProAlgos.length > 0) {
+    const killed = decideBetAuto(session);
+    if (!killed || !(KILL_GROUP_ALL as readonly string[]).includes(killed)) {
+      logger.info({ killed }, "[canada-pro] no kill group decided, skip");
+      return;
+    }
+    pushEvent(session, "bet:kill", { killed, algo: session.lastAlgoUsed });
+    await placeKillGroupBets(session, killed as KillGroupOption);
+    return;
+  }
   if (canadaAlgos.length > 0) {
     const primary = canadaAlgos[0]!;
     const fallback = canadaAlgos[1] ?? primary;
@@ -6287,7 +6661,43 @@ const CANADA_SIM_ALGOS: CanadaSimAlgoId[] = [
   "canada_pro_10",
 ];
 
-function createCanadaSimSession(algoId: CanadaSimAlgoId, pastSlice: string[]): TgSession {
+interface CanadaSimMode {
+  betOptions: BetOption[];
+  labels: string[];
+  dualGroupMode: boolean;
+  killGroupMode: boolean;
+}
+
+function isBetOption(value: unknown): value is BetOption {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(BET_OPTION_LABELS, value);
+}
+
+function resolveCanadaSimMode(cfg?: Partial<BetCfg>): CanadaSimMode {
+  const betOptions = (cfg?.betOptions ?? DEFAULT_CFG.betOptions).filter(isBetOption);
+  const safeBetOptions = betOptions.length > 0 ? betOptions : DEFAULT_CFG.betOptions;
+  const labels = [...new Set(safeBetOptions.map(option => BET_OPTION_LABELS[option]))];
+  return {
+    betOptions: safeBetOptions,
+    labels: labels.length > 0 ? labels : ["大", "小"],
+    dualGroupMode: !!cfg?.dualGroupMode,
+    killGroupMode: !!cfg?.killGroupMode,
+  };
+}
+
+function formatCanadaSimPrediction(prediction: string | null, mode: CanadaSimMode): string | null {
+  if (!prediction) return null;
+  return mode.killGroupMode ? `杀${prediction}` : prediction;
+}
+
+function didCanadaSimPredictionWin(prediction: string, actual: KillGroupOption, mode: CanadaSimMode): boolean | null {
+  if (mode.killGroupMode) return prediction !== actual;
+  const effectiveLabels = mode.dualGroupMode ? [ABC_GROUP_A, ABC_GROUP_B] : mode.labels;
+  const mappedActual = mapCanadaProHistoryLabel(actual, effectiveLabels);
+  if (!mappedActual) return null;
+  return mappedActual === prediction;
+}
+
+function createCanadaSimSession(algoId: CanadaSimAlgoId, pastSlice: string[], mode: CanadaSimMode): TgSession {
   return {
     recentResults: pastSlice.slice(-30),
     lastAIBet: null,
@@ -6296,30 +6706,40 @@ function createCanadaSimSession(algoId: CanadaSimAlgoId, pastSlice: string[]): T
     betLog: [],
     cfg: {
       ...DEFAULT_CFG,
-      betOptions: ["big", "small"],
+      betOptions: mode.betOptions,
       algorithms: [algoId],
-      dualGroupMode: false,
-      killGroupMode: false,
+      dualGroupMode: mode.dualGroupMode,
+      killGroupMode: mode.killGroupMode,
       autoBet: false,
     },
   } as unknown as TgSession;
 }
 
-function simulateCanadaAlgoStep(algoId: CanadaSimAlgoId, pastSlice: string[], actual: KillGroupOption): { prediction: string | null; won: boolean | null; skipped: boolean } {
-  const fakeSession = createCanadaSimSession(algoId, pastSlice);
-  const prediction = runAlgo(fakeSession, algoId, ["大", "小"]);
-  if (!prediction) return { prediction: null, won: null, skipped: true };
+function simulateCanadaAlgoStep(
+  algoId: CanadaSimAlgoId,
+  pastSlice: string[],
+  actual: KillGroupOption,
+  mode: CanadaSimMode,
+): { prediction: string | null; won: boolean | null; skipped: boolean } {
+  const fakeSession = createCanadaSimSession(algoId, pastSlice, mode);
+  const rawPrediction = runAlgo(fakeSession, algoId, mode.labels);
+  if (!rawPrediction) return { prediction: null, won: null, skipped: true };
+  const won = didCanadaSimPredictionWin(rawPrediction, actual, mode);
   return {
-    prediction,
-    won: (prediction === "大" && actual.startsWith("大")) || (prediction === "小" && actual.startsWith("小")),
-    skipped: false,
+    prediction: formatCanadaSimPrediction(rawPrediction, mode),
+    won,
+    skipped: won === null,
   };
 }
 
-function simulateCanadaHistoryRows(fullHistory: string[]): { rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[] } {
+function simulateCanadaHistoryRows(
+  fullHistory: string[],
+  cfg?: Partial<Pick<BetCfg, "betOptions" | "dualGroupMode" | "killGroupMode">>,
+): { rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[] } {
   const history = fullHistory
     .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
   const MIN_HIST = 5;
+  const mode = resolveCanadaSimMode(cfg);
   const summaryMap: Record<CanadaSimAlgoId, CanadaSimSummary> = Object.fromEntries(
     CANADA_SIM_ALGOS.map(algoId => [algoId, {
       algoId,
@@ -6350,7 +6770,7 @@ function simulateCanadaHistoryRows(fullHistory: string[]): { rows: CanadaSimHist
       lotteryHistoryCache = pastSlice.slice(-50);
 
       const algos = CANADA_SIM_ALGOS.map(algoId => {
-        const step = simulateCanadaAlgoStep(algoId, pastSlice, actual);
+        const step = simulateCanadaAlgoStep(algoId, pastSlice, actual, mode);
         const summary = summaryMap[algoId];
 
         if (step.skipped || step.won === null) {
@@ -6494,9 +6914,10 @@ router.get("/tg/algo-rates", requireAuth, (req, res) => {
   res.json({ rates: rows, historyCount: fullHistory.length });
 });
 
-router.get("/tg/canada-sim-history", requireAuth, (_req, res) => {
+router.get("/tg/canada-sim-history", requireAuth, (req, res) => {
   const fullHistory = [...lotteryHistoryCache];
-  const { rows, summary } = simulateCanadaHistoryRows(fullHistory);
+  const session = tgSessions.get(req.user!.userId);
+  const { rows, summary } = simulateCanadaHistoryRows(fullHistory, session?.cfg);
   res.json({ rows, summary, historyCount: fullHistory.length });
 });
 
