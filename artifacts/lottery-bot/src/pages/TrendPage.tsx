@@ -83,26 +83,16 @@ function streakInfo(items: DrawItem[]): string {
 const CANADA_SIM_ORDER = [
   "canada_pro_1",
   "canada_pro_2",
-  "canada_pro_3",
-  "canada_pro_4",
   "canada_pro_5",
-  "canada_pro_6",
   "canada_pro_7",
-  "canada_pro_8",
-  "canada_pro_9",
   "canada_pro_10",
 ] as const;
 
 const CANADA_SIM_LABELS: Record<(typeof CANADA_SIM_ORDER)[number], string> = {
   canada_pro_1: "算法1",
   canada_pro_2: "算法2",
-  canada_pro_3: "算法3",
-  canada_pro_4: "算法4",
   canada_pro_5: "算法5",
-  canada_pro_6: "算法6",
   canada_pro_7: "算法7",
-  canada_pro_8: "算法8",
-  canada_pro_9: "算法9",
   canada_pro_10: "算法10",
 };
 
@@ -223,7 +213,7 @@ export default function TrendPage() {
         {simSummary.length > 0 && (
           <div className="bg-[#0f1220] rounded-2xl border border-[#1e2235] p-3">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-white text-sm font-semibold">加拿大算法1-10 模拟回测</h2>
+              <h2 className="text-white text-sm font-semibold">加拿大算法1/2/5/7/10 模拟回测</h2>
               <span className="text-[10px] text-slate-500">
                 {simMode ? `${simMode.label} · 基于近期开奖历史逐期模拟` : "基于近期开奖历史逐期模拟"}
               </span>
@@ -240,7 +230,7 @@ export default function TrendPage() {
                 ))}
               </div>
             )}
-            <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-10 gap-2">
+            <div className="grid grid-cols-2 md:grid-cols-5 xl:grid-cols-5 gap-2">
               {CANADA_SIM_ORDER.map(algoId => {
                 const stat = summaryMap.get(algoId);
                 return (
@@ -360,7 +350,7 @@ export default function TrendPage() {
         )}
 
         <p className="text-[10px] text-slate-600 text-center">
-          显示近 {display.length} 期 · 含加拿大算法1-10逐期模拟回测
+          显示近 {display.length} 期 · 含加拿大算法1/2/5/7/10逐期模拟回测
           {simMode ? ` · 当前为${simMode.label}` : ""}
           · 每 30 秒自动刷新
         </p>

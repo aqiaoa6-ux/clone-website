@@ -205,6 +205,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
   | "hash_abc_digit_ai" | "hash_abc_digit_cycle_ai"
   | "private_combo_ai"
+  | "canada_clone_1"
   | "canada_pro_1" | "canada_pro_2" | "canada_pro_3" | "canada_pro_4" | "canada_pro_5"
   | "canada_pro_6" | "canada_pro_7" | "canada_pro_8" | "canada_pro_9" | "canada_pro_10"
   | "canada_kill" | "canada_kill_plus" | "canada_smart_plus" | "abc_trend" | "abc_digit_ai" | "abc_digit_cycle_ai";
@@ -255,8 +256,19 @@ const LEGACY_CANADA_ALGOS = new Set<AlgorithmId>([
   "canada_smart_plus",
 ]);
 
+const DROPPED_CANADA_PRO_MAP: Partial<Record<AlgorithmId, AlgorithmId>> = {
+  canada_pro_3: "canada_pro_1",
+  canada_pro_4: "canada_pro_2",
+  canada_pro_6: "canada_pro_5",
+  canada_pro_8: "canada_pro_7",
+  canada_pro_9: "canada_pro_10",
+};
+
 function sanitizeAlgorithms(algos: AlgorithmId[] | undefined, gameMode: BetCfg["gameMode"]): AlgorithmId[] {
-  const filtered = (algos ?? []).filter(algo => !LEGACY_CANADA_ALGOS.has(algo));
+  const filtered = (algos ?? [])
+    .filter(algo => !LEGACY_CANADA_ALGOS.has(algo))
+    .map(algo => DROPPED_CANADA_PRO_MAP[algo] ?? algo)
+    .filter((algo, index, arr) => arr.indexOf(algo) === index);
   if (filtered.length > 0) return filtered;
   if (gameMode === "hash") return ["hash_follow"];
   if (gameMode === "kuaisan") return ["ks_follow"];
@@ -1452,8 +1464,13 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
       if (mapped !== null) {
         rawCorrect = mapped === rawDir;
       } else if (rawDir.includes("+")) {
-        // 复合方向如 "大单+小双"：result 对应其中一个即算正确
-        rawCorrect = rawDir.split("+").some(part => mapR3ToEnabled(result, [part]) === part);
+        const rawParts = rawDir.split("+").map(part => part.trim()).filter(Boolean);
+        if (rawParts.length > 0 && rawParts.every(isStructuredBetPart)) {
+          rawCorrect = won;
+        } else {
+          // 复合方向如 "大单+小双"：result 对应其中一个即算正确
+          rawCorrect = rawParts.some(part => mapR3ToEnabled(result, [part]) === part);
+        }
       } else {
         rawCorrect = won; // fallback
       }
@@ -1516,6 +1533,93 @@ function mapR3ToEnabled(r3: string, enabled: string[]): string | null {
   if (enabled.includes("单") && r3.endsWith("单")) return "单";
   if (enabled.includes("双") && r3.endsWith("双")) return "双";
   return null;
+}
+
+type StructuredBetAxis = "A" | "B" | "C" | "S";
+type StructuredBetAttr = "大" | "小" | "单" | "双";
+
+function isStructuredBetPart(part: string): boolean {
+  return /^(A|B|C|S)(大|小|单|双)$/.test(part.trim());
+}
+
+function evaluateStructuredBetPart(part: string, digits: [number, number, number] | null, r3: string): boolean {
+  const match = part.trim().match(/^(A|B|C|S)(大|小|单|双)$/);
+  if (!match) return false;
+  const axis = match[1] as StructuredBetAxis;
+  const attr = match[2] as StructuredBetAttr;
+
+  if (axis === "S") {
+    if (attr === "大") return r3.startsWith("大");
+    if (attr === "小") return r3.startsWith("小");
+    if (attr === "单") return r3.endsWith("单");
+    return r3.endsWith("双");
+  }
+
+  if (!digits) return false;
+  const posIndex = axis === "A" ? 0 : axis === "B" ? 1 : 2;
+  const value = digits[posIndex];
+  if (value === undefined) return false;
+  if (attr === "大") return value >= 5;
+  if (attr === "小") return value <= 4;
+  if (attr === "单") return value % 2 === 1;
+  return value % 2 === 0;
+}
+
+function digitLabel(value: number, type: "size" | "parity"): StructuredBetAttr {
+  if (type === "size") return value >= 5 ? "大" : "小";
+  return value % 2 === 1 ? "单" : "双";
+}
+
+function recentDigits(session: TgSession, limit = 16): [number, number, number][] {
+  return [...lotteryDigitHistoryCache, ...(session.recentDigitResults ?? [])].slice(-limit);
+}
+
+function scoreStructuredAxis(
+  items: number[],
+  type: "size" | "parity",
+  positive: StructuredBetAttr,
+  negative: StructuredBetAttr,
+): { pick: StructuredBetAttr; strength: number } {
+  if (!items.length) return { pick: positive, strength: 0 };
+  const short = items.slice(-6);
+  const mid = items.slice(-12);
+  const shortPositive = short.filter(value => digitLabel(value, type) === positive).length;
+  const midPositive = mid.filter(value => digitLabel(value, type) === positive).length;
+  const positiveScore = shortPositive * 1.3 + midPositive * 0.45;
+  const negativeScore = (short.length - shortPositive) * 1.3 + (mid.length - midPositive) * 0.45;
+  return positiveScore >= negativeScore
+    ? { pick: positive, strength: positiveScore - negativeScore }
+    : { pick: negative, strength: negativeScore - positiveScore };
+}
+
+function structuredCandidate(session: TgSession, axis: StructuredBetAxis): { bet: string; strength: number } | null {
+  const history = recentDigits(session, 18);
+  if (!history.length) return null;
+  if (axis === "S") {
+    const sums = history.map(([a, b, c]) => a + b + c);
+    const size = scoreStructuredAxis(sums, "size", "大", "小");
+    const parity = scoreStructuredAxis(sums, "parity", "单", "双");
+    const best = size.strength >= parity.strength ? size : parity;
+    return { bet: `S${best.pick}`, strength: best.strength };
+  }
+
+  const posIndex = axis === "A" ? 0 : axis === "B" ? 1 : 2;
+  const values = history.map(item => item[posIndex]!);
+  const size = scoreStructuredAxis(values, "size", "大", "小");
+  const parity = scoreStructuredAxis(values, "parity", "单", "双");
+  const best = size.strength >= parity.strength ? size : parity;
+  return { bet: `${axis}${best.pick}`, strength: best.strength };
+}
+
+function canadaClone1(session: TgSession): string | null {
+  const axes: StructuredBetAxis[] = ["S", "A", "B", "C"];
+  const picks = axes
+    .map(axis => structuredCandidate(session, axis))
+    .filter((item): item is { bet: string; strength: number } => item !== null);
+  if (picks.length < 3) return null;
+  const ordered = picks.sort((a, b) => b.strength - a.strength);
+  const selected = [ordered[0]!, ...ordered.slice(1).sort((a, b) => b.strength - a.strength).slice(0, 2)];
+  return selected.map(item => item.bet).join("+");
 }
 
 function freqPick(items: string[], labels: string[], sortAsc: boolean): string | null {
@@ -3272,6 +3376,7 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "anti_streak") return antiStreak(session);
   if (algoId === "streak_follow") return streakFollow(session);
   if (algoId === "abc_trend") return decideAbcTrend(session);
+  if (algoId === "canada_clone_1") return canadaClone1(session);
   if (algoId === "canada_pro_1") return runCanadaProAlgo(session, labels, 1);
   if (algoId === "canada_pro_2") return runCanadaProAlgo(session, labels, 2);
   if (algoId === "canada_pro_3") return runCanadaProAlgo(session, labels, 3);
@@ -3351,22 +3456,48 @@ function applyAlgoFlip(session: TgSession, direction: string | null, labels: str
 
 function decideBet(session: TgSession, signalText: string): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
-  if (!labels.length || !session.cfg.algorithms.length) return null;
   const algoId = selectAlgoByPattern(session);
-  const raw = runAlgo(session, algoId, labels, signalText);
+  if (algoId === "canada_clone_1") {
+    const raw = runAlgo(session, algoId, labels, signalText);
+    session.lastRawAlgoDir = raw;
+    if (raw !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
+    return raw;
+  }
+  const effectiveLabels = labels.length > 0
+    ? labels
+    : session.cfg.killGroupMode
+      ? [...KILL_GROUP_ALL]
+      : session.cfg.dualGroupMode
+        ? [ABC_GROUP_A, ABC_GROUP_B]
+        : labels;
+  if (!effectiveLabels.length || !session.cfg.algorithms.length) return null;
+  const raw = runAlgo(session, algoId, effectiveLabels, signalText);
   session.lastRawAlgoDir = raw;
-  const direction = applyAlgoFlip(session, raw, labels);
+  const direction = applyAlgoFlip(session, raw, effectiveLabels);
   if (direction !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
   return direction;
 }
 
 function decideBetAuto(session: TgSession): string | null {
   const labels = session.cfg.betOptions.map(o => BET_OPTION_LABELS[o]);
-  if (!labels.length || !session.cfg.algorithms.length) return null;
   const algoId = selectAlgoByPattern(session);
-  const raw = runAlgo(session, algoId, labels);
+  if (algoId === "canada_clone_1") {
+    const raw = runAlgo(session, algoId, labels);
+    session.lastRawAlgoDir = raw;
+    if (raw !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
+    return raw;
+  }
+  const effectiveLabels = labels.length > 0
+    ? labels
+    : session.cfg.killGroupMode
+      ? [...KILL_GROUP_ALL]
+      : session.cfg.dualGroupMode
+        ? [ABC_GROUP_A, ABC_GROUP_B]
+        : labels;
+  if (!effectiveLabels.length || !session.cfg.algorithms.length) return null;
+  const raw = runAlgo(session, algoId, effectiveLabels);
   session.lastRawAlgoDir = raw;
-  const direction = applyAlgoFlip(session, raw, labels);
+  const direction = applyAlgoFlip(session, raw, effectiveLabels);
   if (direction !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
   return direction;
 }
@@ -3749,13 +3880,18 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     "大单小双": ["大单", "小双"],
     "小单大双": ["小单", "大双"],
   };
+  const structuredItems = direction.includes("+")
+    ? direction.split("+").map(item => item.trim()).filter(isStructuredBetPart)
+    : [];
   // 非 ai_trend/steady_ai 算法可能只返回单个标签（如 "小单"），在双组模式下自动提升为复合方向
   let effectiveDirection = direction;
-  if (session.cfg.dualGroupMode && !DUAL_GROUP_MAP[direction]) {
+  if (structuredItems.length === 0 && session.cfg.dualGroupMode && !DUAL_GROUP_MAP[direction]) {
     if (direction === "大单" || direction === "小双") effectiveDirection = "大单小双";
     else if (direction === "小单" || direction === "大双") effectiveDirection = "小单大双";
   }
-  const dualItems = session.cfg.dualGroupMode ? (DUAL_GROUP_MAP[effectiveDirection] ?? [effectiveDirection]) : null;
+  const dualItems = structuredItems.length === 0 && session.cfg.dualGroupMode
+    ? (DUAL_GROUP_MAP[effectiveDirection] ?? [effectiveDirection])
+    : null;
 
   // Only include chase entries if not already sent this cycle
   const chaseEntries = (!session.chasePlacedThisCycle && session.cfg.enableChase ? session.cfg.chaseNumbers : [])
@@ -3767,7 +3903,9 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   // Normal:     "0/chase  大 100"
   const betParts: string[] = dualItems
     ? dualItems.map(opt => `${opt} ${mainAmount}`)
-    : [`${direction} ${mainAmount}`];
+    : structuredItems.length > 0
+      ? structuredItems.map(opt => `${opt} ${mainAmount}`)
+      : [`${direction} ${mainAmount}`];
   const parts: string[] = [
     ...chaseEntries.map(c => `${c.num}/${chaseEffectiveAmount(session, String(c.num), c.amount)}`),
     ...betParts,
@@ -3802,6 +3940,17 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     };
     betLog.unshift(dualRec);
     pushEvent(session, "bet:new", { bet: dualRec });
+  } else if (structuredItems.length > 0) {
+    const structuredRec: BetRecord = {
+      id: `main-${now}`, groupId: targetId, groupTitle,
+      messageText: message, betContent: structuredItems.join("+"), amount: mainAmount,
+      timestamp: now, status,
+      ...(failReason ? { failReason } : {}),
+      ...(algoId ? { algoId } : {}),
+      ...(rawAlgoDir ? { rawAlgoDir } : {}),
+    };
+    betLog.unshift(structuredRec);
+    pushEvent(session, "bet:new", { bet: structuredRec });
   } else {
     // 普通模式：一条主 BetRecord
     const mainRec: BetRecord = {
@@ -4500,6 +4649,16 @@ async function runAutoBet(session: TgSession): Promise<void> {
     return;
   }
 
+  if (session.cfg.algorithms.includes("canada_clone_1")) {
+    const direction = decideBetAuto(session);
+    if (!direction) {
+      logger.info("[canada-clone-1] no structured direction decided, skip");
+      return;
+    }
+    await placeAllBets(session, direction);
+    return;
+  }
+
   // adaptive_switch 算法：大小未中自动切杀组，杀组中奖切回大小
   if (session.cfg.algorithms.includes("adaptive_switch")) {
     if (session.adaptiveSwitchKillMode) {
@@ -4651,6 +4810,23 @@ async function pollLottery(session: TgSession): Promise<void> {
       // betContent may be "大" / "大单" / "大单+小双" / "大双+大单+小双"
       const pendingAll = session.betLog.filter(b => b.status === "sent" && !b.isChase);
       for (const pending of pendingAll) {
+        const structuredParts = pending.betContent
+          .split("+")
+          .map(s => s.trim())
+          .filter(isStructuredBetPart);
+        if (structuredParts.length > 0) {
+          const hitCount = structuredParts.filter(part => evaluateStructuredBetPart(part, latestDigits, latest.r3!)).length;
+          const pnl = Math.round(pending.amount * (session.cfg.odds * hitCount - structuredParts.length) * 100) / 100;
+          settleBet(session, {
+            won: pnl > 0,
+            pnl,
+            result: latest.r3,
+            betId: pending.id,
+            period: latest.term,
+          });
+          continue;
+        }
+
         const abcParts = pending.betContent
           .split("+")
           .map(s => s.trim())
@@ -6569,7 +6745,7 @@ router.delete("/tg/bets", requireCard, (req, res) => {
  */
 function backtestAlgo(algoId: AlgorithmId, fullHistory: string[]): { wins: number; losses: number; canSimulate: boolean } {
   // 信号算法需要外部信号文本，无法回测；random 无意义
-  if (algoId === "signal_follow" || algoId === "signal_reverse" || algoId === "random") {
+  if (algoId === "signal_follow" || algoId === "signal_reverse" || algoId === "random" || algoId === "canada_clone_1") {
     return { wins: 0, losses: 0, canSimulate: false };
   }
 
@@ -6631,8 +6807,7 @@ function backtestAlgo(algoId: AlgorithmId, fullHistory: string[]): { wins: numbe
 }
 
 type CanadaSimAlgoId =
-  | "canada_pro_1" | "canada_pro_2" | "canada_pro_3" | "canada_pro_4" | "canada_pro_5"
-  | "canada_pro_6" | "canada_pro_7" | "canada_pro_8" | "canada_pro_9" | "canada_pro_10";
+  | "canada_pro_1" | "canada_pro_2" | "canada_pro_5" | "canada_pro_7" | "canada_pro_10";
 
 interface CanadaSimRowAlgo {
   algoId: CanadaSimAlgoId;
@@ -6662,13 +6837,8 @@ interface CanadaSimSummary {
 const CANADA_SIM_ALGOS: CanadaSimAlgoId[] = [
   "canada_pro_1",
   "canada_pro_2",
-  "canada_pro_3",
-  "canada_pro_4",
   "canada_pro_5",
-  "canada_pro_6",
   "canada_pro_7",
-  "canada_pro_8",
-  "canada_pro_9",
   "canada_pro_10",
 ];
 
@@ -6919,8 +7089,7 @@ router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
 // 所有可回测算法（不依赖外部信号），任意登录用户可访问，无需持有卡密
 const ALL_SIMULATABLE_ALGOS: AlgorithmId[] = [
   "adaptive_switch", "streak_follow", "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend",
-  "canada_pro_1", "canada_pro_2", "canada_pro_3", "canada_pro_4", "canada_pro_5",
-  "canada_pro_6", "canada_pro_7", "canada_pro_8", "canada_pro_9", "canada_pro_10",
+  "canada_pro_1", "canada_pro_2", "canada_pro_5", "canada_pro_7", "canada_pro_10",
 ];
 
 router.get("/tg/algo-rates", requireAuth, (req, res) => {

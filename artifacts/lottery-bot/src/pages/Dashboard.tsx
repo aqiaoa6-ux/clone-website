@@ -26,6 +26,7 @@ const ALGO_LABELS: Record<string, string> = {
   ks_smart:         "快三-均值回归",
   ai_trend:         "加拿大-算法1（旧版）",
   steady_ai:        "加拿大-算法2（旧版）",
+  canada_clone_1:   "加拿大-同款结构1",
   canada_pro_1:     "加拿大-算法1",
   canada_pro_2:     "加拿大-算法2",
   canada_pro_3:     "加拿大-算法3",
@@ -51,9 +52,20 @@ const ALGO_LABELS: Record<string, string> = {
 };
 
 const LEGACY_CANADA_ALGOS = new Set(["ai_trend", "steady_ai", "canada_smart_plus", "canada_kill", "canada_kill_plus"]);
+const DROPPED_CANADA_PRO_MAP: Record<string, string> = {
+  canada_pro_3: "canada_pro_1",
+  canada_pro_4: "canada_pro_2",
+  canada_pro_6: "canada_pro_5",
+  canada_pro_8: "canada_pro_7",
+  canada_pro_9: "canada_pro_10",
+};
+const ACTIVE_CANADA_PRO_ALGOS = new Set(["canada_pro_1", "canada_pro_2", "canada_pro_5", "canada_pro_7", "canada_pro_10"]);
 
 const VISIBLE_ALGO_LABELS = Object.fromEntries(
-  Object.entries(ALGO_LABELS).filter(([algoId]) => !LEGACY_CANADA_ALGOS.has(algoId)),
+  Object.entries(ALGO_LABELS).filter(([algoId]) =>
+    !LEGACY_CANADA_ALGOS.has(algoId) &&
+    (!algoId.startsWith("canada_pro_") || ACTIVE_CANADA_PRO_ALGOS.has(algoId))
+  ),
 );
 
 const ALGO_DESC: Record<string, string> = {
@@ -66,6 +78,7 @@ const ALGO_DESC: Record<string, string> = {
   ai_trend:         "加拿大旧版1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
   steady_ai:        "加拿大旧版2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
   abc_trend:        "加拿大ABC = 基于近24期走势，综合大小/单双/组合热度，自动选择 ABC 方向",
+  canada_clone_1:   "同款结构1 = 每期直接发三枪，混合 A/B/C 位与总和 S 的大小单双，先按 2中1挂 结构去做样板验证",
   abc_digit_ai:     "ABC三位数字 = 按 A/B/C 三个位分别分析近期开奖数字热度、遗漏、转移关系，自动选出每个位要投的 4-9 个号码",
   abc_digit_cycle_ai:"ABC轮打 = 保留原 ABC 数字 AI 的选号方式，但每期只打一位，按 A -> B -> C 轮换，降低持续同打挨打风险",
   private_combo_ai: "新群综合 = 只看新群监控数据，先分析大小/单双独立强弱，再结合组合失衡综合决定；下注时机按新群倒计时30秒触发，不影响原加拿大时间",
@@ -82,7 +95,10 @@ const ALGO_DESC: Record<string, string> = {
 const AVAILABLE_ALGOS = new Set(Object.keys(VISIBLE_ALGO_LABELS));
 
 function normalizeAlgos(a: string[], gameMode: "lottery" | "kuaisan" | "hash" = "lottery") {
-  const filtered = a.filter(x => AVAILABLE_ALGOS.has(x));
+  const filtered = a
+    .map(x => DROPPED_CANADA_PRO_MAP[x] ?? x)
+    .filter(x => AVAILABLE_ALGOS.has(x))
+    .filter((x, index, arr) => arr.indexOf(x) === index);
   if (filtered.length > 0) return filtered;
   if (gameMode === "hash") return ["hash_follow"];
   if (gameMode === "kuaisan") return ["ks_follow"];
