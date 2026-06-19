@@ -1883,24 +1883,21 @@ export default function AdminPage() {
                   </div>
                 ) : (
                   <>
-                    {(() => {
-                      const canBattle = !!canadaTrueAiStatus.activeModel;
-                      return (
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                       <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
                         <div className={`text-base font-bold ${
-                          canBattle ? "text-emerald-400"
+                          canadaTrueAiStatus.activeModel ? "text-emerald-400"
                             : canadaTrueAiStatus.latestJob?.status === "running" ? "text-yellow-400"
                               : canadaTrueAiStatus.latestJob?.status === "failed" ? "text-red-400"
                                 : "text-slate-300"
                         }`}>
-                          {canBattle ? "已运行" : canadaTrueAiStatus.latestJob?.status === "running" ? "训练中" : canadaTrueAiStatus.latestJob?.status === "failed" ? "失败" : "未就绪"}
+                          {canadaTrueAiStatus.activeModel ? "已运行" : canadaTrueAiStatus.latestJob?.status === "running" ? "训练中" : canadaTrueAiStatus.latestJob?.status === "failed" ? "失败" : "未就绪"}
                         </div>
                         <div className="text-slate-500 text-xs mt-0.5">主状态</div>
                       </div>
                       <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className={`text-base font-bold ${canBattle ? "text-emerald-400" : "text-yellow-400"}`}>
-                          {canBattle ? "允许" : "等待模型"}
+                        <div className={`text-base font-bold ${canadaTrueAiStatus.activeModel ? "text-emerald-400" : "text-yellow-400"}`}>
+                          {canadaTrueAiStatus.activeModel ? "允许" : "等待模型"}
                         </div>
                         <div className="text-slate-500 text-xs mt-0.5">实战状态</div>
                       </div>
@@ -1917,8 +1914,6 @@ export default function AdminPage() {
                         <div className="text-slate-500 text-xs mt-0.5">平均准确率</div>
                       </div>
                     </div>
-                      );
-                    })()}
 
                     <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
                       <div className="px-5 py-3 border-b border-[#252a3d]">
