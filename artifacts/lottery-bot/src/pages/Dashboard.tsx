@@ -24,19 +24,6 @@ const ALGO_LABELS: Record<string, string> = {
   ks_reverse:       "快三-反上期",
   ks_bb:            "快三-AABB",
   ks_smart:         "快三-均值回归",
-  ai_trend:         "加拿大-算法1（旧版）",
-  steady_ai:        "加拿大-算法2（旧版）",
-  canada_clone_1:   "加拿大-同款结构1",
-  canada_pro_1:     "加拿大-算法1",
-  canada_pro_2:     "加拿大-算法2",
-  canada_pro_3:     "加拿大-算法3",
-  canada_pro_4:     "加拿大-算法4",
-  canada_pro_5:     "加拿大-算法5",
-  canada_pro_6:     "加拿大-算法6",
-  canada_pro_7:     "加拿大-算法7",
-  canada_pro_8:     "加拿大-算法8",
-  canada_pro_9:     "加拿大-算法9",
-  canada_pro_10:    "加拿大-算法10",
   abc_trend:        "加拿大-ABC走势",
   abc_digit_ai:     "加拿大-ABC三位数字AI",
   abc_digit_cycle_ai:"加拿大-ABC轮打AI",
@@ -48,55 +35,36 @@ const ALGO_LABELS: Record<string, string> = {
   hash_smart:       "哈希-算法3",
   hash_kill_plus:   "哈希-算法5 🔥 杀组(升级版)",
   hash_smart_plus:  "哈希-算法6 🧠 三算法融合",
-  canada_smart_plus:"加拿大-算法3 🧠 融合杀组",
 };
 
-const LEGACY_CANADA_ALGOS = new Set(["ai_trend", "steady_ai", "canada_smart_plus", "canada_kill", "canada_kill_plus"]);
-const DROPPED_CANADA_PRO_MAP: Record<string, string> = {
-  canada_pro_3: "canada_pro_1",
-  canada_pro_4: "canada_pro_2",
-  canada_pro_6: "canada_pro_5",
-  canada_pro_8: "canada_pro_7",
-  canada_pro_9: "canada_pro_10",
-};
-const ACTIVE_CANADA_PRO_ALGOS = new Set(["canada_pro_1", "canada_pro_2", "canada_pro_5", "canada_pro_7", "canada_pro_10"]);
+const REMOVED_CANADA_ALGOS = new Set([
+  "ai_trend",
+  "steady_ai",
+  "canada_clone_1",
+  "canada_pro_1",
+  "canada_pro_2",
+  "canada_pro_3",
+  "canada_pro_4",
+  "canada_pro_5",
+  "canada_pro_6",
+  "canada_pro_7",
+  "canada_pro_8",
+  "canada_pro_9",
+  "canada_pro_10",
+  "canada_kill",
+  "canada_kill_plus",
+  "canada_smart_plus",
+]);
 
 const VISIBLE_ALGO_LABELS = Object.fromEntries(
-  Object.entries(ALGO_LABELS).filter(([algoId]) =>
-    !LEGACY_CANADA_ALGOS.has(algoId) &&
-    (!algoId.startsWith("canada_pro_") || ACTIVE_CANADA_PRO_ALGOS.has(algoId))
-  ),
+  Object.entries(ALGO_LABELS).filter(([algoId]) => !REMOVED_CANADA_ALGOS.has(algoId)),
 );
-
-const ALGO_DESC: Record<string, string> = {
-  signal_follow:    "通用跟信号 = 跟随群内信号方向（带简单反转保护）",
-  signal_reverse:   "通用反信号 = 与群内信号相反方向（带简单反转保护）",
-  ks_follow:        "跟上期 = 押上一局相同方向（顺势，适合龙局）",
-  ks_reverse:       "反上期 = 押上一局反方向（适合震荡交替局）",
-  ks_bb:            "AABB = 两期相同则顺，两期不同则反（自动识别节奏）",
-  ks_smart:         "均值回归 = 近5期某方向≥4次时押反，其余跟3期多数",
-  ai_trend:         "加拿大旧版1 = AI趋势（追踪历史规律，超长龙顺龙保护）",
-  steady_ai:        "加拿大旧版2 = 升级版AI（多维评分，识别龙形/震荡/AABB形态）",
-  abc_trend:        "加拿大ABC = 基于近24期走势，综合大小/单双/组合热度，自动选择 ABC 方向",
-  canada_clone_1:   "同款结构1 = 用近期开奖数字实时训练轻量模型，输出总和一枪 + 两个位置轴三枪结构，并附带顺势/逆势/震荡标签",
-  abc_digit_ai:     "ABC三位数字 = 按 A/B/C 三个位分别分析近期开奖数字热度、遗漏、转移关系，自动选出每个位要投的 4-9 个号码",
-  abc_digit_cycle_ai:"ABC轮打 = 保留原 ABC 数字 AI 的选号方式，但每期只打一位，按 A -> B -> C 轮换，降低持续同打挨打风险",
-  private_combo_ai: "新群综合 = 只看新群监控数据，先分析大小/单双独立强弱，再结合组合失衡综合决定；下注时机按新群倒计时30秒触发，不影响原加拿大时间",
-  hash_abc_digit_ai:"哈希ABC三位数字 = 复用开奖频道里的 x+y+z 三位数字，按 A/B/C 分位分析热度、遗漏、转移关系，自动选出每个位要投的 4-9 个号码",
-  hash_abc_digit_cycle_ai:"哈希ABC轮打 = 保留哈希 ABC 数字 AI 的选号方式，但每期只打一位，按 A -> B -> C 轮换，降低持续同打挨打风险",
-  hash_follow:      "哈希1 = 区块链龙形（顺龙1-5期，超6期反转，震荡跟尾）",
-  hash_reverse:     "哈希2 = 双链均衡（三窗口加权回归，边界聚集时顺势突破）",
-  hash_smart:       "哈希3 = MD5波段（短期动量×中期偏差×交替密度三维合力）",
-  hash_kill_plus:   "哈希5 🔥 = 七维杀组（升级版）无暂停，每期必下，适合搭配马丁快速追回",
-  hash_smart_plus:  "哈希6 🧠 = 三算法融合（哈希1/2/3 投票 + 结合近期算法胜率择优，偏稳健）",
-  canada_smart_plus:"加拿大3 🧠 = 融合杀组（冷门原版 + 近热V2 按形态选择，偏稳健）",
-};
 
 const AVAILABLE_ALGOS = new Set(Object.keys(VISIBLE_ALGO_LABELS));
 
 function normalizeAlgos(a: string[], gameMode: "lottery" | "kuaisan" | "hash" = "lottery") {
   const filtered = a
-    .map(x => DROPPED_CANADA_PRO_MAP[x] ?? x)
+    .filter(x => !REMOVED_CANADA_ALGOS.has(x))
     .filter(x => AVAILABLE_ALGOS.has(x))
     .filter((x, index, arr) => arr.indexOf(x) === index);
   if (filtered.length > 0) return filtered;

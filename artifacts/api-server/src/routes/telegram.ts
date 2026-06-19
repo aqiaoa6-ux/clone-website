@@ -20,7 +20,6 @@ import {
   type CanadaAiChannelHistoryEntry,
   type CanadaAiSignal,
 } from "../lib/canadaAi";
-import { getCanadaTrueAiAdminStatus, predictCanadaTrueAiAxisSignals, syncCanadaTrueAiDraws } from "../lib/canadaTrueAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { canadaAiDraws, cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
@@ -51,197 +50,6 @@ let canadaLastBetAt = 0;
 // 当期快照（等待开奖时展示）
 let lastCanadaSnap: { term: number; dirs: Record<string, { kk: number; usdt: number; cny: number }>; closedAt: number; } | null = null;
 const adminSseClients = new Set<Response>();
-
-type CanadaTrueAiRuntimeLogType = "sync" | "predict" | "bet" | "result";
-
-interface CanadaTrueAiRuntimeLogEntry {
-  ts: number;
-  type: CanadaTrueAiRuntimeLogType;
-  text: string;
-  term: number | null;
-  userId: number | null;
-  prediction?: string | null;
-  actual?: string | null;
-  status?: string | null;
-  won?: boolean | null;
-}
-
-interface CanadaTrueAiRuntimeStatus {
-  sync: {
-    lastCheckedAt: number | null;
-    lastUpdatedAt: number | null;
-    latestTerm: number | null;
-    fetchedEntries: number;
-    historySize: number;
-  };
-  prediction: {
-    lastAt: number | null;
-    term: number | null;
-    value: string | null;
-    source: "manual" | "auto" | null;
-    userId: number | null;
-  };
-  bet: {
-    lastAt: number | null;
-    term: number | null;
-    value: string | null;
-    status: "sent" | "failed" | null;
-    userId: number | null;
-    watchGroupId: string | null;
-  };
-  result: {
-    lastAt: number | null;
-    term: number | null;
-    value: string | null;
-    won: boolean | null;
-    pnl: number | null;
-  };
-  metrics: {
-    settled: number;
-    wins: number;
-    losses: number;
-    winRate: string | null;
-  };
-  monitor: {
-    currentTerm: number | null;
-    activeUserId: number | null;
-    watchGroupId: string | null;
-    autoBetEnabled: boolean;
-  };
-  recentLogs: CanadaTrueAiRuntimeLogEntry[];
-}
-
-const canadaTrueAiRuntime: CanadaTrueAiRuntimeStatus = {
-  sync: { lastCheckedAt: null, lastUpdatedAt: null, latestTerm: null, fetchedEntries: 0, historySize: 0 },
-  prediction: { lastAt: null, term: null, value: null, source: null, userId: null },
-  bet: { lastAt: null, term: null, value: null, status: null, userId: null, watchGroupId: null },
-  result: { lastAt: null, term: null, value: null, won: null, pnl: null },
-  metrics: { settled: 0, wins: 0, losses: 0, winRate: null },
-  monitor: { currentTerm: null, activeUserId: null, watchGroupId: null, autoBetEnabled: false },
-  recentLogs: [],
-};
-
-function appendCanadaTrueAiRuntimeLog(entry: CanadaTrueAiRuntimeLogEntry): void {
-  canadaTrueAiRuntime.recentLogs.unshift(entry);
-  if (canadaTrueAiRuntime.recentLogs.length > 30) canadaTrueAiRuntime.recentLogs.length = 30;
-}
-
-function updateCanadaTrueAiRuntimeMetrics(): void {
-  const resultLogs = canadaTrueAiRuntime.recentLogs
-    .filter((item): item is CanadaTrueAiRuntimeLogEntry & { won: boolean } => item.type === "result" && typeof item.won === "boolean");
-  const wins = resultLogs.filter(item => item.won).length;
-  const losses = resultLogs.filter(item => !item.won).length;
-  const settled = wins + losses;
-  canadaTrueAiRuntime.metrics = {
-    settled,
-    wins,
-    losses,
-    winRate: settled > 0 ? `${((wins / settled) * 100).toFixed(1)}%` : null,
-  };
-}
-
-function trackCanadaTrueAiMonitorSession(session: TgSession): void {
-  canadaTrueAiRuntime.monitor = {
-    currentTerm: getCanadaLiveTerm(),
-    activeUserId: session.userId,
-    watchGroupId: session.watchGroupId ?? null,
-    autoBetEnabled: !!session.cfg.autoBet,
-  };
-}
-
-function recordCanadaTrueAiSync(session: TgSession, params: {
-  fetchedEntries: number;
-  historySize: number;
-  latestTerm: number | null;
-  mode: "full" | "incremental";
-}): void {
-  trackCanadaTrueAiMonitorSession(session);
-  canadaTrueAiRuntime.sync.lastCheckedAt = Date.now();
-  canadaTrueAiRuntime.sync.historySize = params.historySize;
-  canadaTrueAiRuntime.sync.fetchedEntries = params.fetchedEntries;
-  if (params.latestTerm !== null) canadaTrueAiRuntime.sync.latestTerm = params.latestTerm;
-  if (params.fetchedEntries > 0 || params.mode === "full") {
-    canadaTrueAiRuntime.sync.lastUpdatedAt = Date.now();
-  }
-  appendCanadaTrueAiRuntimeLog({
-    ts: Date.now(),
-    type: "sync",
-    text: params.fetchedEntries > 0
-      ? `同步到 ${params.fetchedEntries} 条新开奖`
-      : "同步检查完成，无新增开奖",
-    term: params.latestTerm,
-    userId: session.userId,
-    status: params.mode,
-  });
-}
-
-function recordCanadaTrueAiPrediction(session: TgSession, prediction: string | null, source: "manual" | "auto"): void {
-  trackCanadaTrueAiMonitorSession(session);
-  canadaTrueAiRuntime.prediction = {
-    lastAt: Date.now(),
-    term: getCanadaLiveTerm(),
-    value: prediction,
-    source,
-    userId: session.userId,
-  };
-  appendCanadaTrueAiRuntimeLog({
-    ts: Date.now(),
-    type: "predict",
-    text: prediction ? `最新推理: ${prediction}` : "本轮未产出推理",
-    term: getCanadaLiveTerm(),
-    userId: session.userId,
-    prediction,
-    status: source,
-  });
-}
-
-function recordCanadaTrueAiBet(session: TgSession, record: BetRecord): void {
-  trackCanadaTrueAiMonitorSession(session);
-  canadaTrueAiRuntime.bet = {
-    lastAt: record.timestamp,
-    term: getCanadaLiveTerm(),
-    value: record.betContent,
-    status: record.status === "failed" ? "failed" : "sent",
-    userId: session.userId,
-    watchGroupId: session.watchGroupId ?? null,
-  };
-  appendCanadaTrueAiRuntimeLog({
-    ts: record.timestamp,
-    type: "bet",
-    text: record.status === "failed" ? `出手失败: ${record.betContent}` : `已出手: ${record.betContent}`,
-    term: getCanadaLiveTerm(),
-    userId: session.userId,
-    prediction: record.betContent,
-    status: record.status,
-  });
-}
-
-function recordCanadaTrueAiResult(session: TgSession, record: BetRecord): void {
-  trackCanadaTrueAiMonitorSession(session);
-  canadaTrueAiRuntime.result = {
-    lastAt: Date.now(),
-    term: record.period ?? null,
-    value: record.lotteryResult ?? null,
-    won: record.won ?? null,
-    pnl: record.pnl ?? null,
-  };
-  appendCanadaTrueAiRuntimeLog({
-    ts: Date.now(),
-    type: "result",
-    text: record.won ? `命中: ${record.betContent}` : `未中: ${record.betContent}`,
-    term: record.period ?? null,
-    userId: session.userId,
-    prediction: record.betContent,
-    actual: record.lotteryResult ?? null,
-    won: record.won ?? null,
-  });
-  updateCanadaTrueAiRuntimeMetrics();
-}
-
-function getCanadaTrueAiRuntimeStatus(): CanadaTrueAiRuntimeStatus {
-  canadaTrueAiRuntime.monitor.currentTerm = getCanadaLiveTerm();
-  return canadaTrueAiRuntime;
-}
 
 // ─── 开奖历史（最近 30 期）──────────────────────────────────────────────────
 type PeriodRecord = {
@@ -456,6 +264,17 @@ interface BetCfg {
 const LEGACY_CANADA_ALGOS = new Set<AlgorithmId>([
   "ai_trend",
   "steady_ai",
+  "canada_clone_1",
+  "canada_pro_1",
+  "canada_pro_2",
+  "canada_pro_3",
+  "canada_pro_4",
+  "canada_pro_5",
+  "canada_pro_6",
+  "canada_pro_7",
+  "canada_pro_8",
+  "canada_pro_9",
+  "canada_pro_10",
   "canada_kill",
   "canada_kill_plus",
   "canada_smart_plus",
@@ -1731,9 +1550,6 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
       wins, maxStreak: maxS,
       winRate: mainBets.length > 0 ? ((wins / mainBets.length) * 100).toFixed(2) : "0.00",
     });
-    if (!record.isChase && record.algoId === "canada_clone_1") {
-      recordCanadaTrueAiResult(session, record);
-    }
   }
 }
 
@@ -2107,16 +1923,7 @@ function buildStructuredAiFamilySignal(axis: StructuredBetAxis, family: Structur
 }
 
 function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
-  const history = recentDigits(session, CANADA_AI_HISTORY_LIMIT);
-  const truePredicted = predictCanadaTrueAiAxisSignals(axis, history).map((item: CanadaAiSignal) => ({
-    axis: item.axis,
-    family: item.family,
-    bet: item.bet,
-    tag: item.tag,
-    confidence: item.confidence,
-    strength: item.strength,
-  }));
-  return truePredicted.length > 0 ? truePredicted : structuredSignalsForAxis(session, axis);
+  return structuredSignalsForAxis(session, axis);
 }
 
 function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
@@ -4115,7 +3922,6 @@ function decideBet(session: TgSession, signalText: string): string | null {
     session.lastRawAlgoDir = raw;
     if (raw === null) session.lastStructuredBetLabels = undefined;
     if (raw !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
-    recordCanadaTrueAiPrediction(session, raw, "manual");
     return raw;
   }
   const effectiveLabels = labels.length > 0
@@ -4141,7 +3947,6 @@ function decideBetAuto(session: TgSession): string | null {
     session.lastRawAlgoDir = raw;
     if (raw === null) session.lastStructuredBetLabels = undefined;
     if (raw !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
-    recordCanadaTrueAiPrediction(session, raw, "auto");
     return raw;
   }
   const effectiveLabels = labels.length > 0
@@ -4631,10 +4436,6 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     betLog.unshift(mainRec);
     pushEvent(session, "bet:new", { bet: mainRec });
     mainRuntimeRecord = mainRec;
-  }
-
-  if (mainRuntimeRecord && mainRuntimeRecord.algoId === "canada_clone_1") {
-    recordCanadaTrueAiBet(session, mainRuntimeRecord);
   }
 
   if (structuredItems.length > 0) session.lastStructuredBetLabels = undefined;
@@ -6663,15 +6464,8 @@ async function syncCanadaAiChannelHistory(
       return false;
     }
     saveCanadaAiChannelHistory(mergedEntries);
-    await syncCanadaTrueAiDraws(mergedEntries, source);
     session.canadaAiChannelLastMsgId = mergedEntries[mergedEntries.length - 1]?.msgId ?? session.canadaAiChannelLastMsgId;
     const digitHistory = channelHistoryEntriesToDigits(mergedEntries);
-    recordCanadaTrueAiSync(session, {
-      fetchedEntries: fetchedEntries.length,
-      historySize: digitHistory.length,
-      latestTerm: mergedEntries[mergedEntries.length - 1]?.term ?? null,
-      mode,
-    });
     patchCanadaAiAdminStatus({ lastHistorySize: digitHistory.length });
     logger.info({
       channel: CANADA_AI_RESULT_CHANNEL,
@@ -7851,240 +7645,6 @@ function backtestAlgo(algoId: AlgorithmId, fullHistory: string[]): { wins: numbe
   return { wins, losses, canSimulate: true };
 }
 
-type CanadaSimAlgoId =
-  | "canada_pro_1" | "canada_pro_2" | "canada_pro_5" | "canada_pro_7" | "canada_pro_10";
-
-interface CanadaSimRowAlgo {
-  algoId: CanadaSimAlgoId;
-  prediction: string | null;
-  won: boolean | null;
-  skipped: boolean;
-  streak: number;
-}
-
-interface CanadaSimHistoryRow {
-  actual: string;
-  algos: CanadaSimRowAlgo[];
-}
-
-interface CanadaSimSummary {
-  algoId: CanadaSimAlgoId;
-  wins: number;
-  losses: number;
-  skips: number;
-  total: number;
-  winRate: string | null;
-  currentStreak: number;
-  maxWinStreak: number;
-  maxLossStreak: number;
-}
-
-const CANADA_SIM_ALGOS: CanadaSimAlgoId[] = [
-  "canada_pro_1",
-  "canada_pro_2",
-  "canada_pro_5",
-  "canada_pro_7",
-  "canada_pro_10",
-];
-
-interface CanadaSimMode {
-  betOptions: BetOption[];
-  labels: string[];
-  dualGroupMode: boolean;
-  killGroupMode: boolean;
-}
-
-interface CanadaSimModeInfo {
-  label: string;
-  labels: string[];
-  dualGroupMode: boolean;
-  killGroupMode: boolean;
-}
-
-function isBetOption(value: unknown): value is BetOption {
-  return typeof value === "string" && Object.prototype.hasOwnProperty.call(BET_OPTION_LABELS, value);
-}
-
-function resolveCanadaSimMode(cfg?: Partial<BetCfg>): CanadaSimMode {
-  const betOptions = (cfg?.betOptions ?? DEFAULT_CFG.betOptions).filter(isBetOption);
-  const safeBetOptions = betOptions.length > 0 ? betOptions : DEFAULT_CFG.betOptions;
-  const labels = [...new Set(safeBetOptions.map(option => BET_OPTION_LABELS[option]))];
-  return {
-    betOptions: safeBetOptions,
-    labels: labels.length > 0 ? labels : ["大", "小"],
-    dualGroupMode: !!cfg?.dualGroupMode,
-    killGroupMode: !!cfg?.killGroupMode,
-  };
-}
-
-function buildCanadaSimModeInfo(mode: CanadaSimMode): CanadaSimModeInfo {
-  if (mode.killGroupMode) {
-    return {
-      label: "杀组回测",
-      labels: [...KILL_GROUP_ALL].map(label => `杀${label}`),
-      dualGroupMode: false,
-      killGroupMode: true,
-    };
-  }
-  if (mode.dualGroupMode) {
-    return {
-      label: "双组回测",
-      labels: [ABC_GROUP_A, ABC_GROUP_B],
-      dualGroupMode: true,
-      killGroupMode: false,
-    };
-  }
-  if (mode.labels.every(label => label === "单" || label === "双")) {
-    return {
-      label: "单双回测",
-      labels: mode.labels,
-      dualGroupMode: false,
-      killGroupMode: false,
-    };
-  }
-  if (mode.labels.some(label => KILL_GROUP_ALL.includes(label as KillGroupOption))) {
-    return {
-      label: "组合回测",
-      labels: mode.labels,
-      dualGroupMode: false,
-      killGroupMode: false,
-    };
-  }
-  return {
-    label: "大小单双回测",
-    labels: mode.labels,
-    dualGroupMode: false,
-    killGroupMode: false,
-  };
-}
-
-function formatCanadaSimPrediction(prediction: string | null, mode: CanadaSimMode): string | null {
-  if (!prediction) return null;
-  return mode.killGroupMode ? `杀${prediction}` : prediction;
-}
-
-function didCanadaSimPredictionWin(prediction: string, actual: KillGroupOption, mode: CanadaSimMode): boolean | null {
-  if (mode.killGroupMode) return prediction !== actual;
-  const effectiveLabels = mode.dualGroupMode ? [ABC_GROUP_A, ABC_GROUP_B] : mode.labels;
-  const mappedActual = mapCanadaProHistoryLabel(actual, effectiveLabels);
-  if (!mappedActual) return null;
-  return mappedActual === prediction;
-}
-
-function createCanadaSimSession(algoId: CanadaSimAlgoId, pastSlice: string[], mode: CanadaSimMode): TgSession {
-  return {
-    recentResults: pastSlice.slice(-30),
-    lastAIBet: null,
-    currentPattern: "neutral",
-    algIndex: 0,
-    betLog: [],
-    cfg: {
-      ...DEFAULT_CFG,
-      betOptions: mode.betOptions,
-      algorithms: [algoId],
-      dualGroupMode: mode.dualGroupMode,
-      killGroupMode: mode.killGroupMode,
-      autoBet: false,
-    },
-  } as unknown as TgSession;
-}
-
-function simulateCanadaAlgoStep(
-  algoId: CanadaSimAlgoId,
-  pastSlice: string[],
-  actual: KillGroupOption,
-  mode: CanadaSimMode,
-): { prediction: string | null; won: boolean | null; skipped: boolean } {
-  const fakeSession = createCanadaSimSession(algoId, pastSlice, mode);
-  const rawPrediction = runAlgo(fakeSession, algoId, mode.labels);
-  if (!rawPrediction) return { prediction: null, won: null, skipped: true };
-  const won = didCanadaSimPredictionWin(rawPrediction, actual, mode);
-  return {
-    prediction: formatCanadaSimPrediction(rawPrediction, mode),
-    won,
-    skipped: won === null,
-  };
-}
-
-function simulateCanadaHistoryRows(
-  fullHistory: string[],
-  cfg?: Partial<Pick<BetCfg, "betOptions" | "dualGroupMode" | "killGroupMode">>,
-): { rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[]; mode: CanadaSimModeInfo } {
-  const history = fullHistory
-    .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r));
-  const MIN_HIST = 5;
-  const mode = resolveCanadaSimMode(cfg);
-  const modeInfo = buildCanadaSimModeInfo(mode);
-  const summaryMap: Record<CanadaSimAlgoId, CanadaSimSummary> = Object.fromEntries(
-    CANADA_SIM_ALGOS.map(algoId => [algoId, {
-      algoId,
-      wins: 0,
-      losses: 0,
-      skips: 0,
-      total: 0,
-      winRate: null,
-      currentStreak: 0,
-      maxWinStreak: 0,
-      maxLossStreak: 0,
-    }]),
-  ) as Record<CanadaSimAlgoId, CanadaSimSummary>;
-  const streakMap: Record<CanadaSimAlgoId, number> = Object.fromEntries(
-    CANADA_SIM_ALGOS.map(algoId => [algoId, 0]),
-  ) as Record<CanadaSimAlgoId, number>;
-  const rows: CanadaSimHistoryRow[] = [];
-
-  if (history.length <= MIN_HIST) {
-    return { rows, summary: CANADA_SIM_ALGOS.map(algoId => summaryMap[algoId]), mode: modeInfo };
-  }
-
-  const origCache = lotteryHistoryCache;
-  try {
-    for (let i = MIN_HIST; i < history.length; i++) {
-      const pastSlice = history.slice(0, i);
-      const actual = history[i]!;
-      lotteryHistoryCache = pastSlice.slice(-50);
-
-      const algos = CANADA_SIM_ALGOS.map(algoId => {
-        const step = simulateCanadaAlgoStep(algoId, pastSlice, actual, mode);
-        const summary = summaryMap[algoId];
-
-        if (step.skipped || step.won === null) {
-          summary.skips++;
-          streakMap[algoId] = 0;
-          return { algoId, prediction: step.prediction, won: null, skipped: true, streak: 0 };
-        }
-
-        summary.total++;
-        if (step.won) {
-          summary.wins++;
-          streakMap[algoId] = streakMap[algoId] > 0 ? streakMap[algoId] + 1 : 1;
-          summary.maxWinStreak = Math.max(summary.maxWinStreak, streakMap[algoId]);
-        } else {
-          summary.losses++;
-          streakMap[algoId] = streakMap[algoId] < 0 ? streakMap[algoId] - 1 : -1;
-          summary.maxLossStreak = Math.max(summary.maxLossStreak, Math.abs(streakMap[algoId]));
-        }
-        summary.currentStreak = streakMap[algoId];
-        return { algoId, prediction: step.prediction, won: step.won, skipped: false, streak: streakMap[algoId] };
-      });
-
-      rows.push({ actual, algos });
-    }
-  } finally {
-    lotteryHistoryCache = origCache;
-  }
-
-  const summary = CANADA_SIM_ALGOS.map(algoId => {
-    const item = summaryMap[algoId];
-    return {
-      ...item,
-      winRate: item.total > 0 ? ((item.wins / item.total) * 100).toFixed(1) : null,
-    };
-  });
-
-  return { rows: rows.slice(-50).reverse(), summary, mode: modeInfo };
-}
-
 router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
   if (!session) { res.json({ stats: [] }); return; }
@@ -8134,7 +7694,6 @@ router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
 // 所有可回测算法（不依赖外部信号），任意登录用户可访问，无需持有卡密
 const ALL_SIMULATABLE_ALGOS: AlgorithmId[] = [
   "adaptive_switch", "streak_follow", "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend",
-  "canada_pro_1", "canada_pro_2", "canada_pro_5", "canada_pro_7", "canada_pro_10",
 ];
 
 router.get("/tg/algo-rates", requireAuth, (req, res) => {
@@ -8188,173 +7747,6 @@ router.get("/tg/algo-rates", requireAuth, (req, res) => {
   res.json({ rates: rows, historyCount: fullHistory.length });
 });
 
-router.get("/tg/canada-sim-history", requireAuth, (req, res) => {
-  const fullHistory = [...lotteryHistoryCache];
-  const session = tgSessions.get(req.user!.userId);
-  const cfg = session?.cfg ?? loadPersistedCfg(req.user!.userId) ?? DEFAULT_CFG;
-  const { rows, summary, mode } = simulateCanadaHistoryRows(fullHistory, cfg);
-  res.json({ rows, summary, mode, historyCount: fullHistory.length });
-});
-
-interface CanadaTrueAiSimRow {
-  term: number | null;
-  actual: string;
-  prediction: string | null;
-  won: boolean | null;
-  skipped: boolean;
-  streak: number;
-  hitCount: number;
-  betCount: number;
-}
-
-let canadaTrueAiSimCache: {
-  ts: number;
-  data: {
-    summary: CanadaTrueAiSimSummary;
-    rows: CanadaTrueAiSimRow[];
-    historyCount: number;
-  };
-} | null = null;
-
-interface CanadaTrueAiSimSummary {
-  wins: number;
-  losses: number;
-  skips: number;
-  total: number;
-  winRate: string | null;
-  currentStreak: number;
-  maxWinStreak: number;
-  maxLossStreak: number;
-}
-
-function canadaDrawLabelFromDigits(digits: [number, number, number]): string {
-  const sum = digits[0] + digits[1] + digits[2];
-  return `${sum >= 14 ? "大" : "小"}${sum % 2 === 1 ? "单" : "双"}`;
-}
-
-function simulateCanadaTrueAiStep(
-  pastDigits: Array<[number, number, number]>,
-  actualDigits: [number, number, number],
-): Omit<CanadaTrueAiSimRow, "term" | "actual" | "streak"> {
-  const prevDigitsCache = lotteryDigitHistoryCache;
-  try {
-    lotteryDigitHistoryCache = [];
-    const fakeSession = {
-      recentDigitResults: pastDigits,
-      recentResults: [],
-      lastStructuredBetLabels: undefined,
-    } as unknown as TgSession;
-    const prediction = canadaClone1(fakeSession);
-    if (!prediction) {
-      return {
-        prediction: null,
-        won: null,
-        skipped: true,
-        hitCount: 0,
-        betCount: 0,
-      };
-    }
-    const parts = prediction.split("+").map(part => part.trim()).filter(isStructuredBetPart);
-    const actual = canadaDrawLabelFromDigits(actualDigits);
-    const hitCount = parts.filter(part => evaluateStructuredBetPart(part, actualDigits, actual)).length;
-    return {
-      prediction,
-      won: hitCount > 0,
-      skipped: false,
-      hitCount,
-      betCount: parts.length,
-    };
-  } finally {
-    lotteryDigitHistoryCache = prevDigitsCache;
-  }
-}
-
-async function getCanadaTrueAiSimulationStatus(): Promise<{
-  summary: CanadaTrueAiSimSummary;
-  rows: CanadaTrueAiSimRow[];
-  historyCount: number;
-}> {
-  if (canadaTrueAiSimCache && Date.now() - canadaTrueAiSimCache.ts < 30_000) {
-    return canadaTrueAiSimCache.data;
-  }
-  const drawRows = await db
-    .select({
-      term: canadaAiDraws.term,
-      digitA: canadaAiDraws.digitA,
-      digitB: canadaAiDraws.digitB,
-      digitC: canadaAiDraws.digitC,
-    })
-    .from(canadaAiDraws)
-    .where(eq(canadaAiDraws.source, "tg-channel:pc28"))
-    .orderBy(desc(canadaAiDraws.id))
-    .limit(140);
-
-  const history = [...drawRows]
-    .reverse()
-    .map(row => ({
-      term: row.term ?? null,
-      digits: [row.digitA, row.digitB, row.digitC] as [number, number, number],
-    }));
-
-  const summary: CanadaTrueAiSimSummary = {
-    wins: 0,
-    losses: 0,
-    skips: 0,
-    total: 0,
-    winRate: null,
-    currentStreak: 0,
-    maxWinStreak: 0,
-    maxLossStreak: 0,
-  };
-  const rows: CanadaTrueAiSimRow[] = [];
-  let streak = 0;
-
-  for (let i = 24; i < history.length; i++) {
-    const pastDigits = history.slice(Math.max(0, i - CANADA_AI_HISTORY_LIMIT), i).map(item => item.digits);
-    const current = history[i]!;
-    const step = simulateCanadaTrueAiStep(pastDigits, current.digits);
-    if (step.skipped || step.won === null) {
-      summary.skips++;
-      streak = 0;
-      rows.push({
-        term: current.term,
-        actual: canadaDrawLabelFromDigits(current.digits),
-        streak: 0,
-        ...step,
-      });
-      continue;
-    }
-    summary.total++;
-    if (step.won) {
-      summary.wins++;
-      streak = streak > 0 ? streak + 1 : 1;
-      summary.maxWinStreak = Math.max(summary.maxWinStreak, streak);
-    } else {
-      summary.losses++;
-      streak = streak < 0 ? streak - 1 : -1;
-      summary.maxLossStreak = Math.max(summary.maxLossStreak, Math.abs(streak));
-    }
-    summary.currentStreak = streak;
-    rows.push({
-      term: current.term,
-      actual: canadaDrawLabelFromDigits(current.digits),
-      streak,
-      ...step,
-    });
-  }
-
-  summary.winRate = summary.total > 0 ? ((summary.wins / summary.total) * 100).toFixed(1) : null;
-  const result = {
-    summary,
-    rows: rows.slice(-30).reverse(),
-    historyCount: history.length,
-  };
-  canadaTrueAiSimCache = {
-    ts: Date.now(),
-    data: result,
-  };
-  return result;
-}
 
 router.get("/tg/events", requireAuth, (req, res) => {
   const userId = req.user!.userId;
@@ -8972,62 +8364,6 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
 });
 
 router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
-  res.json(getCanadaAiAdminStatus());
-});
-
-router.get("/admin/canada-ai/true-status", requireAdminSecret, async (_req, res) => {
-  res.json(await getCanadaTrueAiAdminStatus());
-});
-
-router.get("/admin/canada-ai/runtime", requireAdminSecret, (_req, res) => {
-  res.json(getCanadaTrueAiRuntimeStatus());
-});
-
-router.get("/admin/canada-ai/true-sim", requireAdminSecret, async (_req, res) => {
-  res.json(await getCanadaTrueAiSimulationStatus());
-});
-
-router.post("/admin/canada-ai/retrain-from-channel", requireAdminSecret, async (_req, res) => {
-  const onlineSessions = [...tgSessions.values()].filter(s => !!s.me);
-  if (onlineSessions.length === 0) {
-    res.status(400).json({ error: "no_online_tg_session" });
-    return;
-  }
-  const currentStatus = getCanadaAiAdminStatus();
-  if (currentStatus.phase === "training") {
-    res.json(currentStatus);
-    return;
-  }
-  setCanadaAiAdminSource(`tg-channel:${CANADA_AI_RESULT_CHANNEL}`);
-  patchCanadaAiAdminStatus({
-    phase: "training",
-    lastStartedAt: Date.now(),
-    lastFinishedAt: null,
-    lastError: null,
-  });
-  addCanadaAiAdminLog("info", "[canada-ai] channel retrain queued", {
-    channel: CANADA_AI_RESULT_CHANNEL,
-    channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-    onlineSessions: onlineSessions.map(item => item.userId),
-  });
-  void (async () => {
-    for (const session of onlineSessions) {
-      if (await warmupCanadaAiFromChannel(session)) {
-        startCanadaAiChannelSync(session);
-        return;
-      }
-    }
-    patchCanadaAiAdminStatus({
-      phase: "error",
-      lastFinishedAt: Date.now(),
-      lastError: "pc28_channel_unreachable",
-    });
-    addCanadaAiAdminLog("warn", "[canada-ai] channel retrain failed for all sessions", {
-      channel: CANADA_AI_RESULT_CHANNEL,
-      channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-      onlineSessions: onlineSessions.map(item => item.userId),
-    });
-  })();
   res.json(getCanadaAiAdminStatus());
 });
 

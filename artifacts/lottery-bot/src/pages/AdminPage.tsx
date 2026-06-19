@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry, type CanadaAiAdminStatus, type CanadaTrueAiAdminStatus, type CanadaTrueAiRuntimeStatus, type CanadaTrueAiSimStatus } from "../lib/api";
+import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 const TYPE_LABELS: Record<string, { label: string; color: string }> = {
@@ -40,7 +40,7 @@ const PRIVATE_SUMMARY_DIRS: PrivateSummaryDir[] = ["大", "小", "单", "双", "
 export default function AdminPage() {
   const { user, logout } = useAuth();
   const [, setLocation] = useLocation();
-  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog" | "shop" | "hashmon" | "privmon" | "canadaai">("cards");
+  const [tab, setTab] = useState<"cards" | "monitor" | "users" | "pwdlog" | "shop" | "hashmon" | "privmon">("cards");
   type KillDir = "大单" | "大双" | "小单" | "小双";
   const KILL_DIRS: KillDir[] = ["大单", "大双", "小单", "小双"];
   const KILL_AMT_KEY = "hashmon_kill_amounts_v1";
@@ -146,15 +146,6 @@ export default function AdminPage() {
   const [allUsers, setAllUsers] = useState<AdminUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [promotingId, setPromotingId] = useState<number | null>(null);
-
-  // ── canada ai tab ──
-  const [canadaAiStatus, setCanadaAiStatus] = useState<CanadaAiAdminStatus | null>(null);
-  const [canadaTrueAiStatus, setCanadaTrueAiStatus] = useState<CanadaTrueAiAdminStatus | null>(null);
-  const [canadaTrueAiRuntime, setCanadaTrueAiRuntime] = useState<CanadaTrueAiRuntimeStatus | null>(null);
-  const [canadaTrueAiSim, setCanadaTrueAiSim] = useState<CanadaTrueAiSimStatus | null>(null);
-  const [loadingCanadaAi, setLoadingCanadaAi] = useState(false);
-  const [retrainingCanadaAi, setRetrainingCanadaAi] = useState(false);
-  const [canadaAiActionError, setCanadaAiActionError] = useState("");
 
   // ── 后台二级密码门控 ──
   const [secretVerified, setSecretVerified] = useState(false);
@@ -484,66 +475,14 @@ export default function AdminPage() {
     setSecretPwd("");
   };
 
-  const loadCanadaAiStatus = async () => {
-    setLoadingCanadaAi(true);
-    try {
-      const [r, trueAi, runtime] = await Promise.all([
-        api.admin.canadaAiStatus().catch(() => null),
-        api.admin.canadaTrueAiStatus().catch(() => null),
-        api.admin.canadaTrueAiRuntime().catch(() => null),
-      ]);
-      setCanadaAiStatus(r);
-      setCanadaTrueAiStatus(trueAi);
-      setCanadaTrueAiRuntime(runtime);
-    } finally {
-      setLoadingCanadaAi(false);
-    }
-  };
-
-  const loadCanadaAiSim = async () => {
-    const trueAiSim = await api.admin.canadaTrueAiSim().catch(() => null);
-    setCanadaTrueAiSim(trueAiSim);
-  };
-
-  const retrainCanadaAiFromChannel = async () => {
-    setRetrainingCanadaAi(true);
-    setCanadaAiActionError("");
-    try {
-      const r = await api.admin.retrainCanadaAiFromChannel();
-      setCanadaAiStatus(r);
-      const [trueAi, runtime] = await Promise.all([
-        api.admin.canadaTrueAiStatus().catch(() => null),
-        api.admin.canadaTrueAiRuntime().catch(() => null),
-      ]);
-      setCanadaTrueAiStatus(trueAi);
-      setCanadaTrueAiRuntime(runtime);
-    } catch (err) {
-      setCanadaAiActionError(err instanceof Error ? err.message : "频道重训失败");
-    } finally {
-      setRetrainingCanadaAi(false);
-    }
-  };
-
   useEffect(() => {
     if (tab === "monitor") void loadSessions();
     if (tab === "users") void loadUsers();
     if (tab === "pwdlog") void loadPwdLog(pwdLogDate);
     if (tab === "shop") void loadShop();
-    if (tab === "canadaai") {
-      void loadCanadaAiStatus();
-      setCanadaTrueAiSim(null);
-    }
     if (tab === "hashmon") void loadCanadaGroups();
     if (tab === "privmon") void loadPrivateGroups();
   }, [tab]);
-
-  useEffect(() => {
-    if (tab !== "canadaai" || !secretVerified) return;
-    const id = setInterval(() => {
-      void loadCanadaAiStatus();
-    }, 10000);
-    return () => clearInterval(id);
-  }, [tab, secretVerified]);
 
   // 1s 心跳：驱动"X秒前"新鲜度显示
   useEffect(() => {
@@ -942,10 +881,10 @@ export default function AdminPage() {
           </div>
         </div>
         <div className="max-w-3xl mx-auto px-4 flex gap-1 pb-2 flex-wrap">
-          {(["cards", "monitor", "users", "pwdlog", "shop", "canadaai", "hashmon", "privmon"] as const).map(t => (
+          {(["cards", "monitor", "users", "pwdlog", "shop", "hashmon", "privmon"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
               className={`text-sm px-4 py-1.5 rounded-lg transition font-medium ${tab === t ? "bg-blue-600 text-white" : "text-slate-400 hover:text-slate-200"}`}>
-              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : t === "canadaai" ? "🤖 AI训练" : t === "hashmon" ? "🍁 加拿大监控" : "🧩 新群监控"}
+              {t === "cards" ? "卡密管理" : t === "monitor" ? "用户监控" : t === "users" ? "账号管理" : t === "pwdlog" ? "🔑 密码日志" : t === "shop" ? "🛒 商店" : t === "hashmon" ? "🍁 加拿大监控" : "🧩 新群监控"}
             </button>
           ))}
         </div>
@@ -1848,314 +1787,6 @@ export default function AdminPage() {
                   ))}
                 </div>
               </div>
-            )}
-          </>
-        )}
-
-        {tab === "canadaai" && (
-          <>
-            <div className="flex justify-between items-center">
-              <div className="text-slate-400 text-sm">加拿大真AI主系统</div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => void retrainCanadaAiFromChannel()}
-                  disabled={loadingCanadaAi || retrainingCanadaAi}
-                  className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 px-3 py-1 rounded-lg transition disabled:opacity-50"
-                >
-                  {retrainingCanadaAi ? "重训中..." : "从@pc28重训"}
-                </button>
-                <button
-                  onClick={() => void loadCanadaAiStatus()}
-                  disabled={loadingCanadaAi || retrainingCanadaAi}
-                  className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-3 py-1 rounded-lg transition disabled:opacity-50"
-                >
-                  {loadingCanadaAi ? "刷新中..." : "刷新"}
-                </button>
-              </div>
-            </div>
-
-            {canadaAiActionError && (
-              <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
-                操作失败：{canadaAiActionError}
-              </div>
-            )}
-
-            {!canadaTrueAiStatus && !canadaAiStatus ? (
-              <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-10 text-center text-slate-600">
-                {loadingCanadaAi ? "加载中..." : "暂无 AI 训练数据"}
-              </div>
-            ) : (
-              <>
-                {!canadaTrueAiStatus ? (
-                  <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-6 text-sm text-slate-500">
-                    真AI状态暂未接入或数据库表尚未初始化
-                  </div>
-                ) : (
-                  <>
-                    <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className="text-base font-bold text-emerald-400">
-                          {canadaTrueAiRuntime?.sync.latestTerm ?? "-"}
-                        </div>
-                        <div className="text-slate-500 text-xs mt-0.5">最新同步期号</div>
-                      </div>
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className={`text-base font-bold ${canadaTrueAiRuntime?.prediction.value ? "text-emerald-400" : "text-slate-300"}`}>
-                          {canadaTrueAiRuntime?.prediction.value ?? "暂无"}
-                        </div>
-                        <div className="text-slate-500 text-xs mt-0.5">最近推理</div>
-                      </div>
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className={`text-base font-bold ${
-                          canadaTrueAiRuntime?.bet.status === "sent" ? "text-emerald-400"
-                            : canadaTrueAiRuntime?.bet.status === "failed" ? "text-red-400"
-                              : "text-slate-300"
-                        }`}>
-                          {canadaTrueAiRuntime?.bet.status === "sent" ? "已出手" : canadaTrueAiRuntime?.bet.status === "failed" ? "失败" : "暂无"}
-                        </div>
-                        <div className="text-slate-500 text-xs mt-0.5">最近出手</div>
-                      </div>
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className="text-base font-bold text-white">{canadaTrueAiRuntime?.metrics.winRate ?? "-"}</div>
-                        <div className="text-slate-500 text-xs mt-0.5">实时命中率</div>
-                      </div>
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className="text-base font-bold text-white">{canadaTrueAiRuntime?.monitor.currentTerm ?? "-"}</div>
-                        <div className="text-slate-500 text-xs mt-0.5">当前监控期号</div>
-                      </div>
-                    </div>
-
-                    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-                      <div className="px-5 py-3 border-b border-[#252a3d]">
-                        <h2 className="text-white font-semibold text-sm">实时运行监控</h2>
-                      </div>
-                      <div className="px-5 py-4 space-y-4 text-sm">
-                        <div className="text-xs rounded-lg px-3 py-2 border text-emerald-200 bg-emerald-500/10 border-emerald-500/20">
-                          这里显示的是 `canada_clone_1` 真正的运行数据，不再只看训练快照。
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                          <div>
-                            <div className="text-slate-500 mb-1">最近检查时间</div>
-                            <div className="text-slate-200">{canadaTrueAiRuntime?.sync.lastCheckedAt ? fmtTime(canadaTrueAiRuntime.sync.lastCheckedAt) : "-"}</div>
-                          </div>
-                          <div>
-                            <div className="text-slate-500 mb-1">最近推理时间</div>
-                            <div className="text-slate-200">{canadaTrueAiRuntime?.prediction.lastAt ? fmtTime(canadaTrueAiRuntime.prediction.lastAt) : "-"}</div>
-                          </div>
-                          <div>
-                            <div className="text-slate-500 mb-1">最近出手内容</div>
-                            <div className="text-slate-200 break-all">{canadaTrueAiRuntime?.bet.value ?? "-"}</div>
-                          </div>
-                          <div>
-                            <div className="text-slate-500 mb-1">最近开奖结果</div>
-                            <div className={`${canadaTrueAiRuntime?.result.won ? "text-emerald-400" : canadaTrueAiRuntime?.result.won === false ? "text-red-400" : "text-slate-200"}`}>
-                              {canadaTrueAiRuntime?.result.value ?? "-"}
-                              {canadaTrueAiRuntime?.result.won === true ? " · 命中" : canadaTrueAiRuntime?.result.won === false ? " · 未中" : ""}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-                          <div>
-                            <div className="text-slate-500 mb-1">自动投注</div>
-                            <div className={`${canadaTrueAiRuntime?.monitor.autoBetEnabled ? "text-emerald-400" : "text-yellow-300"}`}>
-                              {canadaTrueAiRuntime?.monitor.autoBetEnabled ? "已开启" : "未开启"}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-slate-500 mb-1">监控账号</div>
-                            <div className="text-slate-200">{canadaTrueAiRuntime?.monitor.activeUserId ?? "-"}</div>
-                          </div>
-                          <div>
-                            <div className="text-slate-500 mb-1">监控群组</div>
-                            <div className="text-slate-200 break-all">{canadaTrueAiRuntime?.monitor.watchGroupId ?? "-"}</div>
-                          </div>
-                          <div>
-                            <div className="text-slate-500 mb-1">近期开奖入库</div>
-                            <div className="text-slate-200">{canadaTrueAiStatus.drawCount}</div>
-                          </div>
-                          <div>
-                            <div className="text-slate-500 mb-1">最近新增开奖</div>
-                            <div className="text-slate-200">{canadaTrueAiRuntime?.sync.lastUpdatedAt ? fmtTime(canadaTrueAiRuntime.sync.lastUpdatedAt) : "-"}</div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-                      <div className="px-5 py-3 border-b border-[#252a3d]">
-                        <h2 className="text-white font-semibold text-sm">最近运行日志</h2>
-                      </div>
-                      {!(canadaTrueAiRuntime?.recentLogs.length) ? (
-                        <div className="px-5 py-6 text-sm text-slate-500">暂无实时运行日志，等待下一次同步、推理、出手或结算。</div>
-                      ) : (
-                        <div className="divide-y divide-[#1e2235] max-h-[360px] overflow-y-auto">
-                          {(canadaTrueAiRuntime?.recentLogs ?? []).map((log, index) => (
-                            <div key={`${log.ts}-${index}`} className="px-4 py-3">
-                              <div className="flex items-center gap-2 flex-wrap text-[11px]">
-                                <span className="text-slate-500">{fmtTime(log.ts)}</span>
-                                <span className="text-blue-300 border border-blue-500/20 bg-blue-500/10 rounded px-1.5 py-0.5">{log.type}</span>
-                                <span className="text-slate-500">期号 {log.term ?? "-"}</span>
-                                <span className="text-slate-500">账号 {log.userId ?? "-"}</span>
-                              </div>
-                              <div className="text-slate-200 text-sm mt-1">{log.text}</div>
-                              {(log.prediction || log.actual || log.status) && (
-                                <div className="text-[11px] text-slate-500 mt-1">
-                                  {log.prediction ? `推理: ${log.prediction}` : ""}
-                                  {log.actual ? ` · 开奖: ${log.actual}` : ""}
-                                  {log.status ? ` · 状态: ${log.status}` : ""}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-                        <div className="px-5 py-3 border-b border-[#252a3d]">
-                          <h2 className="text-white font-semibold text-sm">最近训练任务</h2>
-                        </div>
-                        <div className="px-5 py-4 space-y-2">
-                          <div className="text-slate-200">状态：{canadaTrueAiStatus.latestJob?.status || "-"}</div>
-                          <div className="text-slate-200">来源：{canadaTrueAiStatus.latestJob?.source || "-"}</div>
-                          <div className="text-slate-200">触发：{canadaTrueAiStatus.latestJob?.trigger || "-"}</div>
-                          <div className="text-slate-200">样本：{canadaTrueAiStatus.latestJob?.historySize ?? "-"}</div>
-                          <div className="text-slate-200">开始：{canadaTrueAiStatus.latestJob?.startedAt ? fmtTime(canadaTrueAiStatus.latestJob.startedAt) : "-"}</div>
-                          <div className="text-slate-200">结束：{canadaTrueAiStatus.latestJob?.finishedAt ? fmtTime(canadaTrueAiStatus.latestJob.finishedAt) : "-"}</div>
-                          {canadaTrueAiStatus.latestJob?.errorText && (
-                            <div className="text-red-400">错误：{canadaTrueAiStatus.latestJob.errorText}</div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-                        <div className="px-5 py-3 border-b border-[#252a3d]">
-                          <h2 className="text-white font-semibold text-sm">当前激活模型</h2>
-                        </div>
-                        <div className="px-5 py-4 space-y-2">
-                          <div className="text-slate-200 break-all">版本：{canadaTrueAiStatus.activeModel?.version || "-"}</div>
-                          <div className="text-slate-200">状态：{canadaTrueAiStatus.activeModel?.status || "-"}</div>
-                          <div className="text-slate-200">训练样本：{canadaTrueAiStatus.activeModel?.historySize ?? "-"}</div>
-                          <div className="text-slate-200">回看窗口：{canadaTrueAiStatus.activeModel?.lookback ?? "-"}</div>
-                          <div className="text-slate-200">预测头：{canadaTrueAiStatus.activeModel?.headCount ?? "-"}</div>
-                          <div className="text-slate-200">平均准确率：{fmtPct(canadaTrueAiStatus.activeModel?.accuracyAvg)}</div>
-                          <div className="text-slate-200">最弱头准确率：{fmtPct(canadaTrueAiStatus.activeModel?.accuracyMin)}</div>
-                          <div className="text-slate-200 break-all">文件：{canadaTrueAiStatus.activeModel?.artifactPath || "-"}</div>
-                          <div className={`${canadaTrueAiStatus.activeModel?.fileExists ? "text-emerald-400" : "text-red-400"}`}>
-                            {canadaTrueAiStatus.activeModel?.fileExists ? "模型文件已生成" : "模型文件不存在"}
-                          </div>
-                          <div className="text-slate-200">训练时间：{canadaTrueAiStatus.activeModel?.trainedAt ? fmtTime(canadaTrueAiStatus.activeModel.trainedAt) : "-"}</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-                      <div className="px-5 py-3 border-b border-[#252a3d] flex items-center justify-between gap-3">
-                        <h2 className="text-white font-semibold text-sm">模拟实战</h2>
-                        <button
-                          onClick={() => void loadCanadaAiSim()}
-                          className="text-[11px] text-blue-300 border border-blue-500/30 px-3 py-1 rounded-lg hover:text-blue-200 hover:border-blue-400/40 transition"
-                        >
-                          手动加载
-                        </button>
-                      </div>
-                      {!canadaTrueAiSim ? (
-                        <div className="px-5 py-6 text-sm text-slate-500">默认不自动加载模拟实战，点右上角“手动加载”再看日志和命中率。</div>
-                      ) : (
-                        <div className="px-5 py-4 space-y-4 text-sm">
-                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
-                            <div>
-                              <div className="text-slate-500 mb-1">模拟命中率</div>
-                              <div className="text-slate-200">{canadaTrueAiSim.summary.winRate ? `${canadaTrueAiSim.summary.winRate}%` : "-"}</div>
-                            </div>
-                            <div>
-                              <div className="text-slate-500 mb-1">命中/未中</div>
-                              <div className="text-slate-200">{canadaTrueAiSim.summary.wins}/{canadaTrueAiSim.summary.losses}</div>
-                            </div>
-                            <div>
-                              <div className="text-slate-500 mb-1">跳过</div>
-                              <div className="text-slate-200">{canadaTrueAiSim.summary.skips}</div>
-                            </div>
-                            <div>
-                              <div className="text-slate-500 mb-1">当前连绩</div>
-                              <div className="text-slate-200">{canadaTrueAiSim.summary.currentStreak > 0 ? `${canadaTrueAiSim.summary.currentStreak}连中` : canadaTrueAiSim.summary.currentStreak < 0 ? `${Math.abs(canadaTrueAiSim.summary.currentStreak)}连未` : "无连"}</div>
-                            </div>
-                            <div>
-                              <div className="text-slate-500 mb-1">历史样本</div>
-                              <div className="text-slate-200">{canadaTrueAiSim.historyCount}</div>
-                            </div>
-                          </div>
-                          <div className="bg-[#0f1220] border border-[#252a3d] rounded-xl overflow-hidden">
-                            <div className="grid grid-cols-[88px_88px_1fr_82px_82px] gap-2 px-4 py-2 text-[11px] text-slate-500 border-b border-[#252a3d]">
-                              <div>期号</div>
-                              <div>实际</div>
-                              <div>模拟下单</div>
-                              <div>命中</div>
-                              <div>状态</div>
-                            </div>
-                            <div className="max-h-[360px] overflow-y-auto divide-y divide-[#1e2235]">
-                              {canadaTrueAiSim.rows.map((row, index) => (
-                                <div key={`${row.term ?? "na"}-${index}`} className="grid grid-cols-[88px_88px_1fr_82px_82px] gap-2 px-4 py-3 text-xs items-center">
-                                  <div className="text-slate-400">{row.term ?? "-"}</div>
-                                  <div className="text-slate-200">{row.actual}</div>
-                                  <div className="text-slate-200 break-all">{row.prediction || "-"}</div>
-                                  <div className="text-slate-300">{row.betCount > 0 ? `${row.hitCount}/${row.betCount}` : "-"}</div>
-                                  <div className={
-                                    row.skipped
-                                      ? "text-slate-500"
-                                      : row.won
-                                        ? "text-emerald-400"
-                                        : "text-red-400"
-                                  }>
-                                    {row.skipped ? "跳过" : row.won ? "命中" : "未中"}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-
-                <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-                  <div className="px-5 py-3 border-b border-[#252a3d]">
-                    <h2 className="text-white font-semibold text-sm">兼容训练日志</h2>
-                  </div>
-                  <div className="px-5 py-3 text-[11px] text-slate-500 border-b border-[#252a3d]">
-                    旧轻量链路已降级为兼容日志来源，不再作为主展示或主推理。
-                  </div>
-                  {(canadaAiStatus?.recentLogs.length ?? 0) === 0 ? (
-                    <div className="text-center text-slate-600 py-10 text-sm">暂无训练日志</div>
-                  ) : (
-                    <div className="divide-y divide-[#1e2235] max-h-[420px] overflow-y-auto">
-                      {(canadaAiStatus?.recentLogs ?? []).map((log, index) => (
-                        <div key={`${log.ts}-${index}`} className="px-4 py-3">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-slate-500 text-[10px]">{fmtTime(log.ts)}</span>
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
-                              log.level === "error"
-                                ? "text-red-400 border-red-500/30 bg-red-500/10"
-                                : log.level === "warn"
-                                  ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/10"
-                                  : "text-emerald-400 border-emerald-500/30 bg-emerald-500/10"
-                            }`}>
-                              {log.level}
-                            </span>
-                          </div>
-                          <div className="text-slate-200 text-sm mt-1">{log.message}</div>
-                          {log.meta && (
-                            <pre className="mt-2 text-[10px] text-slate-500 bg-[#0f1220] border border-[#252a3d] rounded-lg p-2 overflow-x-auto whitespace-pre-wrap">
-{JSON.stringify(log.meta, null, 2)}
-                            </pre>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </>
             )}
           </>
         )}

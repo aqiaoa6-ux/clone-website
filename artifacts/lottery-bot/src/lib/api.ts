@@ -31,10 +31,6 @@ export const api = {
 
   admin: {
     canadaAiStatus: () => api.get<CanadaAiAdminStatus>("/admin/canada-ai/status"),
-    canadaTrueAiStatus: () => api.get<CanadaTrueAiAdminStatus>("/admin/canada-ai/true-status"),
-    canadaTrueAiRuntime: () => api.get<CanadaTrueAiRuntimeStatus>("/admin/canada-ai/runtime"),
-    canadaTrueAiSim: () => api.get<CanadaTrueAiSimStatus>("/admin/canada-ai/true-sim"),
-    retrainCanadaAiFromChannel: () => api.post<CanadaAiAdminStatus>("/admin/canada-ai/retrain-from-channel", {}),
     hashGroupBets: () => api.get<{ period: string | null; bets: GroupBetEntry[]; totals: { kk: number; usdt: number; cny: number } }>("/admin/hash-group-bets"),
     canadaMonitorGroups: () => api.get<{ groups: { groupId: string; groupTitle: string | undefined; userId: number; active: boolean }[] }>("/admin/canada-monitor-groups"),
     addCanadaMonitorGroup: (groupId: string) => api.post<{ ok: boolean; groupId: string; groupTitle: string; userId: number }>("/admin/canada-monitor-groups/add", { groupId }),
@@ -82,7 +78,6 @@ export const api = {
     clearBets: () => api.del<{ ok: boolean }>("/tg/bets"),
     algoLeaderboard: () => api.get<{ stats: AlgoStat[] }>("/tg/algo-leaderboard"),
     algoRates: () => api.get<{ rates: AlgoRate[]; historyCount: number }>("/tg/algo-rates"),
-    canadaSimHistory: () => api.get<{ rows: CanadaSimHistoryRow[]; summary: CanadaSimSummary[]; mode: CanadaSimModeInfo; historyCount: number }>("/tg/canada-sim-history"),
     setKkpay: (username: string) => api.post<{ ok: boolean }>("/tg/kkpay", { username }),
     debugGroup: () => api.get<{ ok: boolean; watchGroupId?: string; messages?: Array<{ id: number; text: string; ts: number; hasMedia: boolean }>; error?: string }>("/tg/debug-group"),
   },
@@ -353,134 +348,6 @@ export interface CanadaAiAdminStatus {
   recentLogs: CanadaAiAdminLogEntry[];
 }
 
-export interface CanadaTrueAiAdminStatus {
-  drawCount: number;
-  readiness: {
-    ready: boolean;
-    score: number;
-    reason: string | null;
-    requiredHistorySize: number;
-    requiredHeadCount: number;
-    requiredAccuracyAvg: number;
-    requiredAccuracyMin: number;
-    historySize: number;
-    headCount: number;
-    accuracyAvg: number | null;
-    accuracyMin: number | null;
-    modelFileExists: boolean;
-  };
-  latestJob: {
-    id: number;
-    status: string;
-    source: string;
-    trigger: string;
-    historySize: number;
-    startedAt: number | null;
-    finishedAt: number | null;
-    errorText: string | null;
-  } | null;
-  activeModel: {
-    id: number;
-    version: string;
-    status: string;
-    historySize: number;
-    lookback: number;
-    artifactPath: string | null;
-    trainedAt: number | null;
-    activatedAt: number | null;
-    fileExists: boolean;
-    headCount: number;
-    accuracyAvg: number | null;
-    accuracyMin: number | null;
-    metrics: Record<string, unknown> | null;
-  } | null;
-}
-
-export interface CanadaTrueAiSimSummary {
-  wins: number;
-  losses: number;
-  skips: number;
-  total: number;
-  winRate: string | null;
-  currentStreak: number;
-  maxWinStreak: number;
-  maxLossStreak: number;
-}
-
-export interface CanadaTrueAiSimRow {
-  term: number | null;
-  actual: string;
-  prediction: string | null;
-  won: boolean | null;
-  skipped: boolean;
-  streak: number;
-  hitCount: number;
-  betCount: number;
-}
-
-export interface CanadaTrueAiSimStatus {
-  summary: CanadaTrueAiSimSummary;
-  rows: CanadaTrueAiSimRow[];
-  historyCount: number;
-}
-
-export interface CanadaTrueAiRuntimeLogEntry {
-  ts: number;
-  type: "sync" | "predict" | "bet" | "result";
-  text: string;
-  term: number | null;
-  userId: number | null;
-  prediction?: string | null;
-  actual?: string | null;
-  status?: string | null;
-  won?: boolean | null;
-}
-
-export interface CanadaTrueAiRuntimeStatus {
-  sync: {
-    lastCheckedAt: number | null;
-    lastUpdatedAt: number | null;
-    latestTerm: number | null;
-    fetchedEntries: number;
-    historySize: number;
-  };
-  prediction: {
-    lastAt: number | null;
-    term: number | null;
-    value: string | null;
-    source: "manual" | "auto" | null;
-    userId: number | null;
-  };
-  bet: {
-    lastAt: number | null;
-    term: number | null;
-    value: string | null;
-    status: "sent" | "failed" | null;
-    userId: number | null;
-    watchGroupId: string | null;
-  };
-  result: {
-    lastAt: number | null;
-    term: number | null;
-    value: string | null;
-    won: boolean | null;
-    pnl: number | null;
-  };
-  metrics: {
-    settled: number;
-    wins: number;
-    losses: number;
-    winRate: string | null;
-  };
-  monitor: {
-    currentTerm: number | null;
-    activeUserId: number | null;
-    watchGroupId: string | null;
-    autoBetEnabled: boolean;
-  };
-  recentLogs: CanadaTrueAiRuntimeLogEntry[];
-}
-
 export interface BetRecord {
   id: string;
   groupId: string;
@@ -524,38 +391,6 @@ export interface AlgoStat {
   total: number;
   winRate: string | null;
   pnl: number;
-}
-
-export interface CanadaSimAlgoEntry {
-  algoId: string;
-  prediction: string | null;
-  won: boolean | null;
-  skipped: boolean;
-  streak: number;
-}
-
-export interface CanadaSimHistoryRow {
-  actual: string;
-  algos: CanadaSimAlgoEntry[];
-}
-
-export interface CanadaSimModeInfo {
-  label: string;
-  labels: string[];
-  dualGroupMode: boolean;
-  killGroupMode: boolean;
-}
-
-export interface CanadaSimSummary {
-  algoId: string;
-  wins: number;
-  losses: number;
-  skips: number;
-  total: number;
-  winRate: string | null;
-  currentStreak: number;
-  maxWinStreak: number;
-  maxLossStreak: number;
 }
 
 export interface TgChatMessage {

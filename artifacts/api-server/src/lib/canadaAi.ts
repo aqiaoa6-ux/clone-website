@@ -1,15 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  buildCanadaTrueAiSequenceDataset,
-  completeCanadaTrueAiTrainingJob,
-  createCanadaTrueAiTrainingJob,
-  DEFAULT_TRUE_AI_MODEL_PATH,
-  failCanadaTrueAiTrainingJob,
-  saveCanadaTrueAiModel,
-  trainCanadaTrueAiModel,
-} from "./canadaTrueAi";
 import { logger } from "./logger";
 
 export type CanadaAiAxis = "A" | "B" | "C" | "S";
@@ -759,13 +750,6 @@ export async function warmupCanadaAiModelFromHistory(
   canadaAiStatus.lastSource = source;
   canadaAiStatus.lastError = null;
   logCanadaAi("info", "[canada-ai] history warmup started", { source, historySize: digitHistory.length, filePath });
-  const dataset = buildCanadaTrueAiSequenceDataset(digitHistory);
-  const jobId = await createCanadaTrueAiTrainingJob({
-    source,
-    trigger: "history-warmup",
-    historySize: digitHistory.length,
-    lookback: dataset.summary.lookback,
-  });
   try {
     const bundle = ensureCanadaAiModel(digitHistory, filePath);
     if (!bundle) {
@@ -773,36 +757,11 @@ export async function warmupCanadaAiModelFromHistory(
       canadaAiStatus.lastFinishedAt = Date.now();
       canadaAiStatus.lastHistorySize = digitHistory.length;
       canadaAiStatus.lastError = "insufficient history";
-      await failCanadaTrueAiTrainingJob(jobId, "insufficient history");
       logCanadaAi("warn", "[canada-ai] history warmup skipped, insufficient history", { source, historySize: digitHistory.length });
       return null;
     }
     updateCanadaAiReady(bundle, filePath);
     canadaAiStatus.lastSource = source;
-    const trueBundle = trainCanadaTrueAiModel(digitHistory);
-    if (trueBundle) saveCanadaTrueAiModel(trueBundle, DEFAULT_TRUE_AI_MODEL_PATH);
-    const trueAiAccuracyAvg = trueBundle && trueBundle.heads.length > 0
-      ? trueBundle.heads.reduce((sum, head) => sum + head.accuracy, 0) / trueBundle.heads.length
-      : null;
-    const trueAiAccuracyMin = trueBundle && trueBundle.heads.length > 0
-      ? trueBundle.heads.reduce((min, head) => Math.min(min, head.accuracy), trueBundle.heads[0]!.accuracy)
-      : null;
-    await completeCanadaTrueAiTrainingJob({
-      jobId,
-      historySize: bundle.historySize,
-      artifactPath: trueBundle ? DEFAULT_TRUE_AI_MODEL_PATH : filePath,
-      activate: true,
-      metrics: {
-        modelCount: bundle.models.length,
-        accuracyAvg: averageAccuracy(bundle.models),
-        trainedAt: bundle.trainedAt,
-        dataset: dataset.summary,
-        trueAiHistorySize: trueBundle?.historySize ?? 0,
-        trueAiHeadCount: trueBundle?.heads.length ?? 0,
-        trueAiAccuracyAvg,
-        trueAiAccuracyMin,
-      },
-    });
     logCanadaAi("info", "[canada-ai] history warmup completed", {
       source,
       historySize: bundle.historySize,
@@ -819,7 +778,6 @@ export async function warmupCanadaAiModelFromHistory(
     canadaAiStatus.modelExists = fs.existsSync(filePath);
     canadaAiStatus.lastError = normalizeErrorMessage(err);
     canadaAiStatus.lastSource = source;
-    await failCanadaTrueAiTrainingJob(jobId, normalizeErrorMessage(err));
     logCanadaAi("error", "[canada-ai] history warmup failed", {
       source,
       filePath,
