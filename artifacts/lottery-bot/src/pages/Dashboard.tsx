@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api, type TgStatus, type BetRecord, type TgGroup } from "../lib/api";
@@ -940,6 +940,13 @@ export default function Dashboard() {
   const [debugLoading, setDebugLoading] = useState(false);
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
+  const statusRef = useRef<TgStatus | null>(null);
+  const statusRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const betsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   // ─── Fetch lottery draw data ─────────────────────────────────────────────
 
@@ -994,7 +1001,7 @@ export default function Dashboard() {
           setTgStep("ready");
           return;
         }
-        if (status?.watchGroupId) {
+        if (statusRef.current?.watchGroupId) {
           setTgStep("ready");
           return;
         }
@@ -1003,7 +1010,7 @@ export default function Dashboard() {
       }
       setTgStep("ready");
     } catch { setTgStep("login"); }
-  }, [status?.watchGroupId]);
+  }, []);
 
   const fetchBets = useCallback(async () => {
     try {
@@ -1011,6 +1018,22 @@ export default function Dashboard() {
       setBets(b);
     } catch { /* ignore */ }
   }, []);
+
+  const scheduleFetchStatus = useCallback((delay = 250) => {
+    if (statusRefreshTimerRef.current) clearTimeout(statusRefreshTimerRef.current);
+    statusRefreshTimerRef.current = setTimeout(() => {
+      statusRefreshTimerRef.current = null;
+      void fetchStatus();
+    }, delay);
+  }, [fetchStatus]);
+
+  const scheduleFetchBets = useCallback((delay = 250) => {
+    if (betsRefreshTimerRef.current) clearTimeout(betsRefreshTimerRef.current);
+    betsRefreshTimerRef.current = setTimeout(() => {
+      betsRefreshTimerRef.current = null;
+      void fetchBets();
+    }, delay);
+  }, [fetchBets]);
 
   // ─── SSE stream ──────────────────────────────────────────────────────────
 
@@ -1042,16 +1065,14 @@ export default function Dashboard() {
           const term = ev.term as number;
           const s1 = ev.sum1 as number, s2 = ev.sum2 as number, s3 = ev.sum3 as number;
           setDraw({ term: term + (closeMs < nowT ? 1 : 0), sum1: s1, sum2: s2, sum3: s3, r3: ev.r3 as string, nextCloseTime: nextCloseRef.current });
-          // 新期开盘时立即重拉 fengpan 数据，确保近期结果与走势页完全同步
-          void fetchDraw();
         }
         if (ev.type === "timer:scheduled") {
           if (ev.fireAt) setNextBetAt(ev.fireAt as number);
         }
         if (ev.type === "bet:new" || ev.type === "bet:result") {
-          void fetchBets();
+          scheduleFetchBets();
           if (ev.type === "bet:result") {
-            void fetchStatus();
+            scheduleFetchStatus();
           }
         }
         if (ev.type === "balance:update") {
@@ -1059,13 +1080,13 @@ export default function Dashboard() {
         }
         if (ev.type === "chase:won_stop") {
           // 追号中奖，后端已自动关闭 enableChase，刷新 status 以同步配置
-          void fetchStatus();
+          scheduleFetchStatus();
         }
         if (ev.type === "bet:alert") {
           const msg = ev.msg as string;
           setSseAlert(msg);
           // Auto-stop detected on backend; sync status so the toggle reflects the new state
-          void fetchStatus();
+          scheduleFetchStatus();
         }
         if (ev.type === "kuaisan:phase") {
           setKuaisanPhase(ev.phase as string);
@@ -1083,8 +1104,8 @@ export default function Dashboard() {
             sum: ev.sum as number,
             leopard: ev.leopard as boolean,
           }, ...prev].slice(0, 30));
-          void fetchBets();
-          void fetchStatus();
+          scheduleFetchBets();
+          scheduleFetchStatus();
         }
         if (ev.type === "hash:phase") {
           setHashPhase(ev.phase as string);
@@ -1098,8 +1119,8 @@ export default function Dashboard() {
             big: ev.big as boolean,
             odd: ev.odd as boolean,
           }, ...prev].slice(0, 30));
-          void fetchBets();
-          void fetchStatus();
+          scheduleFetchBets();
+          scheduleFetchStatus();
         }
       } catch { /* ignore */ }
       };
@@ -1109,9 +1130,11 @@ export default function Dashboard() {
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (statusRefreshTimerRef.current) clearTimeout(statusRefreshTimerRef.current);
+      if (betsRefreshTimerRef.current) clearTimeout(betsRefreshTimerRef.current);
       if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
     };
-  }, [fetchBets, fetchStatus]);
+  }, [fetchDraw, scheduleFetchBets, scheduleFetchStatus]);
 
   // ─── Init & polling ──────────────────────────────────────────────────────
 
@@ -1120,7 +1143,7 @@ export default function Dashboard() {
     void fetchBets();
     void fetchDraw();
     const statusInterval = setInterval(() => void fetchStatus(), 10_000);
-    const drawInterval = setInterval(() => void fetchDraw(), 15_000);
+    const drawInterval = setInterval(() => void fetchDraw(), 30_000);
     const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
     return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
   }, [fetchStatus, fetchBets, fetchDraw]);
@@ -1132,15 +1155,29 @@ export default function Dashboard() {
   const cardExpiry = card?.expiresAt ? new Date(card.expiresAt) : null;
   const cardDaysLeft = cardExpiry ? Math.ceil((cardExpiry.getTime() - Date.now()) / 86400000) : 0;
 
-  const mainBets = bets.filter(b => !b.isChase);
-  const settled = mainBets.filter(b => b.won !== undefined);
-  const wins = settled.filter(b => b.won === true).length;
-  const winRate = settled.length > 0 ? ((wins / settled.length) * 100).toFixed(1) : "0.0";
-  let maxStreak = 0, curStreak = 0;
-  for (const b of [...mainBets].reverse()) {
-    if (b.won === true) { curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
-    else if (b.won === false) curStreak = 0;
-  }
+  const { mainBets, settled, wins, winRate, maxStreak } = useMemo(() => {
+    const nextMainBets = bets.filter(b => !b.isChase);
+    const nextSettled = nextMainBets.filter(b => b.won !== undefined);
+    const nextWins = nextSettled.filter(b => b.won === true).length;
+    let nextMaxStreak = 0;
+    let curStreak = 0;
+    for (let i = nextMainBets.length - 1; i >= 0; i--) {
+      const bet = nextMainBets[i]!;
+      if (bet.won === true) {
+        curStreak++;
+        if (curStreak > nextMaxStreak) nextMaxStreak = curStreak;
+      } else if (bet.won === false) {
+        curStreak = 0;
+      }
+    }
+    return {
+      mainBets: nextMainBets,
+      settled: nextSettled,
+      wins: nextWins,
+      winRate: nextSettled.length > 0 ? ((nextWins / nextSettled.length) * 100).toFixed(1) : "0.0",
+      maxStreak: nextMaxStreak,
+    };
+  }, [bets]);
 
   // ─── Actions ─────────────────────────────────────────────────────────────
 

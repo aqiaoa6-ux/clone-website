@@ -4476,10 +4476,9 @@ async function placeChaseOnly(session: TgSession): Promise<void> {
       timestamp: now, status, isChase: true,
       ...(failReason ? { failReason } : {}),
     };
-    session.betLog.unshift(rec);
+    prependBetLog(session.betLog, rec);
     pushEvent(session, "bet:new", { bet: rec });
   }
-  if (session.betLog.length > 200) session.betLog.length = 200;
 }
 
 /**
@@ -4565,7 +4564,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       ...(algoId ? { algoId } : {}),
       ...(rawAlgoDir ? { rawAlgoDir } : {}),
     };
-    betLog.unshift(dualRec);
+    prependBetLog(betLog, dualRec);
     pushEvent(session, "bet:new", { bet: dualRec });
     mainRuntimeRecord = dualRec;
   } else if (structuredItems.length > 0) {
@@ -4578,7 +4577,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       ...(rawAlgoDir ? { rawAlgoDir } : {}),
       ...(structuredLabels ? { structuredLabels } : {}),
     };
-    betLog.unshift(structuredRec);
+    prependBetLog(betLog, structuredRec);
     pushEvent(session, "bet:new", { bet: structuredRec });
     mainRuntimeRecord = structuredRec;
   } else {
@@ -4591,7 +4590,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       ...(algoId ? { algoId } : {}),
       ...(rawAlgoDir ? { rawAlgoDir } : {}),
     };
-    betLog.unshift(mainRec);
+    prependBetLog(betLog, mainRec);
     pushEvent(session, "bet:new", { bet: mainRec });
     mainRuntimeRecord = mainRec;
   }
@@ -4607,11 +4606,9 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
       timestamp: now, status, isChase: true,
       ...(failReason ? { failReason } : {}),
     };
-    betLog.unshift(rec);
+    prependBetLog(betLog, rec);
     pushEvent(session, "bet:new", { bet: rec });
   }
-
-  if (betLog.length > 200) betLog.length = 200;
 }
 
 async function placeAbcDigitBets(session: TgSession, plan: AbcDigitPlan): Promise<void> {
@@ -4671,7 +4668,7 @@ async function placeAbcDigitBets(session: TgSession, plan: AbcDigitPlan): Promis
         isChase: true,
         ...(failReason ? { failReason } : {}),
       };
-      betLog.unshift(rec);
+      prependBetLog(betLog, rec);
       pushEvent(session, "bet:new", { bet: rec });
     }
   }
@@ -4708,7 +4705,7 @@ async function placeAbcDigitBets(session: TgSession, plan: AbcDigitPlan): Promis
       ...(algoId ? { algoId } : {}),
       rawAlgoDir: batch.rawAlgoDir,
     };
-    betLog.unshift(rec);
+    prependBetLog(betLog, rec);
     pushEvent(session, "bet:new", { bet: rec });
   }
 
@@ -5151,8 +5148,7 @@ async function placeHashKillGroupBets(session: TgSession, killedGroup: KillGroup
     algoId: "hash_kill",
     ...(failReason ? { failReason } : {}),
   };
-  session.betLog.unshift(betRecord);
-  if (session.betLog.length > 200) session.betLog.length = 200;
+  prependBetLog(session.betLog, betRecord);
   pushEvent(session, "bet:new", { bet: betRecord });
   pushEvent(session, "bet:kill", { killed: killedGroup, algo: "hash_kill" });
   logger.info({ killedGroup, toBet, amount }, "[hash-kill] 杀组下注发送");
@@ -5204,7 +5200,7 @@ async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOpti
     ...(isAdaptive ? { isAdaptiveKillBet: true } : {}),
     algoId: killAlgoId,
   };
-  betLog.unshift(combinedRec);
+  prependBetLog(betLog, combinedRec);
   pushEvent(session, "bet:new", { bet: combinedRec });
 
   // 追号记录
@@ -5215,11 +5211,10 @@ async function placeKillGroupBets(session: TgSession, killedGroup: KillGroupOpti
       timestamp: now, status, isChase: true,
       ...(failReason ? { failReason } : {}),
     };
-    betLog.unshift(rec);
+    prependBetLog(betLog, rec);
     pushEvent(session, "bet:new", { bet: rec });
   }
 
-  if (betLog.length > 200) betLog.length = 200;
 }
 
 async function runAutoBet(session: TgSession): Promise<void> {
@@ -5353,8 +5348,7 @@ async function runAutoBet(session: TgSession): Promise<void> {
           messageText: reason, betContent: `散点·${raw3.join("→")}`, amount: 0,
           timestamp: Date.now(), status: "skipped", algoId: "canada_kill",
         };
-        session.betLog.unshift(skipRec);
-        if (session.betLog.length > 200) session.betLog.length = 200;
+        prependBetLog(session.betLog, skipRec);
         pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
         logger.info({ raw3 }, `[canada-kill] ${reason}`);
         return;
@@ -5794,8 +5788,7 @@ async function runKuaisanAutoBet(session: TgSession): Promise<void> {
     algoId,
     ...(failReason ? { failReason } : {}),
   };
-  session.betLog.unshift(betRecord);
-  if (session.betLog.length > 200) session.betLog.length = 200;
+  prependBetLog(session.betLog, betRecord);
   pushEvent(session, "bet:new", { bet: betRecord });
 }
 
@@ -6066,8 +6059,7 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
         messageText: reason, betContent: `散点·${recent3.join("→")}`, amount: 0,
         timestamp: Date.now(), status: "skipped", algoId,
       };
-      session.betLog.unshift(skipRec);
-      if (session.betLog.length > 200) session.betLog.length = 200;
+      prependBetLog(session.betLog, skipRec);
       pushEvent(session, "bet:alert", { message: `⚠️ ${reason}`, level: "warn" });
       logger.info({ recent3 }, `[hash-kill] ${reason}`);
       return;
@@ -6123,8 +6115,7 @@ async function runHashAutoBet(session: TgSession): Promise<void> {
     algoId,
     ...(failReason ? { failReason } : {}),
   };
-  session.betLog.unshift(betRecord);
-  if (session.betLog.length > 200) session.betLog.length = 200;
+  prependBetLog(session.betLog, betRecord);
   pushEvent(session, "bet:new", { bet: betRecord });
   logger.info({ algoId, direction, amount }, "[hash] bet placed");
 }
@@ -7365,21 +7356,46 @@ function getOddsForBet(betContent: string, cfg: BetCfg): number {
 
 // ─── Stats helper ─────────────────────────────────────────────────────────────
 
+const MAX_BET_LOG_ITEMS = 120;
+const TG_STATUS_CACHE_MS = 1200;
+const tgStatusCache = new Map<number, { ts: number; data: Record<string, unknown> }>();
+
+function prependBetLog(log: BetRecord[], record: BetRecord): void {
+  log.unshift(record);
+  if (log.length > MAX_BET_LOG_ITEMS) log.length = MAX_BET_LOG_ITEMS;
+}
+
 function buildStats(session: TgSession) {
   const { betLog } = session;
-  const settled = betLog.filter(b => b.won !== undefined);
-  const wins = settled.filter(b => b.won === true).length;
-  let maxStreak = 0, cur = 0;
-  for (const b of [...betLog].reverse()) {
-    if (b.won === true) { cur++; if (cur > maxStreak) maxStreak = cur; }
-    else if (b.won === false) cur = 0;
+  let totalBets = 0;
+  let settled = 0;
+  let wins = 0;
+  let maxStreak = 0;
+  let cur = 0;
+
+  for (let i = 0; i < betLog.length; i++) {
+    const bet = betLog[i]!;
+    if (bet.status !== "failed") totalBets++;
+  }
+
+  for (let i = betLog.length - 1; i >= 0; i--) {
+    const bet = betLog[i]!;
+    if (bet.won === true) {
+      settled++;
+      wins++;
+      cur++;
+      if (cur > maxStreak) maxStreak = cur;
+    } else if (bet.won === false) {
+      settled++;
+      cur = 0;
+    }
   }
   return {
-    totalBets: betLog.filter(b => b.status !== "failed").length,
-    settled: settled.length,
+    totalBets,
+    settled,
     wins,
     maxStreak,
-    winRate: settled.length > 0 ? ((wins / settled.length) * 100).toFixed(2) : "0.00",
+    winRate: settled > 0 ? ((wins / settled) * 100).toFixed(2) : "0.00",
   };
 }
 
@@ -7507,10 +7523,18 @@ router.get("/tg/status", requireCard, (req, res) => {
   const userId = req.user!.userId;
   const session = tgSessions.get(userId);
   if (!session?.me) { res.json({ connected: false }); return; }
+
+  const cached = tgStatusCache.get(userId);
+  if (cached && Date.now() - cached.ts < TG_STATUS_CACHE_MS) {
+    res.json(cached.data);
+    return;
+  }
+
   const midnight = todayMidnight();
   if (session.todayResetAt < midnight) { session.todayPnl = 0; session.todayResetAt = midnight; }
+  const risk = checkRisk(session);
   const stats = buildStats(session);
-  res.json({
+  const data = {
     connected: true,
     me: { id: session.me.id, firstName: session.me.firstName, lastName: session.me.lastName, username: session.me.username, phone: session.me.phone },
     watchGroupId: session.watchGroupId,
@@ -7529,8 +7553,8 @@ router.get("/tg/status", requireCard, (req, res) => {
     balanceUpdatedAt: session.balanceUpdatedAt,
     kkpayUsername: session.kkpayUsername,
     kkpayEntityId: session.kkpayEntityId,
-    riskBlocked: !checkRisk(session).ok,
-    riskReason: checkRisk(session).reason,
+    riskBlocked: !risk.ok,
+    riskReason: risk.reason,
     lastAlgoUsed: session.lastAlgoUsed,
     algIndex: session.algIndex,
     currentPattern: session.currentPattern,
@@ -7547,7 +7571,9 @@ router.get("/tg/status", requireCard, (req, res) => {
     hashPeriod: session.hashPeriod,
     hashResults: (session.hashResults ?? []).slice(0, 20),
     ...stats,
-  });
+  };
+  tgStatusCache.set(userId, { ts: Date.now(), data });
+  res.json(data);
 });
 
 // Debug: directly fetch last N messages from watched group to test GramJS connectivity
