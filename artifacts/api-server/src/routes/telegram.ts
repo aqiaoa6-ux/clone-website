@@ -218,6 +218,7 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
   | "hash_abc_digit_ai" | "hash_abc_digit_cycle_ai"
   | "private_combo_ai"
+  | "canada_super_ai"
   | "canada_clone_1"
   | "canada_pro_1" | "canada_pro_2" | "canada_pro_3" | "canada_pro_4" | "canada_pro_5"
   | "canada_pro_6" | "canada_pro_7" | "canada_pro_8" | "canada_pro_9" | "canada_pro_10"
@@ -2637,6 +2638,162 @@ function getCanadaDominantLabel(ctx: CanadaMarketContext): string | null {
   })[0] ?? null;
 }
 
+type CanadaSuperRegime = "dragon" | "abab" | "aabb" | "oscillation" | "neutral";
+
+interface CanadaRunBlock {
+  label: string;
+  count: number;
+}
+
+interface CanadaSuperPattern {
+  regime: CanadaSuperRegime;
+  expected: string | null;
+  secondary: string | null;
+}
+
+function buildCanadaRunBlocks(mapped: string[]): CanadaRunBlock[] {
+  const blocks: CanadaRunBlock[] = [];
+  for (const label of mapped) {
+    const last = blocks[blocks.length - 1];
+    if (last?.label === label) last.count++;
+    else blocks.push({ label, count: 1 });
+  }
+  return blocks;
+}
+
+function detectCanadaAbabPattern(mapped: string[]): CanadaSuperPattern | null {
+  const recent = mapped.slice(-8);
+  if (recent.length < 4) return null;
+  const unique = [...new Set(recent)];
+  if (unique.length !== 2) return null;
+
+  let checks = 0;
+  let hits = 0;
+  for (let i = 2; i < recent.length; i++) {
+    checks++;
+    if (recent[i] === recent[i - 2]) hits++;
+  }
+  const ratio = checks > 0 ? hits / checks : 0;
+  if (ratio < 0.8) return null;
+
+  return {
+    regime: "abab",
+    expected: recent[recent.length - 2] ?? null,
+    secondary: recent[recent.length - 1] ?? null,
+  };
+}
+
+function detectCanadaAabbPattern(mapped: string[]): CanadaSuperPattern | null {
+  const blocks = buildCanadaRunBlocks(mapped.slice(-12));
+  if (blocks.length < 3) return null;
+
+  const latest = blocks[blocks.length - 1]!;
+  const previous = blocks[blocks.length - 2]!;
+  const beforePrevious = blocks[blocks.length - 3]!;
+
+  if (
+    latest.label === beforePrevious.label &&
+    previous.label !== latest.label &&
+    previous.count >= 2 &&
+    beforePrevious.count >= 2 &&
+    latest.count <= 2
+  ) {
+    return {
+      regime: "aabb",
+      expected: latest.count >= 2 ? previous.label : latest.label,
+      secondary: latest.count >= 2 ? latest.label : previous.label,
+    };
+  }
+
+  return null;
+}
+
+function detectCanadaSuperPattern(ctx: CanadaMarketContext): CanadaSuperPattern {
+  if (!ctx.last) return { regime: "neutral", expected: null, secondary: null };
+
+  if (ctx.lastStreak >= 4 || (ctx.lastStreak >= 3 && ctx.dominance >= 0.64 && ctx.altRatio <= 0.34)) {
+    return { regime: "dragon", expected: ctx.last, secondary: ctx.prev };
+  }
+
+  const abab = detectCanadaAbabPattern(ctx.mapped);
+  if (abab) return abab;
+
+  const aabb = detectCanadaAabbPattern(ctx.mapped);
+  if (aabb) return aabb;
+
+  if (ctx.altRatio >= 0.56) {
+    const candidate = [...ctx.labels]
+      .filter(label => label !== ctx.last)
+      .sort((a, b) => {
+        const ma = ctx.metrics[a]!;
+        const mb = ctx.metrics[b]!;
+        const diff =
+          (mb.transition2 * 1.35 + mb.transition1 + canadaWarmGap(mb, ctx.labels.length) * 0.9) -
+          (ma.transition2 * 1.35 + ma.transition1 + canadaWarmGap(ma, ctx.labels.length) * 0.9);
+        if (diff !== 0) return diff;
+        return a.localeCompare(b, "zh-CN");
+      })[0] ?? null;
+    return { regime: "oscillation", expected: candidate, secondary: ctx.last };
+  }
+
+  return { regime: "neutral", expected: getCanadaDominantLabel(ctx), secondary: ctx.last };
+}
+
+function canadaSuperAi(session: TgSession, labels: string[]): string | null {
+  const effectiveLabels = resolveCanadaProLabels(session, labels);
+  const ctx = buildCanadaCtx(session, effectiveLabels, 30);
+  if (!ctx) return effectiveLabels[0] ?? null;
+
+  const pattern = detectCanadaSuperPattern(ctx);
+  const scores = createCanadaScores(effectiveLabels);
+
+  for (const label of effectiveLabels) {
+    const metric = ctx.metrics[label]!;
+    const warmGap = canadaWarmGap(metric, effectiveLabels.length);
+    const extremeCold = canadaExtremeCold(metric, effectiveLabels.length);
+
+    scores[label] =
+      metric.shortCount * 1.35 +
+      metric.midCount * 0.9 +
+      metric.longCount * 0.45 +
+      metric.recentWeight * 0.11 +
+      metric.transition1 * 1.05 +
+      metric.transition2 * 1.35 +
+      warmGap * 0.95 +
+      metric.tailStreak * 0.55 -
+      extremeCold * 0.5;
+
+    if (ctx.altRatio <= 0.34 && ctx.last === label) {
+      scores[label] += 1.2 + Math.min(ctx.lastStreak, 5) * 0.45;
+    }
+    if (ctx.altRatio >= 0.68 && ctx.last === label) scores[label] -= 1.8;
+    if (ctx.altRatio >= 0.68 && ctx.last && label !== ctx.last) scores[label] += 0.9;
+  }
+
+  if (pattern.expected && scores[pattern.expected] !== undefined) {
+    const boost = pattern.regime === "dragon"
+      ? 6.5 + Math.max(0, ctx.lastStreak - 4) * 0.8
+      : pattern.regime === "abab"
+        ? 6.8
+        : pattern.regime === "aabb"
+          ? 5.6
+          : pattern.regime === "oscillation"
+            ? 4.4
+            : 2.8;
+    scores[pattern.expected] += boost;
+  }
+
+  if (pattern.secondary && scores[pattern.secondary] !== undefined) {
+    scores[pattern.secondary] += pattern.regime === "aabb" ? 1.25 : 0.6;
+  }
+
+  if (pattern.regime === "dragon" && ctx.last && scores[ctx.last] !== undefined && ctx.lastStreak >= 7) {
+    scores[ctx.last] -= 1.4;
+  }
+
+  return chooseCanadaByScores(session, ctx, scores);
+}
+
 function canadaPro1(session: TgSession, labels: string[]): string | null {
   const ctx = buildCanadaCtx(session, labels, 14);
   if (!ctx) return labels[0] ?? null;
@@ -3836,6 +3993,7 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "anti_streak") return antiStreak(session);
   if (algoId === "streak_follow") return streakFollow(session);
   if (algoId === "abc_trend") return decideAbcTrend(session);
+  if (algoId === "canada_super_ai") return canadaSuperAi(session, labels);
   if (algoId === "canada_clone_1") return canadaClone1(session);
   if (algoId === "canada_pro_1") return runCanadaProAlgo(session, labels, 1);
   if (algoId === "canada_pro_2") return runCanadaProAlgo(session, labels, 2);
@@ -7693,7 +7851,7 @@ router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
 
 // 所有可回测算法（不依赖外部信号），任意登录用户可访问，无需持有卡密
 const ALL_SIMULATABLE_ALGOS: AlgorithmId[] = [
-  "adaptive_switch", "streak_follow", "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend",
+  "adaptive_switch", "streak_follow", "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend", "canada_super_ai",
 ];
 
 router.get("/tg/algo-rates", requireAuth, (req, res) => {
