@@ -8302,7 +8302,10 @@ router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
 
 router.post("/admin/canada-ai/retrain-from-channel", requireAdminSecret, async (_req, res) => {
   const session = [...tgSessions.values()].find(s => !!s.me);
-  if (!session) return res.status(400).json({ error: "no_online_tg_session" });
+  if (!session) {
+    res.status(400).json({ error: "no_online_tg_session" });
+    return;
+  }
   await warmupCanadaAiFromChannel(session);
   res.json(getCanadaAiAdminStatus());
 });
