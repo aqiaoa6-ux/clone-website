@@ -7,6 +7,7 @@ import { NewMessage, NewMessageEvent, Raw } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
+import { predictCanadaAiAxisSignals, type CanadaAiSignal } from "../lib/canadaAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
@@ -1893,15 +1894,14 @@ function buildStructuredAiFamilySignal(axis: StructuredBetAxis, family: Structur
 
 function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
   const history = recentDigits(session, CANADA_AI_HISTORY_LIMIT);
-  if (!history.length) return [];
-  const values = axis === "S"
-    ? history.map(([a, b, c]) => a + b + c)
-    : history.map(item => item[axis === "A" ? 0 : axis === "B" ? 1 : 2]!);
-  const families: StructuredBetFamily[] = axis === "S" ? ["size", "parity"] : ["parity", "size"];
-  return families
-    .map(family => buildStructuredAiFamilySignal(axis, family, values))
-    .filter((item): item is StructuredSignal => item !== null)
-    .flatMap(item => [item, buildStructuredAlternative(item)]);
+  return predictCanadaAiAxisSignals(axis, history).map((item: CanadaAiSignal) => ({
+    axis: item.axis,
+    family: item.family,
+    bet: item.bet,
+    tag: item.tag,
+    confidence: item.confidence,
+    strength: item.strength,
+  }));
 }
 
 function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
