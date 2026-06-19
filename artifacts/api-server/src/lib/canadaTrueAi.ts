@@ -16,6 +16,10 @@ const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_TRUE_AI_MODEL_PATH = path.resolve(MODULE_DIR, "..", "..", "model-data", "canada-true-ai-model.json");
 const TRUE_AI_CONTEXT_SPANS = [2, 4, 6, 8] as const;
 const TRUE_AI_MIN_HISTORY = 120;
+export const TRUE_AI_PROD_MIN_HISTORY = 3000;
+export const TRUE_AI_PROD_MIN_HEAD_COUNT = 8;
+export const TRUE_AI_PROD_MIN_AVG_ACCURACY = 0.58;
+export const TRUE_AI_PROD_MIN_HEAD_ACCURACY = 0.52;
 
 export interface CanadaTrueAiSequenceSample {
   history: CanadaAiDigits[];
@@ -33,6 +37,7 @@ export interface CanadaTrueAiDatasetSummary {
 
 export interface CanadaTrueAiAdminStatus {
   drawCount: number;
+  readiness: CanadaTrueAiReadiness;
   latestJob: {
     id: number;
     status: string;
@@ -52,8 +57,37 @@ export interface CanadaTrueAiAdminStatus {
     artifactPath: string | null;
     trainedAt: number | null;
     activatedAt: number | null;
+    fileExists: boolean;
+    headCount: number;
+    accuracyAvg: number | null;
+    accuracyMin: number | null;
     metrics: Record<string, unknown> | null;
   } | null;
+}
+
+export interface CanadaTrueAiReadiness {
+  ready: boolean;
+  score: number;
+  reason: string | null;
+  requiredHistorySize: number;
+  requiredHeadCount: number;
+  requiredAccuracyAvg: number;
+  requiredAccuracyMin: number;
+  historySize: number;
+  headCount: number;
+  accuracyAvg: number | null;
+  accuracyMin: number | null;
+  modelFileExists: boolean;
+}
+
+export interface CanadaTrueAiRuntimeStatus {
+  modelPath: string;
+  historySize: number;
+  headCount: number;
+  accuracyAvg: number | null;
+  accuracyMin: number | null;
+  modelFileExists: boolean;
+  readiness: CanadaTrueAiReadiness;
 }
 
 interface CanadaTrueAiHeadModel {
@@ -91,6 +125,83 @@ function parseJsonObject(value: string | null): Record<string, unknown> | null {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function numericMetric(metrics: Record<string, unknown> | null, key: string): number | null {
+  const value = metrics?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function averageHeadAccuracy(heads: CanadaTrueAiHeadModel[]): number | null {
+  if (heads.length === 0) return null;
+  return heads.reduce((sum, head) => sum + head.accuracy, 0) / heads.length;
+}
+
+function minimumHeadAccuracy(heads: CanadaTrueAiHeadModel[]): number | null {
+  if (heads.length === 0) return null;
+  return heads.reduce((min, head) => Math.min(min, head.accuracy), heads[0]!.accuracy);
+}
+
+function buildTrueAiReadiness(summary: {
+  historySize: number;
+  headCount: number;
+  accuracyAvg: number | null;
+  accuracyMin: number | null;
+  modelFileExists: boolean;
+}): CanadaTrueAiReadiness {
+  const reasons: string[] = [];
+  if (!summary.modelFileExists) reasons.push("模型文件不存在");
+  if (summary.historySize < TRUE_AI_PROD_MIN_HISTORY) reasons.push(`历史样本少于${TRUE_AI_PROD_MIN_HISTORY}`);
+  if (summary.headCount < TRUE_AI_PROD_MIN_HEAD_COUNT) reasons.push(`预测头少于${TRUE_AI_PROD_MIN_HEAD_COUNT}`);
+  if (summary.accuracyAvg === null || summary.accuracyAvg < TRUE_AI_PROD_MIN_AVG_ACCURACY) {
+    reasons.push(`平均准确率低于${Math.round(TRUE_AI_PROD_MIN_AVG_ACCURACY * 100)}%`);
+  }
+  if (summary.accuracyMin === null || summary.accuracyMin < TRUE_AI_PROD_MIN_HEAD_ACCURACY) {
+    reasons.push(`最弱头准确率低于${Math.round(TRUE_AI_PROD_MIN_HEAD_ACCURACY * 100)}%`);
+  }
+
+  const historyRatio = clamp(summary.historySize / TRUE_AI_PROD_MIN_HISTORY, 0, 1);
+  const headRatio = clamp(summary.headCount / TRUE_AI_PROD_MIN_HEAD_COUNT, 0, 1);
+  const avgRatio = clamp((summary.accuracyAvg ?? 0) / TRUE_AI_PROD_MIN_AVG_ACCURACY, 0, 1);
+  const minRatio = clamp((summary.accuracyMin ?? 0) / TRUE_AI_PROD_MIN_HEAD_ACCURACY, 0, 1);
+  const fileRatio = summary.modelFileExists ? 1 : 0;
+  const score = Math.round((historyRatio * 0.34 + headRatio * 0.18 + avgRatio * 0.28 + minRatio * 0.16 + fileRatio * 0.04) * 100);
+
+  return {
+    ready: reasons.length === 0,
+    score,
+    reason: reasons[0] ?? null,
+    requiredHistorySize: TRUE_AI_PROD_MIN_HISTORY,
+    requiredHeadCount: TRUE_AI_PROD_MIN_HEAD_COUNT,
+    requiredAccuracyAvg: TRUE_AI_PROD_MIN_AVG_ACCURACY,
+    requiredAccuracyMin: TRUE_AI_PROD_MIN_HEAD_ACCURACY,
+    historySize: summary.historySize,
+    headCount: summary.headCount,
+    accuracyAvg: summary.accuracyAvg,
+    accuracyMin: summary.accuracyMin,
+    modelFileExists: summary.modelFileExists,
+  };
+}
+
+function buildTrueAiModelSummary(
+  bundle: CanadaTrueAiModelBundle | null,
+  metrics: Record<string, unknown> | null,
+  artifactPath: string | null,
+): {
+  historySize: number;
+  headCount: number;
+  accuracyAvg: number | null;
+  accuracyMin: number | null;
+  modelFileExists: boolean;
+} {
+  const modelPath = artifactPath ?? DEFAULT_TRUE_AI_MODEL_PATH;
+  return {
+    historySize: bundle?.historySize ?? numericMetric(metrics, "trueAiHistorySize") ?? numericMetric(metrics, "historySize") ?? 0,
+    headCount: bundle?.heads.length ?? numericMetric(metrics, "trueAiHeadCount") ?? 0,
+    accuracyAvg: bundle ? averageHeadAccuracy(bundle.heads) : numericMetric(metrics, "trueAiAccuracyAvg"),
+    accuracyMin: bundle ? minimumHeadAccuracy(bundle.heads) : numericMetric(metrics, "trueAiAccuracyMin"),
+    modelFileExists: !!modelPath && fs.existsSync(modelPath),
+  };
 }
 
 function axisValue(digits: CanadaAiDigits, axis: CanadaAiAxis): number {
@@ -232,6 +343,20 @@ export function loadCanadaTrueAiModel(filePath = DEFAULT_TRUE_AI_MODEL_PATH): Ca
   } catch {
     return null;
   }
+}
+
+export function getCanadaTrueAiRuntimeStatus(filePath = DEFAULT_TRUE_AI_MODEL_PATH): CanadaTrueAiRuntimeStatus {
+  const bundle = loadCanadaTrueAiModel(filePath);
+  const summary = buildTrueAiModelSummary(bundle, null, filePath);
+  return {
+    modelPath: filePath,
+    historySize: summary.historySize,
+    headCount: summary.headCount,
+    accuracyAvg: summary.accuracyAvg,
+    accuracyMin: summary.accuracyMin,
+    modelFileExists: summary.modelFileExists,
+    readiness: buildTrueAiReadiness(summary),
+  };
 }
 
 function predictFromTrueAiHead(head: CanadaTrueAiHeadModel, digitHistory: CanadaAiDigits[]): CanadaAiSignal {
@@ -439,9 +564,14 @@ export async function getCanadaTrueAiAdminStatus(): Promise<CanadaTrueAiAdminSta
 
   const activeModel = await getCanadaTrueAiActiveModel();
   const latestJob = latestJobRows[0] ?? null;
+  const activeMetrics = activeModel ? parseJsonObject(activeModel.metricsJson ?? null) : null;
+  const runtimeBundle = loadCanadaTrueAiModel(activeModel?.artifactPath ?? DEFAULT_TRUE_AI_MODEL_PATH);
+  const runtimeSummary = buildTrueAiModelSummary(runtimeBundle, activeMetrics, activeModel?.artifactPath ?? null);
+  const readiness = buildTrueAiReadiness(runtimeSummary);
 
   return {
     drawCount: Number(drawCountRow?.count ?? 0),
+    readiness,
     latestJob: latestJob
       ? {
           id: latestJob.id,
@@ -464,7 +594,11 @@ export async function getCanadaTrueAiAdminStatus(): Promise<CanadaTrueAiAdminSta
           artifactPath: activeModel.artifactPath ?? null,
           trainedAt: activeModel.trainedAt ? activeModel.trainedAt.getTime() : null,
           activatedAt: activeModel.activatedAt ? activeModel.activatedAt.getTime() : null,
-          metrics: parseJsonObject(activeModel.metricsJson ?? null),
+          fileExists: runtimeSummary.modelFileExists,
+          headCount: runtimeSummary.headCount,
+          accuracyAvg: runtimeSummary.accuracyAvg,
+          accuracyMin: runtimeSummary.accuracyMin,
+          metrics: activeMetrics,
         }
       : null,
   };

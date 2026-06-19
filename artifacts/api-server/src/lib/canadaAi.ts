@@ -781,6 +781,12 @@ export async function warmupCanadaAiModelFromHistory(
     canadaAiStatus.lastSource = source;
     const trueBundle = trainCanadaTrueAiModel(digitHistory);
     if (trueBundle) saveCanadaTrueAiModel(trueBundle, DEFAULT_TRUE_AI_MODEL_PATH);
+    const trueAiAccuracyAvg = trueBundle && trueBundle.heads.length > 0
+      ? trueBundle.heads.reduce((sum, head) => sum + head.accuracy, 0) / trueBundle.heads.length
+      : null;
+    const trueAiAccuracyMin = trueBundle && trueBundle.heads.length > 0
+      ? trueBundle.heads.reduce((min, head) => Math.min(min, head.accuracy), trueBundle.heads[0]!.accuracy)
+      : null;
     await completeCanadaTrueAiTrainingJob({
       jobId,
       historySize: bundle.historySize,
@@ -793,6 +799,8 @@ export async function warmupCanadaAiModelFromHistory(
         dataset: dataset.summary,
         trueAiHistorySize: trueBundle?.historySize ?? 0,
         trueAiHeadCount: trueBundle?.heads.length ?? 0,
+        trueAiAccuracyAvg,
+        trueAiAccuracyMin,
       },
     });
     logCanadaAi("info", "[canada-ai] history warmup completed", {

@@ -353,6 +353,20 @@ export interface CanadaAiAdminStatus {
 
 export interface CanadaTrueAiAdminStatus {
   drawCount: number;
+  readiness: {
+    ready: boolean;
+    score: number;
+    reason: string | null;
+    requiredHistorySize: number;
+    requiredHeadCount: number;
+    requiredAccuracyAvg: number;
+    requiredAccuracyMin: number;
+    historySize: number;
+    headCount: number;
+    accuracyAvg: number | null;
+    accuracyMin: number | null;
+    modelFileExists: boolean;
+  };
   latestJob: {
     id: number;
     status: string;
@@ -372,6 +386,10 @@ export interface CanadaTrueAiAdminStatus {
     artifactPath: string | null;
     trainedAt: number | null;
     activatedAt: number | null;
+    fileExists: boolean;
+    headCount: number;
+    accuracyAvg: number | null;
+    accuracyMin: number | null;
     metrics: Record<string, unknown> | null;
   } | null;
 }

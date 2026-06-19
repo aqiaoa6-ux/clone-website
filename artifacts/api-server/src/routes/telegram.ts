@@ -14,14 +14,13 @@ import {
   loadCanadaAiChannelHistory,
   mergeCanadaAiChannelHistory,
   patchCanadaAiAdminStatus,
-  predictCanadaAiAxisSignals,
   saveCanadaAiChannelHistory,
   setCanadaAiAdminSource,
   warmupCanadaAiModelFromHistory,
   type CanadaAiChannelHistoryEntry,
   type CanadaAiSignal,
 } from "../lib/canadaAi";
-import { getCanadaTrueAiAdminStatus, predictCanadaTrueAiAxisSignals, syncCanadaTrueAiDraws } from "../lib/canadaTrueAi";
+import { getCanadaTrueAiAdminStatus, getCanadaTrueAiRuntimeStatus, predictCanadaTrueAiAxisSignals, syncCanadaTrueAiDraws } from "../lib/canadaTrueAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
@@ -1430,6 +1429,8 @@ function computeNextBet(session: TgSession, won: boolean): number {
 
 function checkRisk(session: TgSession): { ok: boolean; reason?: string } {
   const { stopLoss, targetProfit, maxConsecutiveLosses, cooldownSeconds } = session.cfg;
+  const trueAiBlockReason = getCanadaTrueAiBlockReason(session);
+  if (trueAiBlockReason) return { ok: false, reason: trueAiBlockReason };
   if (maxConsecutiveLosses > 0 && session.consecutiveLosses >= maxConsecutiveLosses)
     return { ok: false, reason: `连亏${session.consecutiveLosses}局，已达上限${maxConsecutiveLosses}局` };
   if (stopLoss > 0 && session.sessionPnl <= -stopLoss)
@@ -1923,16 +1924,7 @@ function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis)
     confidence: item.confidence,
     strength: item.strength,
   }));
-  if (truePredicted.length > 0) return truePredicted;
-  const predicted = predictCanadaAiAxisSignals(axis, history).map((item: CanadaAiSignal) => ({
-    axis: item.axis,
-    family: item.family,
-    bet: item.bet,
-    tag: item.tag,
-    confidence: item.confidence,
-    strength: item.strength,
-  }));
-  return predicted.length > 0 ? predicted : structuredSignalsForAxis(session, axis);
+  return truePredicted.length > 0 ? truePredicted : structuredSignalsForAxis(session, axis);
 }
 
 function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
@@ -2043,7 +2035,26 @@ function rebalanceStructuredSelection(
   return next;
 }
 
+function getCanadaTrueAiBlockReason(session: TgSession): string | null {
+  if (session.cfg.gameMode !== "lottery") return null;
+  if (selectAlgoByPattern(session) !== "canada_clone_1") return null;
+  const runtime = getCanadaTrueAiRuntimeStatus();
+  if (!runtime.readiness.ready) {
+    return `真AI未达标，暂停实战: ${runtime.readiness.reason ?? "模型未就绪"}`;
+  }
+  const contextSize = recentDigits(session, 12).length;
+  if (contextSize < 8) {
+    return `真AI上下文不足，当前仅${contextSize}期历史`;
+  }
+  return null;
+}
+
 function canadaClone1(session: TgSession): string | null {
+  const trueAiBlockReason = getCanadaTrueAiBlockReason(session);
+  if (trueAiBlockReason) {
+    session.lastStructuredBetLabels = undefined;
+    return null;
+  }
   return canadaAiV1(session);
 }
 
