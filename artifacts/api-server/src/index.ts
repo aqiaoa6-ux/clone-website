@@ -1,5 +1,4 @@
 import app from "./app";
-import { warmupCanadaAiModel } from "./lib/canadaAi";
 import { logger } from "./lib/logger";
 
 const rawPort = process.env["PORT"];
@@ -23,5 +22,4 @@ app.listen(port, (err) => {
   }
 
   logger.info({ port }, "Server listening");
-  void warmupCanadaAiModel();
 });

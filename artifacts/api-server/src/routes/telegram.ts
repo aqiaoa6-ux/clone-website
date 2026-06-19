@@ -10,6 +10,7 @@ import { logger } from "../lib/logger";
 import {
   addCanadaAiAdminLog,
   getCanadaAiAdminStatus,
+  patchCanadaAiAdminStatus,
   predictCanadaAiAxisSignals,
   setCanadaAiAdminSource,
   warmupCanadaAiModelFromHistory,
@@ -6197,6 +6198,12 @@ function parseCanadaAiChannelDigits(text: string): { term: number | null; digits
 async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
   const source = `tg-channel:${CANADA_AI_RESULT_CHANNEL}`;
   setCanadaAiAdminSource(source);
+  patchCanadaAiAdminStatus({
+    phase: "training",
+    lastStartedAt: Date.now(),
+    lastFinishedAt: null,
+    lastError: null,
+  });
   addCanadaAiAdminLog("info", "[canada-ai] channel history fetch started", {
     source,
     channel: CANADA_AI_RESULT_CHANNEL,
@@ -6206,6 +6213,12 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
     const chanTarget = CANADA_AI_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
     const recent = await session.client.getMessages(chanTarget, { limit: 220 }) as Api.Message[];
     if (!recent.length) {
+      patchCanadaAiAdminStatus({
+        phase: "error",
+        lastFinishedAt: Date.now(),
+        lastHistorySize: 0,
+        lastError: "channel history empty",
+      });
       addCanadaAiAdminLog("warn", "[canada-ai] channel history empty", {
         source,
         channel: CANADA_AI_RESULT_CHANNEL,
@@ -6224,6 +6237,7 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
       unique.set(key, item.digits);
     }
     const digitHistory = [...unique.values()];
+    patchCanadaAiAdminStatus({ lastHistorySize: digitHistory.length });
     logger.info({
       channel: CANADA_AI_RESULT_CHANNEL,
       userId: session.userId,
@@ -6245,6 +6259,11 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
       channel: CANADA_AI_RESULT_CHANNEL,
       userId: session.userId,
       error: err instanceof Error ? err.message : String(err),
+    });
+    patchCanadaAiAdminStatus({
+      phase: "error",
+      lastFinishedAt: Date.now(),
+      lastError: err instanceof Error ? err.message : String(err),
     });
     logger.warn({ err, channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history fetch failed");
   }

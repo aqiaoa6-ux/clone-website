@@ -165,6 +165,10 @@ export function setCanadaAiAdminSource(source: string | null): void {
   canadaAiStatus.lastSource = source;
 }
 
+export function patchCanadaAiAdminStatus(patch: Partial<CanadaAiAdminStatus>): void {
+  Object.assign(canadaAiStatus, patch);
+}
+
 function updateCanadaAiReady(bundle: CanadaAiModelBundle, filePath: string) {
   canadaAiStatus.phase = "ready";
   canadaAiStatus.modelPath = filePath;
