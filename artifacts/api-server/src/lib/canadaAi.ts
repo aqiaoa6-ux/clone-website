@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { logger } from "./logger";
 
 export type CanadaAiAxis = "A" | "B" | "C" | "S";
@@ -102,7 +103,9 @@ const MIN_TRAIN_HISTORY = 72;
 const FEATURE_START_INDEX = 24;
 const TRAIN_EPOCHS = 240;
 const REGULARIZATION = 0.0025;
-const DEFAULT_MODEL_PATH = path.join(process.cwd(), "artifacts", "api-server", "model-data", "canada-ai-model.json");
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_MODEL_PATH = path.resolve(MODULE_DIR, "..", "..", "model-data", "canada-ai-model.json");
+const REMOTE_HISTORY_PAGES = 8;
 
 let cachedBundle: CanadaAiModelBundle | null = null;
 let cachedSignature = "";
@@ -583,20 +586,31 @@ function extractRemoteDigits(item: CanadaAiRemoteDrawItem): CanadaAiDigits | nul
 }
 
 export async function fetchCanadaAiRemoteHistory(): Promise<CanadaAiDigits[]> {
-  const res = await fetch("http://pc20.net/api/fengpan", {
-    headers: {
-      "User-Agent": "Mozilla/5.0",
-      Referer: "http://pc20.net/",
-    },
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
-  const data = await res.json() as { message?: { all?: { keno28?: { data?: CanadaAiRemoteDrawItem[] } } } };
-  const items = data?.message?.all?.keno28?.data ?? [];
-  return items
-    .map(extractRemoteDigits)
-    .filter((item): item is CanadaAiDigits => item !== null)
-    .reverse();
+  const allItems: CanadaAiRemoteDrawItem[] = [];
+  for (let page = 1; page <= REMOTE_HISTORY_PAGES; page++) {
+    const url = page === 1 ? "http://pc20.net/api/fengpan" : `http://pc20.net/api/fengpan?page=${page}`;
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0",
+        Referer: "http://pc20.net/",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+    const data = await res.json() as { message?: { all?: { keno28?: { data?: CanadaAiRemoteDrawItem[] } } } };
+    const items = data?.message?.all?.keno28?.data ?? [];
+    if (!items.length) break;
+    allItems.push(...items);
+    if (items.length < 30) break;
+  }
+  const unique = new Map<string, CanadaAiDigits>();
+  for (const item of allItems) {
+    const digits = extractRemoteDigits(item);
+    if (!digits) continue;
+    const key = `${item.term ?? ""}-${digits.join("")}`;
+    unique.set(key, digits);
+  }
+  return [...unique.values()].reverse();
 }
 
 export async function warmupCanadaAiModel(filePath = DEFAULT_MODEL_PATH): Promise<CanadaAiModelBundle | null> {
