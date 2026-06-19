@@ -577,8 +577,7 @@ export async function getCanadaTrueAiAdminStatus(): Promise<CanadaTrueAiAdminSta
   let drawCount = Number(drawCountRow?.count ?? 0);
   const localEntries = loadLocalChannelHistoryEntries();
   if (localEntries.length > 0 && drawCount < localEntries.length) {
-    const synced = await syncCanadaTrueAiDraws(localEntries, "tg-channel:pc28");
-    drawCount = Math.max(drawCount, synced.total, localEntries.length);
+    drawCount = Math.max(drawCount, localEntries.length);
   }
 
   const latestJobRows = await db

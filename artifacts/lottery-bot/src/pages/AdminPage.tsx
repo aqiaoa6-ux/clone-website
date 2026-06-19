@@ -510,7 +510,6 @@ export default function AdminPage() {
       setCanadaAiStatus(r);
       const trueAi = await api.admin.canadaTrueAiStatus().catch(() => null);
       setCanadaTrueAiStatus(trueAi);
-      void loadCanadaAiSim();
     } catch (err) {
       setCanadaAiActionError(err instanceof Error ? err.message : "频道重训失败");
     } finally {
@@ -525,7 +524,7 @@ export default function AdminPage() {
     if (tab === "shop") void loadShop();
     if (tab === "canadaai") {
       void loadCanadaAiStatus();
-      void loadCanadaAiSim();
+      setCanadaTrueAiSim(null);
     }
     if (tab === "hashmon") void loadCanadaGroups();
     if (tab === "privmon") void loadPrivateGroups();
@@ -535,15 +534,7 @@ export default function AdminPage() {
     if (tab !== "canadaai" || !secretVerified) return;
     const id = setInterval(() => {
       void loadCanadaAiStatus();
-    }, 10000);
-    return () => clearInterval(id);
-  }, [tab, secretVerified]);
-
-  useEffect(() => {
-    if (tab !== "canadaai" || !secretVerified) return;
-    const id = setInterval(() => {
-      void loadCanadaAiSim();
-    }, 60000);
+    }, 30000);
     return () => clearInterval(id);
   }, [tab, secretVerified]);
 
@@ -1994,11 +1985,17 @@ export default function AdminPage() {
                     </div>
 
                     <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
-                      <div className="px-5 py-3 border-b border-[#252a3d]">
+                      <div className="px-5 py-3 border-b border-[#252a3d] flex items-center justify-between gap-3">
                         <h2 className="text-white font-semibold text-sm">模拟实战</h2>
+                        <button
+                          onClick={() => void loadCanadaAiSim()}
+                          className="text-[11px] text-blue-300 border border-blue-500/30 px-3 py-1 rounded-lg hover:text-blue-200 hover:border-blue-400/40 transition"
+                        >
+                          手动加载
+                        </button>
                       </div>
                       {!canadaTrueAiSim ? (
-                        <div className="px-5 py-6 text-sm text-slate-500">暂无模拟实战数据</div>
+                        <div className="px-5 py-6 text-sm text-slate-500">默认不自动加载模拟实战，点右上角“手动加载”再看日志和命中率。</div>
                       ) : (
                         <div className="px-5 py-4 space-y-4 text-sm">
                           <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
