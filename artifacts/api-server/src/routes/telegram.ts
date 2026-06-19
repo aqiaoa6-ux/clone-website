@@ -6281,18 +6281,30 @@ async function fetchAllCanadaAiChannelEntries(
 ): Promise<CanadaAiChannelHistoryEntry[]> {
   const allEntries: CanadaAiChannelHistoryEntry[] = [];
   let offsetId = 0;
+  let batchIndex = 0;
   for (;;) {
     const batch = await session.client.getMessages(chanTarget, {
       limit: CANADA_AI_CHANNEL_BATCH_SIZE,
       ...(offsetId > 0 ? { offsetId } : {}),
     }) as Api.Message[];
     if (!batch.length) break;
+    batchIndex++;
     const sorted = [...batch].sort((a, b) => a.id - b.id);
     allEntries.push(
       ...sorted
         .map(msg => buildCanadaAiHistoryEntry(msg))
         .filter((item): item is CanadaAiChannelHistoryEntry => item !== null),
     );
+    if (batchIndex === 1 || batchIndex % 5 === 0) {
+      addCanadaAiAdminLog("info", "[canada-ai] channel history batch fetched", {
+        channel: CANADA_AI_RESULT_CHANNEL,
+        channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
+        userId: session.userId,
+        batchIndex,
+        totalEntries: allEntries.length,
+      });
+      patchCanadaAiAdminStatus({ lastHistorySize: allEntries.length });
+    }
     const oldestId = sorted[0]?.id ?? 0;
     if (batch.length < CANADA_AI_CHANNEL_BATCH_SIZE || oldestId <= 0 || offsetId === oldestId) break;
     offsetId = oldestId;
@@ -8503,18 +8515,41 @@ router.post("/admin/canada-ai/retrain-from-channel", requireAdminSecret, async (
     res.status(400).json({ error: "no_online_tg_session" });
     return;
   }
-  let success = false;
-  for (const session of onlineSessions) {
-    if (await warmupCanadaAiFromChannel(session)) {
-      startCanadaAiChannelSync(session);
-      success = true;
-      break;
-    }
-  }
-  if (!success) {
-    res.status(400).json({ error: "pc28_channel_unreachable" });
+  const currentStatus = getCanadaAiAdminStatus();
+  if (currentStatus.phase === "training") {
+    res.json(currentStatus);
     return;
   }
+  setCanadaAiAdminSource(`tg-channel:${CANADA_AI_RESULT_CHANNEL}`);
+  patchCanadaAiAdminStatus({
+    phase: "training",
+    lastStartedAt: Date.now(),
+    lastFinishedAt: null,
+    lastError: null,
+  });
+  addCanadaAiAdminLog("info", "[canada-ai] channel retrain queued", {
+    channel: CANADA_AI_RESULT_CHANNEL,
+    channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
+    onlineSessions: onlineSessions.map(item => item.userId),
+  });
+  void (async () => {
+    for (const session of onlineSessions) {
+      if (await warmupCanadaAiFromChannel(session)) {
+        startCanadaAiChannelSync(session);
+        return;
+      }
+    }
+    patchCanadaAiAdminStatus({
+      phase: "error",
+      lastFinishedAt: Date.now(),
+      lastError: "pc28_channel_unreachable",
+    });
+    addCanadaAiAdminLog("warn", "[canada-ai] channel retrain failed for all sessions", {
+      channel: CANADA_AI_RESULT_CHANNEL,
+      channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
+      onlineSessions: onlineSessions.map(item => item.userId),
+    });
+  })();
   res.json(getCanadaAiAdminStatus());
 });
 
