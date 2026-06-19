@@ -553,6 +553,7 @@ const HASH_BET_LABELS: Record<string, string> = {
 export const tgSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
 let lotteryDigitHistoryCache: Array<[number, number, number]> = [];
+const CANADA_AI_HISTORY_LIMIT = 180;
 // 哈希28 全局开奖历史（所有用户共享，最新优先，最多保留 100 期）
 let hashHistoryCache: HashResult[] = [];
 
@@ -604,7 +605,7 @@ async function warmLotteryCache(): Promise<void> {
       .map(extractDrawDigits)
       .filter((item): item is [number, number, number] => item !== null)
       .reverse();
-    if (digits.length) lotteryDigitHistoryCache = digits.slice(-120);
+    if (digits.length) lotteryDigitHistoryCache = digits.slice(-360);
     // 记录当前投注期号：items[0].r3 存在=已开奖，下一期才是当前期；否则 items[0] 本身是当前期
     if (items.length > 0 && items[0]!.term) {
       currentLotteryTerm = items[0]!.r3 ? items[0]!.term + 1 : items[0]!.term;
@@ -1891,7 +1892,7 @@ function buildStructuredAiFamilySignal(axis: StructuredBetAxis, family: Structur
 }
 
 function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
-  const history = recentDigits(session, 24);
+  const history = recentDigits(session, CANADA_AI_HISTORY_LIMIT);
   if (!history.length) return [];
   const values = axis === "S"
     ? history.map(([a, b, c]) => a + b + c)
@@ -5248,7 +5249,7 @@ async function pollLottery(session: TgSession): Promise<void> {
       .map(extractDrawDigits)
       .filter((item): item is [number, number, number] => item !== null)
       .reverse();
-    if (digitHistory.length) lotteryDigitHistoryCache = digitHistory.slice(-120);
+    if (digitHistory.length) lotteryDigitHistoryCache = digitHistory.slice(-360);
 
     if (latest.term <= session.lastSeenLotteryPeriod) return;
 
