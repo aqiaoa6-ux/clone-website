@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { logger } from "./logger";
 
 export type CanadaAiAxis = "A" | "B" | "C" | "S";
 export type CanadaAiFamily = "size" | "parity";
@@ -58,6 +59,7 @@ const DEFAULT_MODEL_PATH = path.join(process.cwd(), "artifacts", "api-server", "
 
 let cachedBundle: CanadaAiModelBundle | null = null;
 let cachedSignature = "";
+let warmupPromise: Promise<CanadaAiModelBundle | null> | null = null;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -277,9 +279,30 @@ function ensureCanadaAiModel(digitHistory: CanadaAiDigits[], filePath = DEFAULT_
     || loaded.historySize < Math.min(digitHistory.length, MIN_TRAIN_HISTORY)
     || loaded.historySize + 8 < digitHistory.length
     || loaded.models.length < 8;
+  if (shouldRetrain) {
+    logger.info({
+      historySize: digitHistory.length,
+      filePath,
+      hadExistingModel: !!loaded,
+    }, "[canada-ai] retraining model");
+  } else if (loaded) {
+    logger.info({
+      historySize: loaded.historySize,
+      trainedAt: loaded.trainedAt,
+      filePath,
+    }, "[canada-ai] loaded existing model");
+  }
   const bundle = shouldRetrain ? trainCanadaAiModel(digitHistory) : loaded;
   if (!bundle) return null;
-  if (shouldRetrain) saveCanadaAiModel(bundle, filePath);
+  if (shouldRetrain) {
+    saveCanadaAiModel(bundle, filePath);
+    logger.info({
+      filePath,
+      historySize: bundle.historySize,
+      models: bundle.models.length,
+      trainedAt: bundle.trainedAt,
+    }, "[canada-ai] model saved");
+  }
   cachedBundle = bundle;
   cachedSignature = signature;
   return bundle;
@@ -348,4 +371,64 @@ export function predictCanadaAiAxisSignals(axis: CanadaAiAxis, digitHistory: Can
 
 export function getCanadaAiModelPath(): string {
   return DEFAULT_MODEL_PATH;
+}
+
+type CanadaAiRemoteDrawItem = {
+  term?: number;
+  r3?: string;
+  sum1?: number;
+  sum2?: number;
+  sum3?: number;
+};
+
+function extractRemoteDigits(item: CanadaAiRemoteDrawItem): CanadaAiDigits | null {
+  const digits = [item.sum1, item.sum2, item.sum3].map(v => Number(v));
+  if (digits.some(v => !Number.isInteger(v) || v < 0 || v > 9)) return null;
+  return digits as CanadaAiDigits;
+}
+
+export async function fetchCanadaAiRemoteHistory(): Promise<CanadaAiDigits[]> {
+  const res = await fetch("http://pc20.net/api/fengpan", {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      Referer: "http://pc20.net/",
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`fetch failed: ${res.status}`);
+  const data = await res.json() as { message?: { all?: { keno28?: { data?: CanadaAiRemoteDrawItem[] } } } };
+  const items = data?.message?.all?.keno28?.data ?? [];
+  return items
+    .map(extractRemoteDigits)
+    .filter((item): item is CanadaAiDigits => item !== null)
+    .reverse();
+}
+
+export async function warmupCanadaAiModel(filePath = DEFAULT_MODEL_PATH): Promise<CanadaAiModelBundle | null> {
+  if (warmupPromise) return warmupPromise;
+  warmupPromise = (async () => {
+    logger.info({ filePath }, "[canada-ai] warmup started");
+    try {
+      const digitHistory = await fetchCanadaAiRemoteHistory();
+      logger.info({ historySize: digitHistory.length }, "[canada-ai] history fetched");
+      const bundle = ensureCanadaAiModel(digitHistory, filePath);
+      if (!bundle) {
+        logger.warn({ historySize: digitHistory.length }, "[canada-ai] warmup skipped, insufficient history");
+        return null;
+      }
+      logger.info({
+        filePath,
+        historySize: bundle.historySize,
+        models: bundle.models.length,
+        trainedAt: bundle.trainedAt,
+      }, "[canada-ai] warmup completed");
+      return bundle;
+    } catch (err) {
+      logger.error({ err, filePath }, "[canada-ai] warmup failed");
+      return null;
+    } finally {
+      warmupPromise = null;
+    }
+  })();
+  return warmupPromise;
 }
