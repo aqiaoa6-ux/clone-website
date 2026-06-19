@@ -7997,6 +7997,15 @@ interface CanadaTrueAiSimRow {
   betCount: number;
 }
 
+let canadaTrueAiSimCache: {
+  ts: number;
+  data: {
+    summary: CanadaTrueAiSimSummary;
+    rows: CanadaTrueAiSimRow[];
+    historyCount: number;
+  };
+} | null = null;
+
 interface CanadaTrueAiSimSummary {
   wins: number;
   losses: number;
@@ -8055,6 +8064,9 @@ async function getCanadaTrueAiSimulationStatus(): Promise<{
   rows: CanadaTrueAiSimRow[];
   historyCount: number;
 }> {
+  if (canadaTrueAiSimCache && Date.now() - canadaTrueAiSimCache.ts < 30_000) {
+    return canadaTrueAiSimCache.data;
+  }
   const drawRows = await db
     .select({
       term: canadaAiDraws.term,
@@ -8065,7 +8077,7 @@ async function getCanadaTrueAiSimulationStatus(): Promise<{
     .from(canadaAiDraws)
     .where(eq(canadaAiDraws.source, "tg-channel:pc28"))
     .orderBy(desc(canadaAiDraws.id))
-    .limit(260);
+    .limit(140);
 
   const history = [...drawRows]
     .reverse()
@@ -8122,11 +8134,16 @@ async function getCanadaTrueAiSimulationStatus(): Promise<{
   }
 
   summary.winRate = summary.total > 0 ? ((summary.wins / summary.total) * 100).toFixed(1) : null;
-  return {
+  const result = {
     summary,
-    rows: rows.slice(-50).reverse(),
+    rows: rows.slice(-30).reverse(),
     historyCount: history.length,
   };
+  canadaTrueAiSimCache = {
+    ts: Date.now(),
+    data: result,
+  };
+  return result;
 }
 
 router.get("/tg/events", requireAuth, (req, res) => {

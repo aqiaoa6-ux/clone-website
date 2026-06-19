@@ -486,17 +486,20 @@ export default function AdminPage() {
   const loadCanadaAiStatus = async () => {
     setLoadingCanadaAi(true);
     try {
-      const [r, trueAi, trueAiSim] = await Promise.all([
+      const [r, trueAi] = await Promise.all([
         api.admin.canadaAiStatus().catch(() => null),
         api.admin.canadaTrueAiStatus().catch(() => null),
-        api.admin.canadaTrueAiSim().catch(() => null),
       ]);
       setCanadaAiStatus(r);
       setCanadaTrueAiStatus(trueAi);
-      setCanadaTrueAiSim(trueAiSim);
     } finally {
       setLoadingCanadaAi(false);
     }
+  };
+
+  const loadCanadaAiSim = async () => {
+    const trueAiSim = await api.admin.canadaTrueAiSim().catch(() => null);
+    setCanadaTrueAiSim(trueAiSim);
   };
 
   const retrainCanadaAiFromChannel = async () => {
@@ -505,12 +508,9 @@ export default function AdminPage() {
     try {
       const r = await api.admin.retrainCanadaAiFromChannel();
       setCanadaAiStatus(r);
-      const [trueAi, trueAiSim] = await Promise.all([
-        api.admin.canadaTrueAiStatus().catch(() => null),
-        api.admin.canadaTrueAiSim().catch(() => null),
-      ]);
+      const trueAi = await api.admin.canadaTrueAiStatus().catch(() => null);
       setCanadaTrueAiStatus(trueAi);
-      setCanadaTrueAiSim(trueAiSim);
+      void loadCanadaAiSim();
     } catch (err) {
       setCanadaAiActionError(err instanceof Error ? err.message : "频道重训失败");
     } finally {
@@ -523,7 +523,10 @@ export default function AdminPage() {
     if (tab === "users") void loadUsers();
     if (tab === "pwdlog") void loadPwdLog(pwdLogDate);
     if (tab === "shop") void loadShop();
-    if (tab === "canadaai") void loadCanadaAiStatus();
+    if (tab === "canadaai") {
+      void loadCanadaAiStatus();
+      void loadCanadaAiSim();
+    }
     if (tab === "hashmon") void loadCanadaGroups();
     if (tab === "privmon") void loadPrivateGroups();
   }, [tab]);
@@ -532,7 +535,15 @@ export default function AdminPage() {
     if (tab !== "canadaai" || !secretVerified) return;
     const id = setInterval(() => {
       void loadCanadaAiStatus();
-    }, 5000);
+    }, 10000);
+    return () => clearInterval(id);
+  }, [tab, secretVerified]);
+
+  useEffect(() => {
+    if (tab !== "canadaai" || !secretVerified) return;
+    const id = setInterval(() => {
+      void loadCanadaAiSim();
+    }, 60000);
     return () => clearInterval(id);
   }, [tab, secretVerified]);
 
