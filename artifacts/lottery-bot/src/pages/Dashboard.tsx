@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import { api, type TgStatus, type BetRecord, type TgGroup } from "../lib/api";
@@ -147,78 +147,6 @@ function NumBall({ n, sum }: { n?: number; sum?: boolean }) {
     <div className={`${c} rounded-full w-7 h-7 flex items-center justify-center text-white text-xs font-bold flex-shrink-0`}>
       {n ?? "?"}
     </div>
-  );
-}
-
-function LotteryCountdownPanel({
-  draw,
-  nextBetAt,
-  autoBet,
-}: {
-  draw: DrawState | null;
-  nextBetAt: number | null;
-  autoBet?: boolean;
-}) {
-  const [nowMs, setNowMs] = useState(Date.now());
-
-  useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  const countdown = draw ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
-  const nextBetIn = nextBetAt && nextBetAt > nowMs ? Math.ceil((nextBetAt - nowMs) / 1000) : null;
-  const cycleSec = 210;
-  const pct = Math.min(100, Math.max(0, (countdown / cycleSec) * 100));
-  const betZonePct = Math.min(100, (80 / cycleSec) * 100);
-
-  return (
-    <>
-      <div className="py-2 text-center">
-        <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${
-          countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"
-        }`}>
-          {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
-        </div>
-        <div className="mt-1 text-xs text-slate-500">距封盘倒计时</div>
-      </div>
-
-      {draw && (
-        <div className="mb-2 mt-1">
-          <div className="relative h-2 overflow-hidden rounded-full bg-[#0f1220]">
-            <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
-            <div
-              className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${
-                countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"
-              }`}
-              style={{ width: `${pct}%` }}
-            />
-          </div>
-          <div className="mt-0.5 flex justify-between text-[10px] text-slate-600">
-            <span>开奖</span>
-            <span className="text-yellow-600/70">←投注区间 01:20→</span>
-            <span>封盘</span>
-          </div>
-        </div>
-      )}
-
-      {autoBet && countdown > 0 && countdown <= 80 && (
-        <div className="mt-2 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-2.5 text-center">
-          <span className="mr-2 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-400 align-middle" />
-          <span className="text-sm font-semibold text-yellow-400">投注窗口开启中</span>
-          <span className="ml-2 text-xs text-yellow-400/50">剩余 {countdown}s</span>
-        </div>
-      )}
-
-      {nextBetIn !== null && autoBet && countdown > 80 && (
-        <div className="mt-2 rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-2.5 text-center">
-          <span className="text-sm text-blue-400">
-            距投注还有 <span className="font-bold">{nextBetIn}s</span>
-            <span className="ml-1 text-xs text-blue-300/50">（封盘前 01:20 下注）</span>
-          </span>
-        </div>
-      )}
-    </>
   );
 }
 
@@ -990,6 +918,7 @@ export default function Dashboard() {
   const [status, setStatus] = useState<TgStatus | null>(null);
   const [bets, setBets] = useState<BetRecord[]>([]);
   const [draw, setDraw] = useState<DrawState | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
   const [nextBetAt, setNextBetAt] = useState<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showGroupSetup, setShowGroupSetup] = useState(false);
@@ -1011,13 +940,6 @@ export default function Dashboard() {
   const [debugLoading, setDebugLoading] = useState(false);
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
-  const statusRef = useRef<TgStatus | null>(null);
-  const statusRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const betsRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
 
   // ─── Fetch lottery draw data ─────────────────────────────────────────────
 
@@ -1035,7 +957,7 @@ export default function Dashboard() {
       nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
       setDraw({ term: latest.term + (closeMs < now ? 1 : 0), sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3, r3: latest.r3, nextCloseTime: nextCloseRef.current });
     } catch { /* ignore */ }
-  }, []);
+  }, [status?.watchGroupId]);
 
   // ─── Fetch status ────────────────────────────────────────────────────────
 
@@ -1072,10 +994,6 @@ export default function Dashboard() {
           setTgStep("ready");
           return;
         }
-        if (statusRef.current?.watchGroupId) {
-          setTgStep("ready");
-          return;
-        }
         setTgStep("group");
         return;
       }
@@ -1089,22 +1007,6 @@ export default function Dashboard() {
       setBets(b);
     } catch { /* ignore */ }
   }, []);
-
-  const scheduleFetchStatus = useCallback((delay = 250) => {
-    if (statusRefreshTimerRef.current) clearTimeout(statusRefreshTimerRef.current);
-    statusRefreshTimerRef.current = setTimeout(() => {
-      statusRefreshTimerRef.current = null;
-      void fetchStatus();
-    }, delay);
-  }, [fetchStatus]);
-
-  const scheduleFetchBets = useCallback((delay = 250) => {
-    if (betsRefreshTimerRef.current) clearTimeout(betsRefreshTimerRef.current);
-    betsRefreshTimerRef.current = setTimeout(() => {
-      betsRefreshTimerRef.current = null;
-      void fetchBets();
-    }, delay);
-  }, [fetchBets]);
 
   // ─── SSE stream ──────────────────────────────────────────────────────────
 
@@ -1136,14 +1038,15 @@ export default function Dashboard() {
           const term = ev.term as number;
           const s1 = ev.sum1 as number, s2 = ev.sum2 as number, s3 = ev.sum3 as number;
           setDraw({ term: term + (closeMs < nowT ? 1 : 0), sum1: s1, sum2: s2, sum3: s3, r3: ev.r3 as string, nextCloseTime: nextCloseRef.current });
+          void fetchDraw();
         }
         if (ev.type === "timer:scheduled") {
           if (ev.fireAt) setNextBetAt(ev.fireAt as number);
         }
         if (ev.type === "bet:new" || ev.type === "bet:result") {
-          scheduleFetchBets();
+          void fetchBets();
           if (ev.type === "bet:result") {
-            scheduleFetchStatus();
+            void fetchStatus();
           }
         }
         if (ev.type === "balance:update") {
@@ -1151,13 +1054,13 @@ export default function Dashboard() {
         }
         if (ev.type === "chase:won_stop") {
           // 追号中奖，后端已自动关闭 enableChase，刷新 status 以同步配置
-          scheduleFetchStatus();
+          void fetchStatus();
         }
         if (ev.type === "bet:alert") {
           const msg = ev.msg as string;
           setSseAlert(msg);
           // Auto-stop detected on backend; sync status so the toggle reflects the new state
-          scheduleFetchStatus();
+          void fetchStatus();
         }
         if (ev.type === "kuaisan:phase") {
           setKuaisanPhase(ev.phase as string);
@@ -1175,8 +1078,8 @@ export default function Dashboard() {
             sum: ev.sum as number,
             leopard: ev.leopard as boolean,
           }, ...prev].slice(0, 30));
-          scheduleFetchBets();
-          scheduleFetchStatus();
+          void fetchBets();
+          void fetchStatus();
         }
         if (ev.type === "hash:phase") {
           setHashPhase(ev.phase as string);
@@ -1190,8 +1093,8 @@ export default function Dashboard() {
             big: ev.big as boolean,
             odd: ev.odd as boolean,
           }, ...prev].slice(0, 30));
-          scheduleFetchBets();
-          scheduleFetchStatus();
+          void fetchBets();
+          void fetchStatus();
         }
       } catch { /* ignore */ }
       };
@@ -1201,11 +1104,9 @@ export default function Dashboard() {
     return () => {
       destroyed = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (statusRefreshTimerRef.current) clearTimeout(statusRefreshTimerRef.current);
-      if (betsRefreshTimerRef.current) clearTimeout(betsRefreshTimerRef.current);
       if (sseRef.current) { sseRef.current.close(); sseRef.current = null; }
     };
-  }, [fetchDraw, scheduleFetchBets, scheduleFetchStatus]);
+  }, [fetchBets, fetchStatus]);
 
   // ─── Init & polling ──────────────────────────────────────────────────────
 
@@ -1213,39 +1114,27 @@ export default function Dashboard() {
     void fetchStatus();
     void fetchBets();
     void fetchDraw();
-    const statusInterval = setInterval(() => void fetchStatus(), 20_000);
-    const drawInterval = setInterval(() => void fetchDraw(), 30_000);
-    return () => { clearInterval(statusInterval); clearInterval(drawInterval); };
+    const statusInterval = setInterval(() => void fetchStatus(), 10_000);
+    const drawInterval = setInterval(() => void fetchDraw(), 15_000);
+    const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
   }, [fetchStatus, fetchBets, fetchDraw]);
 
   // ─── Derived state ───────────────────────────────────────────────────────
 
+  const countdown = draw ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
+  const nextBetIn = nextBetAt && nextBetAt > nowMs ? Math.ceil((nextBetAt - nowMs) / 1000) : null;
   const cardExpiry = card?.expiresAt ? new Date(card.expiresAt) : null;
   const cardDaysLeft = cardExpiry ? Math.ceil((cardExpiry.getTime() - Date.now()) / 86400000) : 0;
-
-  const { mainBets, settled, wins, winRate, maxStreak } = useMemo(() => {
-    const nextMainBets = bets.filter(b => !b.isChase);
-    const nextSettled = nextMainBets.filter(b => b.won !== undefined);
-    const nextWins = nextSettled.filter(b => b.won === true).length;
-    let nextMaxStreak = 0;
-    let curStreak = 0;
-    for (let i = nextMainBets.length - 1; i >= 0; i--) {
-      const bet = nextMainBets[i]!;
-      if (bet.won === true) {
-        curStreak++;
-        if (curStreak > nextMaxStreak) nextMaxStreak = curStreak;
-      } else if (bet.won === false) {
-        curStreak = 0;
-      }
-    }
-    return {
-      mainBets: nextMainBets,
-      settled: nextSettled,
-      wins: nextWins,
-      winRate: nextSettled.length > 0 ? ((nextWins / nextSettled.length) * 100).toFixed(1) : "0.0",
-      maxStreak: nextMaxStreak,
-    };
-  }, [bets]);
+  const mainBets = bets.filter(b => !b.isChase);
+  const settled = mainBets.filter(b => b.won !== undefined);
+  const wins = settled.filter(b => b.won === true).length;
+  const winRate = settled.length > 0 ? ((wins / settled.length) * 100).toFixed(1) : "0.0";
+  let maxStreak = 0, curStreak = 0;
+  for (const b of [...mainBets].reverse()) {
+    if (b.won === true) { curStreak++; if (curStreak > maxStreak) maxStreak = curStreak; }
+    else if (b.won === false) curStreak = 0;
+  }
 
   // ─── Actions ─────────────────────────────────────────────────────────────
 
@@ -1613,7 +1502,20 @@ export default function Dashboard() {
                 )}
               </div>
 
-              <LotteryCountdownPanel draw={draw} nextBetAt={nextBetAt} autoBet={status.autoBet} />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-[#0f1220] border border-[#252a3d] rounded-xl p-3 text-center">
+                  <div className="text-[11px] text-slate-500 mb-1">封盘倒计时</div>
+                  <div className={`text-2xl font-bold ${countdown <= 15 ? "text-red-400" : countdown <= 30 ? "text-yellow-400" : "text-emerald-400"}`}>
+                    {countdown}s
+                  </div>
+                </div>
+                <div className="bg-[#0f1220] border border-[#252a3d] rounded-xl p-3 text-center">
+                  <div className="text-[11px] text-slate-500 mb-1">下次投注</div>
+                  <div className={`text-2xl font-bold ${status.autoBet && nextBetIn !== null ? "text-blue-400" : "text-slate-500"}`}>
+                    {status.autoBet && nextBetIn !== null ? `${nextBetIn}s` : "--"}
+                  </div>
+                </div>
+              </div>
 
               {status.riskBlocked && (
                 <div className="mt-2 bg-orange-500/10 border border-orange-500/20 rounded-xl px-4 py-2.5 text-center">

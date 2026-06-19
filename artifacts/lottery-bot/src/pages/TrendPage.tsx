@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, type LotteryData } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
@@ -83,11 +83,8 @@ export default function TrendPage() {
   const [items, setItems] = useState<DrawItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
-  const refreshInFlightRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (refreshInFlightRef.current) return;
-    refreshInFlightRef.current = true;
     try {
       const data = await api.lottery.fengpan();
       setItems(parseData(data as LotteryData));
@@ -95,7 +92,6 @@ export default function TrendPage() {
     } catch {
       // ignore refresh failures and keep current data
     } finally {
-      refreshInFlightRef.current = false;
       setLoading(false);
     }
   }, []);
