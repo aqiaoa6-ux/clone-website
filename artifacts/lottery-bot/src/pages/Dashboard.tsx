@@ -1144,7 +1144,7 @@ export default function Dashboard() {
     void fetchDraw();
     const statusInterval = setInterval(() => void fetchStatus(), 10_000);
     const drawInterval = setInterval(() => void fetchDraw(), 30_000);
-    const tickInterval = setInterval(() => setNowMs(Date.now()), 1000);
+    const tickInterval = setInterval(() => setNowMs(Date.now()), 3000);
     return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
   }, [fetchStatus, fetchBets, fetchDraw]);
 

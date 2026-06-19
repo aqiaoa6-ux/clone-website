@@ -7752,7 +7752,7 @@ router.post("/tg/kkpay", requireCard, async (req, res) => {
 
 router.get("/tg/bets", requireCard, (req, res) => {
   const session = tgSessions.get(req.user!.userId);
-  res.json({ bets: session ? session.betLog.slice(0, 100) : [] });
+  res.json({ bets: session ? session.betLog.slice(0, 40) : [] });
 });
 
 router.delete("/tg/bets", requireCard, (req, res) => {
