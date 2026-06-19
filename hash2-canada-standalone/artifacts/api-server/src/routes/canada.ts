@@ -42,6 +42,8 @@ interface CanadaPlanRuntime {
   currentLevel: number;
   betLevels: Record<string, number>;
   sessionPnl: number;
+  maxMissAmount: number;
+  maxWinAmount: number;
   totalRounds: number;
   wins: number;
   losses: number;
@@ -291,6 +293,8 @@ function defaultPlanRuntime(): CanadaPlanRuntime {
     currentLevel: 0,
     betLevels: {},
     sessionPnl: 0,
+    maxMissAmount: 0,
+    maxWinAmount: 0,
     totalRounds: 0,
     wins: 0,
     losses: 0,
@@ -322,6 +326,8 @@ function normalizeRuntime(input: Partial<CanadaRuntime> | undefined, config: Can
       ...existing,
       ...levelState,
       sessionPnl: Number(existing?.sessionPnl ?? 0) || 0,
+      maxMissAmount: Math.max(0, Number(existing?.maxMissAmount ?? 0) || 0),
+      maxWinAmount: Math.max(0, Number(existing?.maxWinAmount ?? 0) || 0),
       totalRounds: Number(existing?.totalRounds ?? 0) || 0,
       wins: Number(existing?.wins ?? 0) || 0,
       losses: Number(existing?.losses ?? 0) || 0,
@@ -469,6 +475,8 @@ function resetPlanRuntimeForRestart(plan: CanadaPlan, state: CanadaPlanRuntime):
   state.pendingAmounts = levelState.pendingAmounts;
   state.pendingAmount = 0;
   state.sessionPnl = 0;
+  state.maxMissAmount = 0;
+  state.maxWinAmount = 0;
   state.totalRounds = 0;
   state.wins = 0;
   state.losses = 0;
@@ -780,9 +788,11 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
   state.totalRounds += 1;
   if (hits.length > 0) {
     state.wins += 1;
+    state.maxWinAmount = Math.max(state.maxWinAmount, Math.max(totalPnl, 0));
     state.currentLevel = 0;
   } else {
     state.losses += 1;
+    state.maxMissAmount = Math.max(state.maxMissAmount, Math.max(state.pendingAmount, 0));
     state.currentLevel = Math.min(state.currentLevel + 1, maxLevel);
   }
   for (const key of plan.bets) state.betLevels[key] = state.currentLevel;

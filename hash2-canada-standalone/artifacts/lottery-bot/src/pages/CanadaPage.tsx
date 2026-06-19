@@ -455,6 +455,12 @@ export default function CanadaPage() {
                     </select>
                   </div>
                   <div>
+                    <CanadaPlanStatField activePlanId={currentPlan.id} label="最高未中金额" valueKey="maxMissAmount" />
+                  </div>
+                  <div>
+                    <CanadaPlanStatField activePlanId={currentPlan.id} label="最高中奖金额" valueKey="maxWinAmount" />
+                  </div>
+                  <div>
                     <label className="block text-xs text-slate-500 mb-1">基础金额</label>
                     <NumericDraftInput
                       value={currentPlan.baseAmount}
@@ -978,6 +984,50 @@ function CanadaLiveOverview({
           </div>
         </div>
       </div>
+    </>
+  );
+}
+
+function CanadaPlanStatField({
+  activePlanId,
+  label,
+  valueKey,
+}: {
+  activePlanId: string;
+  label: string;
+  valueKey: "maxMissAmount" | "maxWinAmount";
+}) {
+  const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
+
+  const fetchRuntime = useCallback(async () => {
+    try {
+      const rt = await api.canada.runtime();
+      setRuntime(prev => {
+        const next = rt.runtime;
+        if (!prev) return next;
+        if (prev.updatedAt === next.updatedAt) return prev;
+        return next;
+      });
+    } catch {
+      // ignore runtime poll errors
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchRuntime();
+    const id = window.setInterval(() => { void fetchRuntime(); }, 4000);
+    return () => window.clearInterval(id);
+  }, [fetchRuntime, activePlanId]);
+
+  const value = runtime?.plans?.[activePlanId]?.[valueKey] ?? 0;
+
+  return (
+    <>
+      <label className="block text-xs text-slate-500 mb-1">{label}</label>
+      <div className="w-full rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2 text-sm text-white">
+        {value.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+      </div>
+      <div className="mt-1 text-[11px] text-slate-500">统计值，仅展示，不参与下注和切换逻辑。</div>
     </>
   );
 }

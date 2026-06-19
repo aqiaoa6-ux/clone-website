@@ -316,6 +316,8 @@ export interface Hash2PlanRuntime {
   currentLevel: number;
   betLevels: Record<string, number>;
   sessionPnl: number;
+  maxMissAmount: number;
+  maxWinAmount: number;
   totalRounds: number;
   wins: number;
   losses: number;
