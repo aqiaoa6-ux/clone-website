@@ -30,6 +30,7 @@ export const api = {
   },
 
   admin: {
+    canadaAiStatus: () => api.get<CanadaAiAdminStatus>("/admin/canada-ai/status"),
     hashGroupBets: () => api.get<{ period: string | null; bets: GroupBetEntry[]; totals: { kk: number; usdt: number; cny: number } }>("/admin/hash-group-bets"),
     canadaMonitorGroups: () => api.get<{ groups: { groupId: string; groupTitle: string | undefined; userId: number; active: boolean }[] }>("/admin/canada-monitor-groups"),
     addCanadaMonitorGroup: (groupId: string) => api.post<{ ok: boolean; groupId: string; groupTitle: string; userId: number }>("/admin/canada-monitor-groups/add", { groupId }),
@@ -324,6 +325,27 @@ export interface StructuredBetLabelInfo {
   bet: string;
   tag: "顺势" | "逆势" | "震荡";
   confidence: number;
+}
+
+export interface CanadaAiAdminLogEntry {
+  ts: number;
+  level: "info" | "warn" | "error";
+  message: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface CanadaAiAdminStatus {
+  phase: "idle" | "training" | "ready" | "error";
+  modelPath: string;
+  modelExists: boolean;
+  lastStartedAt: number | null;
+  lastFinishedAt: number | null;
+  lastTrainedAt: number | null;
+  lastHistorySize: number;
+  modelCount: number;
+  lastAccuracyAvg: number | null;
+  lastError: string | null;
+  recentLogs: CanadaAiAdminLogEntry[];
 }
 
 export interface BetRecord {

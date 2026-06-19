@@ -7,7 +7,7 @@ import { NewMessage, NewMessageEvent, Raw } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
-import { predictCanadaAiAxisSignals, type CanadaAiSignal } from "../lib/canadaAi";
+import { getCanadaAiAdminStatus, predictCanadaAiAxisSignals, type CanadaAiSignal } from "../lib/canadaAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
@@ -8213,6 +8213,10 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
     });
   }
   res.json({ groups });
+});
+
+router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
+  res.json(getCanadaAiAdminStatus());
 });
 
 router.post("/admin/private-monitor-groups/add", requireAdminSecret, (req, res) => {

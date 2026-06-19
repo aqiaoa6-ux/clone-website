@@ -7,6 +7,10 @@ export type CanadaAiFamily = "size" | "parity";
 export type CanadaAiAttr = "大" | "小" | "单" | "双";
 export type CanadaAiTag = "顺势" | "逆势" | "震荡";
 export type CanadaAiDigits = [number, number, number];
+type CanadaAiExtreme = "极大" | "极小" | "无";
+type CanadaAiPattern = "豹子" | "对子" | "杂六";
+type CanadaAiDragonTiger = "龙" | "虎" | "合";
+type CanadaAiEdge = "大边" | "小边" | "中";
 
 export interface CanadaAiSignal {
   axis: CanadaAiAxis;
@@ -17,6 +21,27 @@ export interface CanadaAiSignal {
   strength: number;
   probability: number;
   accuracy: number;
+}
+
+export interface CanadaAiLogEntry {
+  ts: number;
+  level: "info" | "warn" | "error";
+  message: string;
+  meta?: Record<string, unknown>;
+}
+
+export interface CanadaAiAdminStatus {
+  phase: "idle" | "training" | "ready" | "error";
+  modelPath: string;
+  modelExists: boolean;
+  lastStartedAt: number | null;
+  lastFinishedAt: number | null;
+  lastTrainedAt: number | null;
+  lastHistorySize: number;
+  modelCount: number;
+  lastAccuracyAvg: number | null;
+  lastError: string | null;
+  recentLogs: CanadaAiLogEntry[];
 }
 
 interface CanadaAiFeature {
@@ -31,6 +56,28 @@ interface CanadaAiFeature {
   gapNegative: number;
   bouncePositive: number;
   bounceNegative: number;
+  lastA: number;
+  lastB: number;
+  lastC: number;
+  lastSum: number;
+  shortAvgSum: number;
+  extremeBigRatio: number;
+  extremeSmallRatio: number;
+  pairRatio: number;
+  leopardRatio: number;
+  mixedRatio: number;
+  dragonRatio: number;
+  tigerRatio: number;
+  tieRatio: number;
+  edgeBigRatio: number;
+  edgeSmallRatio: number;
+  edgeMidRatio: number;
+  lastPatternPair: number;
+  lastPatternLeopard: number;
+  lastDragon: number;
+  lastTiger: number;
+  lastEdgeBig: number;
+  lastEdgeSmall: number;
 }
 
 interface CanadaAiBinaryModel {
@@ -60,9 +107,57 @@ const DEFAULT_MODEL_PATH = path.join(process.cwd(), "artifacts", "api-server", "
 let cachedBundle: CanadaAiModelBundle | null = null;
 let cachedSignature = "";
 let warmupPromise: Promise<CanadaAiModelBundle | null> | null = null;
+const canadaAiLogs: CanadaAiLogEntry[] = [];
+const canadaAiStatus: CanadaAiAdminStatus = {
+  phase: "idle",
+  modelPath: DEFAULT_MODEL_PATH,
+  modelExists: fs.existsSync(DEFAULT_MODEL_PATH),
+  lastStartedAt: null,
+  lastFinishedAt: null,
+  lastTrainedAt: null,
+  lastHistorySize: 0,
+  modelCount: 0,
+  lastAccuracyAvg: null,
+  lastError: null,
+  recentLogs: canadaAiLogs,
+};
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function normalizeErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+function averageAccuracy(models: CanadaAiBinaryModel[]): number | null {
+  if (models.length === 0) return null;
+  return models.reduce((sum, item) => sum + item.accuracy, 0) / models.length;
+}
+
+function pushCanadaAiLog(level: CanadaAiLogEntry["level"], message: string, meta?: Record<string, unknown>) {
+  canadaAiLogs.unshift({ ts: Date.now(), level, message, ...(meta ? { meta } : {}) });
+  if (canadaAiLogs.length > 40) canadaAiLogs.length = 40;
+}
+
+function logCanadaAi(level: CanadaAiLogEntry["level"], message: string, meta?: Record<string, unknown>) {
+  pushCanadaAiLog(level, message, meta);
+  if (level === "error") logger.error(meta ?? {}, message);
+  else if (level === "warn") logger.warn(meta ?? {}, message);
+  else logger.info(meta ?? {}, message);
+}
+
+function updateCanadaAiReady(bundle: CanadaAiModelBundle, filePath: string) {
+  canadaAiStatus.phase = "ready";
+  canadaAiStatus.modelPath = filePath;
+  canadaAiStatus.modelExists = fs.existsSync(filePath);
+  canadaAiStatus.lastFinishedAt = Date.now();
+  canadaAiStatus.lastTrainedAt = bundle.trainedAt;
+  canadaAiStatus.lastHistorySize = bundle.historySize;
+  canadaAiStatus.modelCount = bundle.models.length;
+  canadaAiStatus.lastAccuracyAvg = averageAccuracy(bundle.models);
+  canadaAiStatus.lastError = null;
 }
 
 function familyAttrs(family: CanadaAiFamily): [CanadaAiAttr, CanadaAiAttr] {
@@ -93,14 +188,41 @@ function historySignature(digitHistory: CanadaAiDigits[]): string {
   return `${digitHistory.length}:${tail.join("|")}`;
 }
 
-function buildFeature(axis: CanadaAiAxis, family: CanadaAiFamily, values: number[]): CanadaAiFeature {
+function drawMeta([a, b, c]: CanadaAiDigits): {
+  sum: number;
+  extreme: CanadaAiExtreme;
+  pattern: CanadaAiPattern;
+  dragonTiger: CanadaAiDragonTiger;
+  edge: CanadaAiEdge;
+} {
+  const sum = a + b + c;
+  const pattern: CanadaAiPattern = a === b && b === c
+    ? "豹子"
+    : (a === b || a === c || b === c)
+      ? "对子"
+      : "杂六";
+  const dragonTiger: CanadaAiDragonTiger = a === c ? "合" : a > c ? "龙" : "虎";
+  const extreme: CanadaAiExtreme = sum >= 22 ? "极大" : sum <= 5 ? "极小" : "无";
+  const edge: CanadaAiEdge = sum >= 18 ? "大边" : sum <= 9 ? "小边" : "中";
+  return { sum, extreme, pattern, dragonTiger, edge };
+}
+
+function buildFeature(axis: CanadaAiAxis, family: CanadaAiFamily, digitHistory: CanadaAiDigits[]): CanadaAiFeature {
+  const values = historyValues(axis, digitHistory);
   const labels = values.map(value => digitLabel(axis, family, value));
   const [positiveAttr, negativeAttr] = familyAttrs(family);
   const short = labels.slice(-8);
   const mid = labels.slice(-14);
   const long = labels.slice(-24);
+  const recentDraws = digitHistory.slice(-12);
+  const metas = recentDraws.map(drawMeta);
+  const lastDraw = recentDraws[recentDraws.length - 1] ?? digitHistory[digitHistory.length - 1] ?? [0, 0, 0];
+  const lastMeta = drawMeta(lastDraw);
   const ratio = (items: CanadaAiAttr[], attr: CanadaAiAttr) => items.length > 0
     ? items.filter(item => item === attr).length / items.length
+    : 0;
+  const metaRatio = <T extends string>(items: T[], target: T) => items.length > 0
+    ? items.filter(item => item === target).length / items.length
     : 0;
 
   let tailPositive = 0;
@@ -131,6 +253,14 @@ function buildFeature(axis: CanadaAiAxis, family: CanadaAiFamily, values: number
     return opportunities > 0 ? hits / opportunities : 0;
   };
 
+  const patterns = metas.map(item => item.pattern);
+  const dragonTigers = metas.map(item => item.dragonTiger);
+  const edges = metas.map(item => item.edge);
+  const extremes = metas.map(item => item.extreme);
+  const shortAvgSum = metas.length > 0
+    ? metas.reduce((sum, item) => sum + item.sum, 0) / metas.length / 27
+    : 0;
+
   return {
     labels,
     shortRatio: ratio(short, positiveAttr),
@@ -143,6 +273,28 @@ function buildFeature(axis: CanadaAiAxis, family: CanadaAiFamily, values: number
     gapNegative: reverseGap(negativeAttr),
     bouncePositive: bounceRate(negativeAttr, positiveAttr),
     bounceNegative: bounceRate(positiveAttr, negativeAttr),
+    lastA: lastDraw[0] / 9,
+    lastB: lastDraw[1] / 9,
+    lastC: lastDraw[2] / 9,
+    lastSum: lastMeta.sum / 27,
+    shortAvgSum,
+    extremeBigRatio: metaRatio(extremes, "极大"),
+    extremeSmallRatio: metaRatio(extremes, "极小"),
+    pairRatio: metaRatio(patterns, "对子"),
+    leopardRatio: metaRatio(patterns, "豹子"),
+    mixedRatio: metaRatio(patterns, "杂六"),
+    dragonRatio: metaRatio(dragonTigers, "龙"),
+    tigerRatio: metaRatio(dragonTigers, "虎"),
+    tieRatio: metaRatio(dragonTigers, "合"),
+    edgeBigRatio: metaRatio(edges, "大边"),
+    edgeSmallRatio: metaRatio(edges, "小边"),
+    edgeMidRatio: metaRatio(edges, "中"),
+    lastPatternPair: lastMeta.pattern === "对子" ? 1 : 0,
+    lastPatternLeopard: lastMeta.pattern === "豹子" ? 1 : 0,
+    lastDragon: lastMeta.dragonTiger === "龙" ? 1 : 0,
+    lastTiger: lastMeta.dragonTiger === "虎" ? 1 : 0,
+    lastEdgeBig: lastMeta.edge === "大边" ? 1 : 0,
+    lastEdgeSmall: lastMeta.edge === "小边" ? 1 : 0,
   };
 }
 
@@ -167,6 +319,28 @@ function featureVector(feature: CanadaAiFeature): number[] {
     Math.min(feature.gapNegative, 12) / 12,
     feature.bouncePositive,
     feature.bounceNegative,
+    feature.lastA,
+    feature.lastB,
+    feature.lastC,
+    feature.lastSum,
+    feature.shortAvgSum,
+    feature.extremeBigRatio,
+    feature.extremeSmallRatio,
+    feature.pairRatio,
+    feature.leopardRatio,
+    feature.mixedRatio,
+    feature.dragonRatio,
+    feature.tigerRatio,
+    feature.tieRatio,
+    feature.edgeBigRatio,
+    feature.edgeSmallRatio,
+    feature.edgeMidRatio,
+    feature.lastPatternPair,
+    feature.lastPatternLeopard,
+    feature.lastDragon,
+    feature.lastTiger,
+    feature.lastEdgeBig,
+    feature.lastEdgeSmall,
   ];
 }
 
@@ -174,13 +348,14 @@ function sigmoid(value: number): number {
   return 1 / (1 + Math.exp(-Math.max(-18, Math.min(18, value))));
 }
 
-function trainBinaryModel(axis: CanadaAiAxis, family: CanadaAiFamily, values: number[]): CanadaAiBinaryModel | null {
-  if (values.length < MIN_TRAIN_HISTORY) return null;
+function trainBinaryModel(axis: CanadaAiAxis, family: CanadaAiFamily, digitHistory: CanadaAiDigits[]): CanadaAiBinaryModel | null {
+  if (digitHistory.length < MIN_TRAIN_HISTORY) return null;
+  const values = historyValues(axis, digitHistory);
   const [positiveAttr] = familyAttrs(family);
   const rows: number[][] = [];
   const labels: number[] = [];
   for (let i = FEATURE_START_INDEX; i < values.length; i++) {
-    const feature = buildFeature(axis, family, values.slice(0, i));
+    const feature = buildFeature(axis, family, digitHistory.slice(0, i));
     rows.push(featureVector(feature));
     labels.push(digitLabel(axis, family, values[i]!) === positiveAttr ? 1 : 0);
   }
@@ -238,9 +413,8 @@ export function trainCanadaAiModel(digitHistory: CanadaAiDigits[]): CanadaAiMode
   if (digitHistory.length < MIN_TRAIN_HISTORY) return null;
   const models: CanadaAiBinaryModel[] = [];
   for (const axis of ["S", "A", "B", "C"] as const) {
-    const values = historyValues(axis, digitHistory);
     for (const family of ["size", "parity"] as const) {
-      const model = trainBinaryModel(axis, family, values);
+      const model = trainBinaryModel(axis, family, digitHistory);
       if (model) models.push(model);
     }
   }
@@ -280,36 +454,45 @@ function ensureCanadaAiModel(digitHistory: CanadaAiDigits[], filePath = DEFAULT_
     || loaded.historySize + 8 < digitHistory.length
     || loaded.models.length < 8;
   if (shouldRetrain) {
-    logger.info({
+    canadaAiStatus.phase = "training";
+    canadaAiStatus.lastStartedAt = Date.now();
+    canadaAiStatus.modelPath = filePath;
+    canadaAiStatus.modelExists = !!loaded && fs.existsSync(filePath);
+    canadaAiStatus.lastHistorySize = digitHistory.length;
+    logCanadaAi("info", "[canada-ai] retraining model", {
       historySize: digitHistory.length,
       filePath,
       hadExistingModel: !!loaded,
-    }, "[canada-ai] retraining model");
+    });
   } else if (loaded) {
-    logger.info({
+    updateCanadaAiReady(loaded, filePath);
+    logCanadaAi("info", "[canada-ai] loaded existing model", {
       historySize: loaded.historySize,
       trainedAt: loaded.trainedAt,
       filePath,
-    }, "[canada-ai] loaded existing model");
+    });
   }
   const bundle = shouldRetrain ? trainCanadaAiModel(digitHistory) : loaded;
   if (!bundle) return null;
   if (shouldRetrain) {
     saveCanadaAiModel(bundle, filePath);
-    logger.info({
+    updateCanadaAiReady(bundle, filePath);
+    logCanadaAi("info", "[canada-ai] model saved", {
       filePath,
       historySize: bundle.historySize,
       models: bundle.models.length,
       trainedAt: bundle.trainedAt,
-    }, "[canada-ai] model saved");
+      accuracyAvg: averageAccuracy(bundle.models),
+    });
   }
   cachedBundle = bundle;
   cachedSignature = signature;
   return bundle;
 }
 
-function predictFromModel(model: CanadaAiBinaryModel, values: number[]): CanadaAiSignal {
-  const feature = buildFeature(model.axis, model.family, values);
+function predictFromModel(model: CanadaAiBinaryModel, digitHistory: CanadaAiDigits[]): CanadaAiSignal {
+  const values = historyValues(model.axis, digitHistory);
+  const feature = buildFeature(model.axis, model.family, digitHistory);
   const vector = featureVector(feature);
   let z = model.bias;
   for (let i = 0; i < vector.length; i++) z += model.weights[i]! * vector[i]!;
@@ -362,15 +545,27 @@ function buildAlternativeSignal(signal: CanadaAiSignal): CanadaAiSignal {
 export function predictCanadaAiAxisSignals(axis: CanadaAiAxis, digitHistory: CanadaAiDigits[], filePath = DEFAULT_MODEL_PATH): CanadaAiSignal[] {
   const bundle = ensureCanadaAiModel(digitHistory, filePath);
   if (!bundle) return [];
-  const values = historyValues(axis, digitHistory);
   return bundle.models
     .filter(model => model.axis === axis)
-    .map(model => predictFromModel(model, values))
+    .map(model => predictFromModel(model, digitHistory))
     .flatMap(signal => [signal, buildAlternativeSignal(signal)]);
 }
 
 export function getCanadaAiModelPath(): string {
   return DEFAULT_MODEL_PATH;
+}
+
+export function getCanadaAiAdminStatus(): CanadaAiAdminStatus {
+  const loaded = loadCanadaAiModel(DEFAULT_MODEL_PATH);
+  if (loaded && canadaAiStatus.phase === "idle") {
+    updateCanadaAiReady(loaded, DEFAULT_MODEL_PATH);
+  } else {
+    canadaAiStatus.modelExists = fs.existsSync(canadaAiStatus.modelPath);
+  }
+  return {
+    ...canadaAiStatus,
+    recentLogs: [...canadaAiLogs],
+  };
 }
 
 type CanadaAiRemoteDrawItem = {
@@ -407,24 +602,42 @@ export async function fetchCanadaAiRemoteHistory(): Promise<CanadaAiDigits[]> {
 export async function warmupCanadaAiModel(filePath = DEFAULT_MODEL_PATH): Promise<CanadaAiModelBundle | null> {
   if (warmupPromise) return warmupPromise;
   warmupPromise = (async () => {
-    logger.info({ filePath }, "[canada-ai] warmup started");
+    canadaAiStatus.phase = "training";
+    canadaAiStatus.lastStartedAt = Date.now();
+    canadaAiStatus.modelPath = filePath;
+    canadaAiStatus.lastError = null;
+    logCanadaAi("info", "[canada-ai] warmup started", { filePath });
     try {
       const digitHistory = await fetchCanadaAiRemoteHistory();
-      logger.info({ historySize: digitHistory.length }, "[canada-ai] history fetched");
+      logCanadaAi("info", "[canada-ai] history fetched", { historySize: digitHistory.length });
       const bundle = ensureCanadaAiModel(digitHistory, filePath);
       if (!bundle) {
-        logger.warn({ historySize: digitHistory.length }, "[canada-ai] warmup skipped, insufficient history");
+        canadaAiStatus.phase = "error";
+        canadaAiStatus.lastFinishedAt = Date.now();
+        canadaAiStatus.lastHistorySize = digitHistory.length;
+        canadaAiStatus.lastError = "insufficient history";
+        logCanadaAi("warn", "[canada-ai] warmup skipped, insufficient history", { historySize: digitHistory.length });
         return null;
       }
-      logger.info({
+      updateCanadaAiReady(bundle, filePath);
+      logCanadaAi("info", "[canada-ai] warmup completed", {
         filePath,
         historySize: bundle.historySize,
         models: bundle.models.length,
         trainedAt: bundle.trainedAt,
-      }, "[canada-ai] warmup completed");
+        accuracyAvg: averageAccuracy(bundle.models),
+      });
       return bundle;
     } catch (err) {
-      logger.error({ err, filePath }, "[canada-ai] warmup failed");
+      canadaAiStatus.phase = "error";
+      canadaAiStatus.lastFinishedAt = Date.now();
+      canadaAiStatus.modelPath = filePath;
+      canadaAiStatus.modelExists = fs.existsSync(filePath);
+      canadaAiStatus.lastError = normalizeErrorMessage(err);
+      logCanadaAi("error", "[canada-ai] warmup failed", {
+        filePath,
+        error: normalizeErrorMessage(err),
+      });
       return null;
     } finally {
       warmupPromise = null;
