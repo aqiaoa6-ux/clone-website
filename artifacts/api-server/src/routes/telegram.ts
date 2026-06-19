@@ -6132,8 +6132,8 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
 const HX28_RESULT_CHANNEL = "hx28kjw";
 const CANADA_AI_RESULT_CHANNEL = "pc28";
 const CANADA_AI_RESULT_CHANNEL_TITLE = "PC28开奖频道-开奖结果查询";
-const CANADA_AI_CHANNEL_BATCH_SIZE = 100;
-const CANADA_AI_CHANNEL_SYNC_INTERVAL_MS = 60_000;
+const CANADA_AI_CHANNEL_BATCH_SIZE = 200;
+const CANADA_AI_CHANNEL_SYNC_INTERVAL_MS = 5_000;
 const CANADA_AI_BOOTSTRAP_TRAIN_THRESHOLD = 3000;
 
 function stopHashResultPoller(session: TgSession): void {
@@ -6216,20 +6216,69 @@ function startHashResultPoller(session: TgSession): void {
   })();
 }
 
-function parseCanadaAiChannelDigits(text: string): { term: number | null; digits: [number, number, number] } | null {
-  const compact = text.replace(/\s+/g, " ");
-  const match = compact.match(/(\d{4,})\s*期[\s\S]*?([0-9])\s*\+\s*([0-9])\s*\+\s*([0-9])\s*=\s*(\d{1,2})/);
-  if (!match) return null;
-  const a = Number(match[2]);
-  const b = Number(match[3]);
-  const c = Number(match[4]);
-  const sum = Number(match[5]);
+function buildCanadaAiDigitsMatch(
+  term: number | null,
+  aRaw: string,
+  bRaw: string,
+  cRaw: string,
+  sumRaw?: string,
+): { term: number | null; digits: [number, number, number] } | null {
+  const a = Number(aRaw);
+  const b = Number(bRaw);
+  const c = Number(cRaw);
   if ([a, b, c].some(v => !Number.isInteger(v) || v < 0 || v > 9)) return null;
-  if (a + b + c !== sum) return null;
+  const expectedSum = a + b + c;
+  if (sumRaw !== undefined) {
+    const sum = Number(sumRaw);
+    if (!Number.isInteger(sum) || sum !== expectedSum) return null;
+  }
   return {
-    term: Number(match[1]) || null,
+    term,
     digits: [a, b, c],
   };
+}
+
+function parseCanadaAiChannelDigits(text: string): { term: number | null; digits: [number, number, number] } | null {
+  const compact = text.replace(/\s+/g, " ").trim();
+  const term = Number(compact.match(/(\d{4,})\s*期/)?.[1] ?? "") || null;
+  const patterns: RegExp[] = [
+    /(\d{4,})\s*期[\s\S]*?([0-9])\s*\+\s*([0-9])\s*\+\s*([0-9])\s*=\s*(\d{1,2})/,
+    /(\d{4,})\s*期[\s\S]*?([0-9])\s*[-,，/| ]\s*([0-9])\s*[-,，/| ]\s*([0-9])[\s\S]*?(?:和值|总和|合计|=|结果)[：:\s]*(\d{1,2})/,
+    /开奖号码?[：:\s]*([0-9])\s*[-+，,/| ]\s*([0-9])\s*[-+，,/| ]\s*([0-9])[\s\S]*?(?:和值|总和|合计|=|结果)[：:\s]*(\d{1,2})/,
+    /开奖[\s\S]*?([0-9])\s*\+\s*([0-9])\s*\+\s*([0-9])\s*=\s*(\d{1,2})/,
+    /([0-9])\s*\+\s*([0-9])\s*\+\s*([0-9])\s*=\s*(\d{1,2})/,
+    /([0-9])\s*[-,，/| ]\s*([0-9])\s*[-,，/| ]\s*([0-9])[\s\S]*?(?:和值|总和|合计|=|结果)[：:\s]*(\d{1,2})/,
+  ];
+
+  for (const pattern of patterns) {
+    const match = compact.match(pattern);
+    if (!match) continue;
+    if (match.length === 6) {
+      const parsed = buildCanadaAiDigitsMatch(Number(match[1]) || term, match[2]!, match[3]!, match[4]!, match[5]!);
+      if (parsed) return parsed;
+      continue;
+    }
+    if (match.length === 5) {
+      const parsed = buildCanadaAiDigitsMatch(term, match[1]!, match[2]!, match[3]!, match[4]!);
+      if (parsed) return parsed;
+    }
+  }
+
+  const digitMatches = [...compact.matchAll(/\b([0-9])\b/g)].map(item => Number(item[1]));
+  const sumMatches = [...compact.matchAll(/(?:和值|总和|合计|=|结果)[：:\s]*([0-9]{1,2})/g)].map(item => Number(item[1]));
+  for (let i = 0; i <= digitMatches.length - 3; i++) {
+    const a = digitMatches[i]!;
+    const b = digitMatches[i + 1]!;
+    const c = digitMatches[i + 2]!;
+    const sum = a + b + c;
+    if (sumMatches.includes(sum)) {
+      return {
+        term,
+        digits: [a, b, c],
+      };
+    }
+  }
+  return null;
 }
 
 async function resolveCanadaAiChannelEntity(session: TgSession): Promise<Parameters<typeof session.client.getMessages>[0]> {
@@ -6497,7 +6546,7 @@ function startCanadaAiChannelSync(session: TgSession): void {
   canadaAiChannelSyncOwnerUserId = session.userId;
   stopCanadaAiChannelSync(session);
   canadaAiChannelSyncOwnerUserId = session.userId;
-  session.canadaAiChannelSyncTimer = setInterval(() => {
+  const runIncrementalSync = () => {
     if (tgSessions.get(session.userId) !== session) {
       stopCanadaAiChannelSync(session);
       return;
@@ -6509,6 +6558,10 @@ function startCanadaAiChannelSync(session: TgSession): void {
       .finally(() => {
         session.canadaAiChannelSyncInFlight = false;
       });
+  };
+  runIncrementalSync();
+  session.canadaAiChannelSyncTimer = setInterval(() => {
+    runIncrementalSync();
   }, CANADA_AI_CHANNEL_SYNC_INTERVAL_MS);
 }
 

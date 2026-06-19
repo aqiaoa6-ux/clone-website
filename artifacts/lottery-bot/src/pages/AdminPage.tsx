@@ -521,6 +521,14 @@ export default function AdminPage() {
     if (tab === "privmon") void loadPrivateGroups();
   }, [tab]);
 
+  useEffect(() => {
+    if (tab !== "canadaai" || !secretVerified) return;
+    const id = setInterval(() => {
+      void loadCanadaAiStatus();
+    }, 5000);
+    return () => clearInterval(id);
+  }, [tab, secretVerified]);
+
   // 1s 心跳：驱动"X秒前"新鲜度显示
   useEffect(() => {
     if (tab !== "hashmon" && tab !== "privmon") return;

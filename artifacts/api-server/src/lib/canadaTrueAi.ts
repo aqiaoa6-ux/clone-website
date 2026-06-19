@@ -14,6 +14,7 @@ export const TRUE_AI_MODEL_KIND = "true_sequence_v1";
 export const TRUE_AI_LOOKBACK = 96;
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const DEFAULT_TRUE_AI_MODEL_PATH = path.resolve(MODULE_DIR, "..", "..", "model-data", "canada-true-ai-model.json");
+const DEFAULT_CHANNEL_HISTORY_PATH = path.resolve(MODULE_DIR, "..", "..", "model-data", "canada-ai-channel-history.json");
 const TRUE_AI_CONTEXT_SPANS = [2, 4, 6, 8] as const;
 const TRUE_AI_MIN_HISTORY = 120;
 export const TRUE_AI_PROD_MIN_HISTORY = 3000;
@@ -202,6 +203,24 @@ function buildTrueAiModelSummary(
     accuracyMin: bundle ? minimumHeadAccuracy(bundle.heads) : numericMetric(metrics, "trueAiAccuracyMin"),
     modelFileExists: !!modelPath && fs.existsSync(modelPath),
   };
+}
+
+function loadLocalChannelHistoryEntries(filePath = DEFAULT_CHANNEL_HISTORY_PATH): CanadaAiChannelHistoryEntry[] {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as CanadaAiChannelHistoryEntry[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item) =>
+      Number.isInteger(item?.msgId)
+      && item.msgId > 0
+      && Array.isArray(item.digits)
+      && item.digits.length === 3
+      && item.digits.every((value) => Number.isInteger(value) && value >= 0 && value <= 9),
+    );
+  } catch {
+    return [];
+  }
 }
 
 function axisValue(digits: CanadaAiDigits, axis: CanadaAiAxis): number {
@@ -555,6 +574,12 @@ export async function getCanadaTrueAiAdminStatus(): Promise<CanadaTrueAiAdminSta
     .select({ count: count() })
     .from(canadaAiDraws)
     .where(eq(canadaAiDraws.source, "tg-channel:pc28"));
+  let drawCount = Number(drawCountRow?.count ?? 0);
+  const localEntries = loadLocalChannelHistoryEntries();
+  if (localEntries.length > 0 && drawCount < localEntries.length) {
+    const synced = await syncCanadaTrueAiDraws(localEntries, "tg-channel:pc28");
+    drawCount = Math.max(drawCount, synced.total, localEntries.length);
+  }
 
   const latestJobRows = await db
     .select()
@@ -570,7 +595,7 @@ export async function getCanadaTrueAiAdminStatus(): Promise<CanadaTrueAiAdminSta
   const readiness = buildTrueAiReadiness(runtimeSummary);
 
   return {
-    drawCount: Number(drawCountRow?.count ?? 0),
+    drawCount,
     readiness,
     latestJob: latestJob
       ? {
