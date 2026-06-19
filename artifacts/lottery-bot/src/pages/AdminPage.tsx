@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry, type CanadaAiAdminStatus, type CanadaTrueAiAdminStatus, type CanadaTrueAiSimStatus } from "../lib/api";
+import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry, type CanadaAiAdminStatus, type CanadaTrueAiAdminStatus, type CanadaTrueAiRuntimeStatus, type CanadaTrueAiSimStatus } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 const TYPE_LABELS: Record<string, { label: string; color: string }> = {
@@ -150,6 +150,7 @@ export default function AdminPage() {
   // ── canada ai tab ──
   const [canadaAiStatus, setCanadaAiStatus] = useState<CanadaAiAdminStatus | null>(null);
   const [canadaTrueAiStatus, setCanadaTrueAiStatus] = useState<CanadaTrueAiAdminStatus | null>(null);
+  const [canadaTrueAiRuntime, setCanadaTrueAiRuntime] = useState<CanadaTrueAiRuntimeStatus | null>(null);
   const [canadaTrueAiSim, setCanadaTrueAiSim] = useState<CanadaTrueAiSimStatus | null>(null);
   const [loadingCanadaAi, setLoadingCanadaAi] = useState(false);
   const [retrainingCanadaAi, setRetrainingCanadaAi] = useState(false);
@@ -486,12 +487,14 @@ export default function AdminPage() {
   const loadCanadaAiStatus = async () => {
     setLoadingCanadaAi(true);
     try {
-      const [r, trueAi] = await Promise.all([
+      const [r, trueAi, runtime] = await Promise.all([
         api.admin.canadaAiStatus().catch(() => null),
         api.admin.canadaTrueAiStatus().catch(() => null),
+        api.admin.canadaTrueAiRuntime().catch(() => null),
       ]);
       setCanadaAiStatus(r);
       setCanadaTrueAiStatus(trueAi);
+      setCanadaTrueAiRuntime(runtime);
     } finally {
       setLoadingCanadaAi(false);
     }
@@ -508,8 +511,12 @@ export default function AdminPage() {
     try {
       const r = await api.admin.retrainCanadaAiFromChannel();
       setCanadaAiStatus(r);
-      const trueAi = await api.admin.canadaTrueAiStatus().catch(() => null);
+      const [trueAi, runtime] = await Promise.all([
+        api.admin.canadaTrueAiStatus().catch(() => null),
+        api.admin.canadaTrueAiRuntime().catch(() => null),
+      ]);
       setCanadaTrueAiStatus(trueAi);
+      setCanadaTrueAiRuntime(runtime);
     } catch (err) {
       setCanadaAiActionError(err instanceof Error ? err.message : "频道重训失败");
     } finally {
@@ -534,7 +541,7 @@ export default function AdminPage() {
     if (tab !== "canadaai" || !secretVerified) return;
     const id = setInterval(() => {
       void loadCanadaAiStatus();
-    }, 30000);
+    }, 10000);
     return () => clearInterval(id);
   }, [tab, secretVerified]);
 
@@ -1887,63 +1894,121 @@ export default function AdminPage() {
                   <>
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                       <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
+                        <div className="text-base font-bold text-emerald-400">
+                          {canadaTrueAiRuntime?.sync.latestTerm ?? "-"}
+                        </div>
+                        <div className="text-slate-500 text-xs mt-0.5">最新同步期号</div>
+                      </div>
+                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
+                        <div className={`text-base font-bold ${canadaTrueAiRuntime?.prediction.value ? "text-emerald-400" : "text-slate-300"}`}>
+                          {canadaTrueAiRuntime?.prediction.value ?? "暂无"}
+                        </div>
+                        <div className="text-slate-500 text-xs mt-0.5">最近推理</div>
+                      </div>
+                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
                         <div className={`text-base font-bold ${
-                          canadaTrueAiStatus.activeModel ? "text-emerald-400"
-                            : canadaTrueAiStatus.latestJob?.status === "running" ? "text-yellow-400"
-                              : canadaTrueAiStatus.latestJob?.status === "failed" ? "text-red-400"
-                                : "text-slate-300"
+                          canadaTrueAiRuntime?.bet.status === "sent" ? "text-emerald-400"
+                            : canadaTrueAiRuntime?.bet.status === "failed" ? "text-red-400"
+                              : "text-slate-300"
                         }`}>
-                          {canadaTrueAiStatus.activeModel ? "已运行" : canadaTrueAiStatus.latestJob?.status === "running" ? "训练中" : canadaTrueAiStatus.latestJob?.status === "failed" ? "失败" : "未就绪"}
+                          {canadaTrueAiRuntime?.bet.status === "sent" ? "已出手" : canadaTrueAiRuntime?.bet.status === "failed" ? "失败" : "暂无"}
                         </div>
-                        <div className="text-slate-500 text-xs mt-0.5">主状态</div>
+                        <div className="text-slate-500 text-xs mt-0.5">最近出手</div>
                       </div>
                       <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className={`text-base font-bold ${canadaTrueAiStatus.activeModel ? "text-emerald-400" : "text-yellow-400"}`}>
-                          {canadaTrueAiStatus.activeModel ? "允许" : "等待模型"}
-                        </div>
-                        <div className="text-slate-500 text-xs mt-0.5">实战状态</div>
+                        <div className="text-base font-bold text-white">{canadaTrueAiRuntime?.metrics.winRate ?? "-"}</div>
+                        <div className="text-slate-500 text-xs mt-0.5">实时命中率</div>
                       </div>
                       <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className="text-base font-bold text-white">{canadaTrueAiStatus.drawCount}</div>
-                        <div className="text-slate-500 text-xs mt-0.5">入库开奖</div>
-                      </div>
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className="text-base font-bold text-white">{canadaTrueAiStatus.readiness.score}</div>
-                        <div className="text-slate-500 text-xs mt-0.5">就绪评分</div>
-                      </div>
-                      <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className="text-base font-bold text-white">{fmtPct(canadaTrueAiStatus.activeModel?.accuracyAvg ?? canadaTrueAiStatus.readiness.accuracyAvg)}</div>
-                        <div className="text-slate-500 text-xs mt-0.5">平均准确率</div>
+                        <div className="text-base font-bold text-white">{canadaTrueAiRuntime?.monitor.currentTerm ?? "-"}</div>
+                        <div className="text-slate-500 text-xs mt-0.5">当前监控期号</div>
                       </div>
                     </div>
 
                     <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
                       <div className="px-5 py-3 border-b border-[#252a3d]">
-                        <h2 className="text-white font-semibold text-sm">真AI当前指标</h2>
+                        <h2 className="text-white font-semibold text-sm">实时运行监控</h2>
                       </div>
                       <div className="px-5 py-4 space-y-4 text-sm">
-                        <div className="text-xs rounded-lg px-3 py-2 border text-blue-200 bg-blue-500/10 border-blue-500/20">
-                          真AI门槛已取消，以下指标只做展示，不再拦截 `canada_clone_1` 实战。
+                        <div className="text-xs rounded-lg px-3 py-2 border text-emerald-200 bg-emerald-500/10 border-emerald-500/20">
+                          这里显示的是 `canada_clone_1` 真正的运行数据，不再只看训练快照。
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                           <div>
-                            <div className="text-slate-500 mb-1">当前样本</div>
-                            <div className="text-slate-200">{canadaTrueAiStatus.readiness.historySize} / {canadaTrueAiStatus.readiness.requiredHistorySize}</div>
+                            <div className="text-slate-500 mb-1">最近检查时间</div>
+                            <div className="text-slate-200">{canadaTrueAiRuntime?.sync.lastCheckedAt ? fmtTime(canadaTrueAiRuntime.sync.lastCheckedAt) : "-"}</div>
                           </div>
                           <div>
-                            <div className="text-slate-500 mb-1">预测头</div>
-                            <div className="text-slate-200">{canadaTrueAiStatus.readiness.headCount} / {canadaTrueAiStatus.readiness.requiredHeadCount}</div>
+                            <div className="text-slate-500 mb-1">最近推理时间</div>
+                            <div className="text-slate-200">{canadaTrueAiRuntime?.prediction.lastAt ? fmtTime(canadaTrueAiRuntime.prediction.lastAt) : "-"}</div>
                           </div>
                           <div>
-                            <div className="text-slate-500 mb-1">平均准确率</div>
-                            <div className="text-slate-200">{fmtPct(canadaTrueAiStatus.readiness.accuracyAvg)} / {fmtPct(canadaTrueAiStatus.readiness.requiredAccuracyAvg)}</div>
+                            <div className="text-slate-500 mb-1">最近出手内容</div>
+                            <div className="text-slate-200 break-all">{canadaTrueAiRuntime?.bet.value ?? "-"}</div>
                           </div>
                           <div>
-                            <div className="text-slate-500 mb-1">最弱头准确率</div>
-                            <div className="text-slate-200">{fmtPct(canadaTrueAiStatus.readiness.accuracyMin)} / {fmtPct(canadaTrueAiStatus.readiness.requiredAccuracyMin)}</div>
+                            <div className="text-slate-500 mb-1">最近开奖结果</div>
+                            <div className={`${canadaTrueAiRuntime?.result.won ? "text-emerald-400" : canadaTrueAiRuntime?.result.won === false ? "text-red-400" : "text-slate-200"}`}>
+                              {canadaTrueAiRuntime?.result.value ?? "-"}
+                              {canadaTrueAiRuntime?.result.won === true ? " · 命中" : canadaTrueAiRuntime?.result.won === false ? " · 未中" : ""}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                          <div>
+                            <div className="text-slate-500 mb-1">自动投注</div>
+                            <div className={`${canadaTrueAiRuntime?.monitor.autoBetEnabled ? "text-emerald-400" : "text-yellow-300"}`}>
+                              {canadaTrueAiRuntime?.monitor.autoBetEnabled ? "已开启" : "未开启"}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-slate-500 mb-1">监控账号</div>
+                            <div className="text-slate-200">{canadaTrueAiRuntime?.monitor.activeUserId ?? "-"}</div>
+                          </div>
+                          <div>
+                            <div className="text-slate-500 mb-1">监控群组</div>
+                            <div className="text-slate-200 break-all">{canadaTrueAiRuntime?.monitor.watchGroupId ?? "-"}</div>
+                          </div>
+                          <div>
+                            <div className="text-slate-500 mb-1">近期开奖入库</div>
+                            <div className="text-slate-200">{canadaTrueAiStatus.drawCount}</div>
+                          </div>
+                          <div>
+                            <div className="text-slate-500 mb-1">最近新增开奖</div>
+                            <div className="text-slate-200">{canadaTrueAiRuntime?.sync.lastUpdatedAt ? fmtTime(canadaTrueAiRuntime.sync.lastUpdatedAt) : "-"}</div>
                           </div>
                         </div>
                       </div>
+                    </div>
+
+                    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+                      <div className="px-5 py-3 border-b border-[#252a3d]">
+                        <h2 className="text-white font-semibold text-sm">最近运行日志</h2>
+                      </div>
+                      {!(canadaTrueAiRuntime?.recentLogs.length) ? (
+                        <div className="px-5 py-6 text-sm text-slate-500">暂无实时运行日志，等待下一次同步、推理、出手或结算。</div>
+                      ) : (
+                        <div className="divide-y divide-[#1e2235] max-h-[360px] overflow-y-auto">
+                          {(canadaTrueAiRuntime?.recentLogs ?? []).map((log, index) => (
+                            <div key={`${log.ts}-${index}`} className="px-4 py-3">
+                              <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                                <span className="text-slate-500">{fmtTime(log.ts)}</span>
+                                <span className="text-blue-300 border border-blue-500/20 bg-blue-500/10 rounded px-1.5 py-0.5">{log.type}</span>
+                                <span className="text-slate-500">期号 {log.term ?? "-"}</span>
+                                <span className="text-slate-500">账号 {log.userId ?? "-"}</span>
+                              </div>
+                              <div className="text-slate-200 text-sm mt-1">{log.text}</div>
+                              {(log.prediction || log.actual || log.status) && (
+                                <div className="text-[11px] text-slate-500 mt-1">
+                                  {log.prediction ? `推理: ${log.prediction}` : ""}
+                                  {log.actual ? ` · 开奖: ${log.actual}` : ""}
+                                  {log.status ? ` · 状态: ${log.status}` : ""}
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">

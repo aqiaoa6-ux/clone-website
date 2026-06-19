@@ -32,6 +32,7 @@ export const api = {
   admin: {
     canadaAiStatus: () => api.get<CanadaAiAdminStatus>("/admin/canada-ai/status"),
     canadaTrueAiStatus: () => api.get<CanadaTrueAiAdminStatus>("/admin/canada-ai/true-status"),
+    canadaTrueAiRuntime: () => api.get<CanadaTrueAiRuntimeStatus>("/admin/canada-ai/runtime"),
     canadaTrueAiSim: () => api.get<CanadaTrueAiSimStatus>("/admin/canada-ai/true-sim"),
     retrainCanadaAiFromChannel: () => api.post<CanadaAiAdminStatus>("/admin/canada-ai/retrain-from-channel", {}),
     hashGroupBets: () => api.get<{ period: string | null; bets: GroupBetEntry[]; totals: { kk: number; usdt: number; cny: number } }>("/admin/hash-group-bets"),
@@ -421,6 +422,63 @@ export interface CanadaTrueAiSimStatus {
   summary: CanadaTrueAiSimSummary;
   rows: CanadaTrueAiSimRow[];
   historyCount: number;
+}
+
+export interface CanadaTrueAiRuntimeLogEntry {
+  ts: number;
+  type: "sync" | "predict" | "bet" | "result";
+  text: string;
+  term: number | null;
+  userId: number | null;
+  prediction?: string | null;
+  actual?: string | null;
+  status?: string | null;
+  won?: boolean | null;
+}
+
+export interface CanadaTrueAiRuntimeStatus {
+  sync: {
+    lastCheckedAt: number | null;
+    lastUpdatedAt: number | null;
+    latestTerm: number | null;
+    fetchedEntries: number;
+    historySize: number;
+  };
+  prediction: {
+    lastAt: number | null;
+    term: number | null;
+    value: string | null;
+    source: "manual" | "auto" | null;
+    userId: number | null;
+  };
+  bet: {
+    lastAt: number | null;
+    term: number | null;
+    value: string | null;
+    status: "sent" | "failed" | null;
+    userId: number | null;
+    watchGroupId: string | null;
+  };
+  result: {
+    lastAt: number | null;
+    term: number | null;
+    value: string | null;
+    won: boolean | null;
+    pnl: number | null;
+  };
+  metrics: {
+    settled: number;
+    wins: number;
+    losses: number;
+    winRate: string | null;
+  };
+  monitor: {
+    currentTerm: number | null;
+    activeUserId: number | null;
+    watchGroupId: string | null;
+    autoBetEnabled: boolean;
+  };
+  recentLogs: CanadaTrueAiRuntimeLogEntry[];
 }
 
 export interface BetRecord {

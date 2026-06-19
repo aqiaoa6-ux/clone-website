@@ -52,6 +52,197 @@ let canadaLastBetAt = 0;
 let lastCanadaSnap: { term: number; dirs: Record<string, { kk: number; usdt: number; cny: number }>; closedAt: number; } | null = null;
 const adminSseClients = new Set<Response>();
 
+type CanadaTrueAiRuntimeLogType = "sync" | "predict" | "bet" | "result";
+
+interface CanadaTrueAiRuntimeLogEntry {
+  ts: number;
+  type: CanadaTrueAiRuntimeLogType;
+  text: string;
+  term: number | null;
+  userId: number | null;
+  prediction?: string | null;
+  actual?: string | null;
+  status?: string | null;
+  won?: boolean | null;
+}
+
+interface CanadaTrueAiRuntimeStatus {
+  sync: {
+    lastCheckedAt: number | null;
+    lastUpdatedAt: number | null;
+    latestTerm: number | null;
+    fetchedEntries: number;
+    historySize: number;
+  };
+  prediction: {
+    lastAt: number | null;
+    term: number | null;
+    value: string | null;
+    source: "manual" | "auto" | null;
+    userId: number | null;
+  };
+  bet: {
+    lastAt: number | null;
+    term: number | null;
+    value: string | null;
+    status: "sent" | "failed" | null;
+    userId: number | null;
+    watchGroupId: string | null;
+  };
+  result: {
+    lastAt: number | null;
+    term: number | null;
+    value: string | null;
+    won: boolean | null;
+    pnl: number | null;
+  };
+  metrics: {
+    settled: number;
+    wins: number;
+    losses: number;
+    winRate: string | null;
+  };
+  monitor: {
+    currentTerm: number | null;
+    activeUserId: number | null;
+    watchGroupId: string | null;
+    autoBetEnabled: boolean;
+  };
+  recentLogs: CanadaTrueAiRuntimeLogEntry[];
+}
+
+const canadaTrueAiRuntime: CanadaTrueAiRuntimeStatus = {
+  sync: { lastCheckedAt: null, lastUpdatedAt: null, latestTerm: null, fetchedEntries: 0, historySize: 0 },
+  prediction: { lastAt: null, term: null, value: null, source: null, userId: null },
+  bet: { lastAt: null, term: null, value: null, status: null, userId: null, watchGroupId: null },
+  result: { lastAt: null, term: null, value: null, won: null, pnl: null },
+  metrics: { settled: 0, wins: 0, losses: 0, winRate: null },
+  monitor: { currentTerm: null, activeUserId: null, watchGroupId: null, autoBetEnabled: false },
+  recentLogs: [],
+};
+
+function appendCanadaTrueAiRuntimeLog(entry: CanadaTrueAiRuntimeLogEntry): void {
+  canadaTrueAiRuntime.recentLogs.unshift(entry);
+  if (canadaTrueAiRuntime.recentLogs.length > 30) canadaTrueAiRuntime.recentLogs.length = 30;
+}
+
+function updateCanadaTrueAiRuntimeMetrics(): void {
+  const resultLogs = canadaTrueAiRuntime.recentLogs
+    .filter((item): item is CanadaTrueAiRuntimeLogEntry & { won: boolean } => item.type === "result" && typeof item.won === "boolean");
+  const wins = resultLogs.filter(item => item.won).length;
+  const losses = resultLogs.filter(item => !item.won).length;
+  const settled = wins + losses;
+  canadaTrueAiRuntime.metrics = {
+    settled,
+    wins,
+    losses,
+    winRate: settled > 0 ? `${((wins / settled) * 100).toFixed(1)}%` : null,
+  };
+}
+
+function trackCanadaTrueAiMonitorSession(session: TgSession): void {
+  canadaTrueAiRuntime.monitor = {
+    currentTerm: getCanadaLiveTerm(),
+    activeUserId: session.userId,
+    watchGroupId: session.watchGroupId ?? null,
+    autoBetEnabled: !!session.cfg.autoBet,
+  };
+}
+
+function recordCanadaTrueAiSync(session: TgSession, params: {
+  fetchedEntries: number;
+  historySize: number;
+  latestTerm: number | null;
+  mode: "full" | "incremental";
+}): void {
+  trackCanadaTrueAiMonitorSession(session);
+  canadaTrueAiRuntime.sync.lastCheckedAt = Date.now();
+  canadaTrueAiRuntime.sync.historySize = params.historySize;
+  canadaTrueAiRuntime.sync.fetchedEntries = params.fetchedEntries;
+  if (params.latestTerm !== null) canadaTrueAiRuntime.sync.latestTerm = params.latestTerm;
+  if (params.fetchedEntries > 0 || params.mode === "full") {
+    canadaTrueAiRuntime.sync.lastUpdatedAt = Date.now();
+  }
+  appendCanadaTrueAiRuntimeLog({
+    ts: Date.now(),
+    type: "sync",
+    text: params.fetchedEntries > 0
+      ? `同步到 ${params.fetchedEntries} 条新开奖`
+      : "同步检查完成，无新增开奖",
+    term: params.latestTerm,
+    userId: session.userId,
+    status: params.mode,
+  });
+}
+
+function recordCanadaTrueAiPrediction(session: TgSession, prediction: string | null, source: "manual" | "auto"): void {
+  trackCanadaTrueAiMonitorSession(session);
+  canadaTrueAiRuntime.prediction = {
+    lastAt: Date.now(),
+    term: getCanadaLiveTerm(),
+    value: prediction,
+    source,
+    userId: session.userId,
+  };
+  appendCanadaTrueAiRuntimeLog({
+    ts: Date.now(),
+    type: "predict",
+    text: prediction ? `最新推理: ${prediction}` : "本轮未产出推理",
+    term: getCanadaLiveTerm(),
+    userId: session.userId,
+    prediction,
+    status: source,
+  });
+}
+
+function recordCanadaTrueAiBet(session: TgSession, record: BetRecord): void {
+  trackCanadaTrueAiMonitorSession(session);
+  canadaTrueAiRuntime.bet = {
+    lastAt: record.timestamp,
+    term: getCanadaLiveTerm(),
+    value: record.betContent,
+    status: record.status === "failed" ? "failed" : "sent",
+    userId: session.userId,
+    watchGroupId: session.watchGroupId ?? null,
+  };
+  appendCanadaTrueAiRuntimeLog({
+    ts: record.timestamp,
+    type: "bet",
+    text: record.status === "failed" ? `出手失败: ${record.betContent}` : `已出手: ${record.betContent}`,
+    term: getCanadaLiveTerm(),
+    userId: session.userId,
+    prediction: record.betContent,
+    status: record.status,
+  });
+}
+
+function recordCanadaTrueAiResult(session: TgSession, record: BetRecord): void {
+  trackCanadaTrueAiMonitorSession(session);
+  canadaTrueAiRuntime.result = {
+    lastAt: Date.now(),
+    term: record.period ?? null,
+    value: record.lotteryResult ?? null,
+    won: record.won ?? null,
+    pnl: record.pnl ?? null,
+  };
+  appendCanadaTrueAiRuntimeLog({
+    ts: Date.now(),
+    type: "result",
+    text: record.won ? `命中: ${record.betContent}` : `未中: ${record.betContent}`,
+    term: record.period ?? null,
+    userId: session.userId,
+    prediction: record.betContent,
+    actual: record.lotteryResult ?? null,
+    won: record.won ?? null,
+  });
+  updateCanadaTrueAiRuntimeMetrics();
+}
+
+function getCanadaTrueAiRuntimeStatus(): CanadaTrueAiRuntimeStatus {
+  canadaTrueAiRuntime.monitor.currentTerm = getCanadaLiveTerm();
+  return canadaTrueAiRuntime;
+}
+
 // ─── 开奖历史（最近 30 期）──────────────────────────────────────────────────
 type PeriodRecord = {
   term: number | null;
@@ -1540,6 +1731,9 @@ function settleBet(session: TgSession, opts: { won: boolean; pnl?: number; resul
       wins, maxStreak: maxS,
       winRate: mainBets.length > 0 ? ((wins / mainBets.length) * 100).toFixed(2) : "0.00",
     });
+    if (!record.isChase && record.algoId === "canada_clone_1") {
+      recordCanadaTrueAiResult(session, record);
+    }
   }
 }
 
@@ -3921,6 +4115,7 @@ function decideBet(session: TgSession, signalText: string): string | null {
     session.lastRawAlgoDir = raw;
     if (raw === null) session.lastStructuredBetLabels = undefined;
     if (raw !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
+    recordCanadaTrueAiPrediction(session, raw, "manual");
     return raw;
   }
   const effectiveLabels = labels.length > 0
@@ -3946,6 +4141,7 @@ function decideBetAuto(session: TgSession): string | null {
     session.lastRawAlgoDir = raw;
     if (raw === null) session.lastStructuredBetLabels = undefined;
     if (raw !== null) { session.algIndex++; session.lastAlgoUsed = algoId; }
+    recordCanadaTrueAiPrediction(session, raw, "auto");
     return raw;
   }
   const effectiveLabels = labels.length > 0
@@ -4395,6 +4591,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
 
   const algoId = session.lastAlgoUsed;
   const rawAlgoDir = session.lastRawAlgoDir ?? undefined;
+  let mainRuntimeRecord: BetRecord | null = null;
   if (dualItems) {
     // 双组模式：合并为一条记录，betContent = "大单+小双"
     const dualRec: BetRecord = {
@@ -4407,6 +4604,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     };
     betLog.unshift(dualRec);
     pushEvent(session, "bet:new", { bet: dualRec });
+    mainRuntimeRecord = dualRec;
   } else if (structuredItems.length > 0) {
     const structuredRec: BetRecord = {
       id: `main-${now}`, groupId: targetId, groupTitle,
@@ -4419,6 +4617,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     };
     betLog.unshift(structuredRec);
     pushEvent(session, "bet:new", { bet: structuredRec });
+    mainRuntimeRecord = structuredRec;
   } else {
     // 普通模式：一条主 BetRecord
     const mainRec: BetRecord = {
@@ -4431,6 +4630,11 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
     };
     betLog.unshift(mainRec);
     pushEvent(session, "bet:new", { bet: mainRec });
+    mainRuntimeRecord = mainRec;
+  }
+
+  if (mainRuntimeRecord && mainRuntimeRecord.algoId === "canada_clone_1") {
+    recordCanadaTrueAiBet(session, mainRuntimeRecord);
   }
 
   if (structuredItems.length > 0) session.lastStructuredBetLabels = undefined;
@@ -6462,6 +6666,12 @@ async function syncCanadaAiChannelHistory(
     await syncCanadaTrueAiDraws(mergedEntries, source);
     session.canadaAiChannelLastMsgId = mergedEntries[mergedEntries.length - 1]?.msgId ?? session.canadaAiChannelLastMsgId;
     const digitHistory = channelHistoryEntriesToDigits(mergedEntries);
+    recordCanadaTrueAiSync(session, {
+      fetchedEntries: fetchedEntries.length,
+      historySize: digitHistory.length,
+      latestTerm: mergedEntries[mergedEntries.length - 1]?.term ?? null,
+      mode,
+    });
     patchCanadaAiAdminStatus({ lastHistorySize: digitHistory.length });
     logger.info({
       channel: CANADA_AI_RESULT_CHANNEL,
@@ -8767,6 +8977,10 @@ router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
 
 router.get("/admin/canada-ai/true-status", requireAdminSecret, async (_req, res) => {
   res.json(await getCanadaTrueAiAdminStatus());
+});
+
+router.get("/admin/canada-ai/runtime", requireAdminSecret, (_req, res) => {
+  res.json(getCanadaTrueAiRuntimeStatus());
 });
 
 router.get("/admin/canada-ai/true-sim", requireAdminSecret, async (_req, res) => {
