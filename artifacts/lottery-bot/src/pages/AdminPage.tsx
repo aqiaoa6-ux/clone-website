@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry, type CanadaAiAdminStatus, type CanadaTrueAiAdminStatus } from "../lib/api";
+import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry, type CanadaAiAdminStatus, type CanadaTrueAiAdminStatus, type CanadaTrueAiSimStatus } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 const TYPE_LABELS: Record<string, { label: string; color: string }> = {
@@ -150,6 +150,7 @@ export default function AdminPage() {
   // ── canada ai tab ──
   const [canadaAiStatus, setCanadaAiStatus] = useState<CanadaAiAdminStatus | null>(null);
   const [canadaTrueAiStatus, setCanadaTrueAiStatus] = useState<CanadaTrueAiAdminStatus | null>(null);
+  const [canadaTrueAiSim, setCanadaTrueAiSim] = useState<CanadaTrueAiSimStatus | null>(null);
   const [loadingCanadaAi, setLoadingCanadaAi] = useState(false);
   const [retrainingCanadaAi, setRetrainingCanadaAi] = useState(false);
   const [canadaAiActionError, setCanadaAiActionError] = useState("");
@@ -485,12 +486,14 @@ export default function AdminPage() {
   const loadCanadaAiStatus = async () => {
     setLoadingCanadaAi(true);
     try {
-      const [r, trueAi] = await Promise.all([
+      const [r, trueAi, trueAiSim] = await Promise.all([
         api.admin.canadaAiStatus().catch(() => null),
         api.admin.canadaTrueAiStatus().catch(() => null),
+        api.admin.canadaTrueAiSim().catch(() => null),
       ]);
       setCanadaAiStatus(r);
       setCanadaTrueAiStatus(trueAi);
+      setCanadaTrueAiSim(trueAiSim);
     } finally {
       setLoadingCanadaAi(false);
     }
@@ -502,8 +505,12 @@ export default function AdminPage() {
     try {
       const r = await api.admin.retrainCanadaAiFromChannel();
       setCanadaAiStatus(r);
-      const trueAi = await api.admin.canadaTrueAiStatus().catch(() => null);
+      const [trueAi, trueAiSim] = await Promise.all([
+        api.admin.canadaTrueAiStatus().catch(() => null),
+        api.admin.canadaTrueAiSim().catch(() => null),
+      ]);
       setCanadaTrueAiStatus(trueAi);
+      setCanadaTrueAiSim(trueAiSim);
     } catch (err) {
       setCanadaAiActionError(err instanceof Error ? err.message : "频道重训失败");
     } finally {
@@ -1876,21 +1883,24 @@ export default function AdminPage() {
                   </div>
                 ) : (
                   <>
+                    {(() => {
+                      const canBattle = !!canadaTrueAiStatus.activeModel;
+                      return (
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
                       <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
                         <div className={`text-base font-bold ${
-                          canadaTrueAiStatus.readiness.ready ? "text-emerald-400"
+                          canBattle ? "text-emerald-400"
                             : canadaTrueAiStatus.latestJob?.status === "running" ? "text-yellow-400"
                               : canadaTrueAiStatus.latestJob?.status === "failed" ? "text-red-400"
                                 : "text-slate-300"
                         }`}>
-                          {canadaTrueAiStatus.readiness.ready ? "已就绪" : canadaTrueAiStatus.latestJob?.status === "running" ? "训练中" : canadaTrueAiStatus.latestJob?.status === "failed" ? "失败" : "未达标"}
+                          {canBattle ? "已运行" : canadaTrueAiStatus.latestJob?.status === "running" ? "训练中" : canadaTrueAiStatus.latestJob?.status === "failed" ? "失败" : "未就绪"}
                         </div>
                         <div className="text-slate-500 text-xs mt-0.5">主状态</div>
                       </div>
                       <div className="bg-[#161929] border border-[#252a3d] rounded-xl p-3 text-center">
-                        <div className={`text-base font-bold ${canadaTrueAiStatus.readiness.ready ? "text-emerald-400" : "text-yellow-400"}`}>
-                          {canadaTrueAiStatus.readiness.ready ? "允许" : "禁投"}
+                        <div className={`text-base font-bold ${canBattle ? "text-emerald-400" : "text-yellow-400"}`}>
+                          {canBattle ? "允许" : "等待模型"}
                         </div>
                         <div className="text-slate-500 text-xs mt-0.5">实战状态</div>
                       </div>
@@ -1907,20 +1917,16 @@ export default function AdminPage() {
                         <div className="text-slate-500 text-xs mt-0.5">平均准确率</div>
                       </div>
                     </div>
+                      );
+                    })()}
 
                     <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
                       <div className="px-5 py-3 border-b border-[#252a3d]">
-                        <h2 className="text-white font-semibold text-sm">真AI就绪门槛</h2>
+                        <h2 className="text-white font-semibold text-sm">真AI当前指标</h2>
                       </div>
                       <div className="px-5 py-4 space-y-4 text-sm">
-                        <div className={`text-xs rounded-lg px-3 py-2 border ${
-                          canadaTrueAiStatus.readiness.ready
-                            ? "text-emerald-300 bg-emerald-500/10 border-emerald-500/20"
-                            : "text-yellow-300 bg-yellow-500/10 border-yellow-500/20"
-                        }`}>
-                          {canadaTrueAiStatus.readiness.ready
-                            ? "真AI已达生产门槛，`canada_clone_1` 直接走真 AI 主推理。"
-                            : `真AI未达生产门槛，当前自动禁投。原因：${canadaTrueAiStatus.readiness.reason ?? "模型未就绪"}`}
+                        <div className="text-xs rounded-lg px-3 py-2 border text-blue-200 bg-blue-500/10 border-blue-500/20">
+                          真AI门槛已取消，以下指标只做展示，不再拦截 `canada_clone_1` 实战。
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                           <div>
@@ -1979,6 +1985,68 @@ export default function AdminPage() {
                           <div className="text-slate-200">训练时间：{canadaTrueAiStatus.activeModel?.trainedAt ? fmtTime(canadaTrueAiStatus.activeModel.trainedAt) : "-"}</div>
                         </div>
                       </div>
+                    </div>
+
+                    <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+                      <div className="px-5 py-3 border-b border-[#252a3d]">
+                        <h2 className="text-white font-semibold text-sm">模拟实战</h2>
+                      </div>
+                      {!canadaTrueAiSim ? (
+                        <div className="px-5 py-6 text-sm text-slate-500">暂无模拟实战数据</div>
+                      ) : (
+                        <div className="px-5 py-4 space-y-4 text-sm">
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+                            <div>
+                              <div className="text-slate-500 mb-1">模拟命中率</div>
+                              <div className="text-slate-200">{canadaTrueAiSim.summary.winRate ? `${canadaTrueAiSim.summary.winRate}%` : "-"}</div>
+                            </div>
+                            <div>
+                              <div className="text-slate-500 mb-1">命中/未中</div>
+                              <div className="text-slate-200">{canadaTrueAiSim.summary.wins}/{canadaTrueAiSim.summary.losses}</div>
+                            </div>
+                            <div>
+                              <div className="text-slate-500 mb-1">跳过</div>
+                              <div className="text-slate-200">{canadaTrueAiSim.summary.skips}</div>
+                            </div>
+                            <div>
+                              <div className="text-slate-500 mb-1">当前连绩</div>
+                              <div className="text-slate-200">{canadaTrueAiSim.summary.currentStreak > 0 ? `${canadaTrueAiSim.summary.currentStreak}连中` : canadaTrueAiSim.summary.currentStreak < 0 ? `${Math.abs(canadaTrueAiSim.summary.currentStreak)}连未` : "无连"}</div>
+                            </div>
+                            <div>
+                              <div className="text-slate-500 mb-1">历史样本</div>
+                              <div className="text-slate-200">{canadaTrueAiSim.historyCount}</div>
+                            </div>
+                          </div>
+                          <div className="bg-[#0f1220] border border-[#252a3d] rounded-xl overflow-hidden">
+                            <div className="grid grid-cols-[88px_88px_1fr_82px_82px] gap-2 px-4 py-2 text-[11px] text-slate-500 border-b border-[#252a3d]">
+                              <div>期号</div>
+                              <div>实际</div>
+                              <div>模拟下单</div>
+                              <div>命中</div>
+                              <div>状态</div>
+                            </div>
+                            <div className="max-h-[360px] overflow-y-auto divide-y divide-[#1e2235]">
+                              {canadaTrueAiSim.rows.map((row, index) => (
+                                <div key={`${row.term ?? "na"}-${index}`} className="grid grid-cols-[88px_88px_1fr_82px_82px] gap-2 px-4 py-3 text-xs items-center">
+                                  <div className="text-slate-400">{row.term ?? "-"}</div>
+                                  <div className="text-slate-200">{row.actual}</div>
+                                  <div className="text-slate-200 break-all">{row.prediction || "-"}</div>
+                                  <div className="text-slate-300">{row.betCount > 0 ? `${row.hitCount}/${row.betCount}` : "-"}</div>
+                                  <div className={
+                                    row.skipped
+                                      ? "text-slate-500"
+                                      : row.won
+                                        ? "text-emerald-400"
+                                        : "text-red-400"
+                                  }>
+                                    {row.skipped ? "跳过" : row.won ? "命中" : "未中"}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}

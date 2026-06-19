@@ -32,6 +32,7 @@ export const api = {
   admin: {
     canadaAiStatus: () => api.get<CanadaAiAdminStatus>("/admin/canada-ai/status"),
     canadaTrueAiStatus: () => api.get<CanadaTrueAiAdminStatus>("/admin/canada-ai/true-status"),
+    canadaTrueAiSim: () => api.get<CanadaTrueAiSimStatus>("/admin/canada-ai/true-sim"),
     retrainCanadaAiFromChannel: () => api.post<CanadaAiAdminStatus>("/admin/canada-ai/retrain-from-channel", {}),
     hashGroupBets: () => api.get<{ period: string | null; bets: GroupBetEntry[]; totals: { kk: number; usdt: number; cny: number } }>("/admin/hash-group-bets"),
     canadaMonitorGroups: () => api.get<{ groups: { groupId: string; groupTitle: string | undefined; userId: number; active: boolean }[] }>("/admin/canada-monitor-groups"),
@@ -392,6 +393,34 @@ export interface CanadaTrueAiAdminStatus {
     accuracyMin: number | null;
     metrics: Record<string, unknown> | null;
   } | null;
+}
+
+export interface CanadaTrueAiSimSummary {
+  wins: number;
+  losses: number;
+  skips: number;
+  total: number;
+  winRate: string | null;
+  currentStreak: number;
+  maxWinStreak: number;
+  maxLossStreak: number;
+}
+
+export interface CanadaTrueAiSimRow {
+  term: number | null;
+  actual: string;
+  prediction: string | null;
+  won: boolean | null;
+  skipped: boolean;
+  streak: number;
+  hitCount: number;
+  betCount: number;
+}
+
+export interface CanadaTrueAiSimStatus {
+  summary: CanadaTrueAiSimSummary;
+  rows: CanadaTrueAiSimRow[];
+  historyCount: number;
 }
 
 export interface BetRecord {

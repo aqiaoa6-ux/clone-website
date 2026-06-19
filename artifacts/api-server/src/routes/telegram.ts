@@ -20,10 +20,10 @@ import {
   type CanadaAiChannelHistoryEntry,
   type CanadaAiSignal,
 } from "../lib/canadaAi";
-import { getCanadaTrueAiAdminStatus, getCanadaTrueAiRuntimeStatus, predictCanadaTrueAiAxisSignals, syncCanadaTrueAiDraws } from "../lib/canadaTrueAi";
+import { getCanadaTrueAiAdminStatus, predictCanadaTrueAiAxisSignals, syncCanadaTrueAiDraws } from "../lib/canadaTrueAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
-import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
+import { canadaAiDraws, cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
 import { eq, and, gt, gte, lt, desc, isNotNull } from "drizzle-orm";
 
 const router = Router();
@@ -1429,8 +1429,6 @@ function computeNextBet(session: TgSession, won: boolean): number {
 
 function checkRisk(session: TgSession): { ok: boolean; reason?: string } {
   const { stopLoss, targetProfit, maxConsecutiveLosses, cooldownSeconds } = session.cfg;
-  const trueAiBlockReason = getCanadaTrueAiBlockReason(session);
-  if (trueAiBlockReason) return { ok: false, reason: trueAiBlockReason };
   if (maxConsecutiveLosses > 0 && session.consecutiveLosses >= maxConsecutiveLosses)
     return { ok: false, reason: `连亏${session.consecutiveLosses}局，已达上限${maxConsecutiveLosses}局` };
   if (stopLoss > 0 && session.sessionPnl <= -stopLoss)
@@ -2035,26 +2033,7 @@ function rebalanceStructuredSelection(
   return next;
 }
 
-function getCanadaTrueAiBlockReason(session: TgSession): string | null {
-  if (session.cfg.gameMode !== "lottery") return null;
-  if (selectAlgoByPattern(session) !== "canada_clone_1") return null;
-  const runtime = getCanadaTrueAiRuntimeStatus();
-  if (!runtime.readiness.ready) {
-    return `真AI未达标，暂停实战: ${runtime.readiness.reason ?? "模型未就绪"}`;
-  }
-  const contextSize = recentDigits(session, 12).length;
-  if (contextSize < 8) {
-    return `真AI上下文不足，当前仅${contextSize}期历史`;
-  }
-  return null;
-}
-
 function canadaClone1(session: TgSession): string | null {
-  const trueAiBlockReason = getCanadaTrueAiBlockReason(session);
-  if (trueAiBlockReason) {
-    session.lastStructuredBetLabels = undefined;
-    return null;
-  }
   return canadaAiV1(session);
 }
 
@@ -8007,6 +7986,149 @@ router.get("/tg/canada-sim-history", requireAuth, (req, res) => {
   res.json({ rows, summary, mode, historyCount: fullHistory.length });
 });
 
+interface CanadaTrueAiSimRow {
+  term: number | null;
+  actual: string;
+  prediction: string | null;
+  won: boolean | null;
+  skipped: boolean;
+  streak: number;
+  hitCount: number;
+  betCount: number;
+}
+
+interface CanadaTrueAiSimSummary {
+  wins: number;
+  losses: number;
+  skips: number;
+  total: number;
+  winRate: string | null;
+  currentStreak: number;
+  maxWinStreak: number;
+  maxLossStreak: number;
+}
+
+function canadaDrawLabelFromDigits(digits: [number, number, number]): string {
+  const sum = digits[0] + digits[1] + digits[2];
+  return `${sum >= 14 ? "大" : "小"}${sum % 2 === 1 ? "单" : "双"}`;
+}
+
+function simulateCanadaTrueAiStep(
+  pastDigits: Array<[number, number, number]>,
+  actualDigits: [number, number, number],
+): Omit<CanadaTrueAiSimRow, "term" | "actual" | "streak"> {
+  const prevDigitsCache = lotteryDigitHistoryCache;
+  try {
+    lotteryDigitHistoryCache = [];
+    const fakeSession = {
+      recentDigitResults: pastDigits,
+      recentResults: [],
+      lastStructuredBetLabels: undefined,
+    } as unknown as TgSession;
+    const prediction = canadaClone1(fakeSession);
+    if (!prediction) {
+      return {
+        prediction: null,
+        won: null,
+        skipped: true,
+        hitCount: 0,
+        betCount: 0,
+      };
+    }
+    const parts = prediction.split("+").map(part => part.trim()).filter(isStructuredBetPart);
+    const actual = canadaDrawLabelFromDigits(actualDigits);
+    const hitCount = parts.filter(part => evaluateStructuredBetPart(part, actualDigits, actual)).length;
+    return {
+      prediction,
+      won: hitCount > 0,
+      skipped: false,
+      hitCount,
+      betCount: parts.length,
+    };
+  } finally {
+    lotteryDigitHistoryCache = prevDigitsCache;
+  }
+}
+
+async function getCanadaTrueAiSimulationStatus(): Promise<{
+  summary: CanadaTrueAiSimSummary;
+  rows: CanadaTrueAiSimRow[];
+  historyCount: number;
+}> {
+  const drawRows = await db
+    .select({
+      term: canadaAiDraws.term,
+      digitA: canadaAiDraws.digitA,
+      digitB: canadaAiDraws.digitB,
+      digitC: canadaAiDraws.digitC,
+    })
+    .from(canadaAiDraws)
+    .where(eq(canadaAiDraws.source, "tg-channel:pc28"))
+    .orderBy(desc(canadaAiDraws.id))
+    .limit(260);
+
+  const history = [...drawRows]
+    .reverse()
+    .map(row => ({
+      term: row.term ?? null,
+      digits: [row.digitA, row.digitB, row.digitC] as [number, number, number],
+    }));
+
+  const summary: CanadaTrueAiSimSummary = {
+    wins: 0,
+    losses: 0,
+    skips: 0,
+    total: 0,
+    winRate: null,
+    currentStreak: 0,
+    maxWinStreak: 0,
+    maxLossStreak: 0,
+  };
+  const rows: CanadaTrueAiSimRow[] = [];
+  let streak = 0;
+
+  for (let i = 24; i < history.length; i++) {
+    const pastDigits = history.slice(Math.max(0, i - CANADA_AI_HISTORY_LIMIT), i).map(item => item.digits);
+    const current = history[i]!;
+    const step = simulateCanadaTrueAiStep(pastDigits, current.digits);
+    if (step.skipped || step.won === null) {
+      summary.skips++;
+      streak = 0;
+      rows.push({
+        term: current.term,
+        actual: canadaDrawLabelFromDigits(current.digits),
+        streak: 0,
+        ...step,
+      });
+      continue;
+    }
+    summary.total++;
+    if (step.won) {
+      summary.wins++;
+      streak = streak > 0 ? streak + 1 : 1;
+      summary.maxWinStreak = Math.max(summary.maxWinStreak, streak);
+    } else {
+      summary.losses++;
+      streak = streak < 0 ? streak - 1 : -1;
+      summary.maxLossStreak = Math.max(summary.maxLossStreak, Math.abs(streak));
+    }
+    summary.currentStreak = streak;
+    rows.push({
+      term: current.term,
+      actual: canadaDrawLabelFromDigits(current.digits),
+      streak,
+      ...step,
+    });
+  }
+
+  summary.winRate = summary.total > 0 ? ((summary.wins / summary.total) * 100).toFixed(1) : null;
+  return {
+    summary,
+    rows: rows.slice(-50).reverse(),
+    historyCount: history.length,
+  };
+}
+
 router.get("/tg/events", requireAuth, (req, res) => {
   const userId = req.user!.userId;
   res.setHeader("Content-Type", "text/event-stream");
@@ -8628,6 +8750,10 @@ router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
 
 router.get("/admin/canada-ai/true-status", requireAdminSecret, async (_req, res) => {
   res.json(await getCanadaTrueAiAdminStatus());
+});
+
+router.get("/admin/canada-ai/true-sim", requireAdminSecret, async (_req, res) => {
+  res.json(await getCanadaTrueAiSimulationStatus());
 });
 
 router.post("/admin/canada-ai/retrain-from-channel", requireAdminSecret, async (_req, res) => {
