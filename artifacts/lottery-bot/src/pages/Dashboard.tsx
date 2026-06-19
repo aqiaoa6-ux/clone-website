@@ -150,6 +150,78 @@ function NumBall({ n, sum }: { n?: number; sum?: boolean }) {
   );
 }
 
+function LotteryCountdownPanel({
+  draw,
+  nextBetAt,
+  autoBet,
+}: {
+  draw: DrawState | null;
+  nextBetAt: number | null;
+  autoBet?: boolean;
+}) {
+  const [nowMs, setNowMs] = useState(Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  const countdown = draw ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
+  const nextBetIn = nextBetAt && nextBetAt > nowMs ? Math.ceil((nextBetAt - nowMs) / 1000) : null;
+  const cycleSec = 210;
+  const pct = Math.min(100, Math.max(0, (countdown / cycleSec) * 100));
+  const betZonePct = Math.min(100, (80 / cycleSec) * 100);
+
+  return (
+    <>
+      <div className="py-2 text-center">
+        <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${
+          countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"
+        }`}>
+          {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
+        </div>
+        <div className="mt-1 text-xs text-slate-500">距封盘倒计时</div>
+      </div>
+
+      {draw && (
+        <div className="mb-2 mt-1">
+          <div className="relative h-2 overflow-hidden rounded-full bg-[#0f1220]">
+            <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
+            <div
+              className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${
+                countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"
+              }`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <div className="mt-0.5 flex justify-between text-[10px] text-slate-600">
+            <span>开奖</span>
+            <span className="text-yellow-600/70">←投注区间 01:20→</span>
+            <span>封盘</span>
+          </div>
+        </div>
+      )}
+
+      {autoBet && countdown > 0 && countdown <= 80 && (
+        <div className="mt-2 rounded-xl border border-yellow-500/30 bg-yellow-500/10 px-4 py-2.5 text-center">
+          <span className="mr-2 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-yellow-400 align-middle" />
+          <span className="text-sm font-semibold text-yellow-400">投注窗口开启中</span>
+          <span className="ml-2 text-xs text-yellow-400/50">剩余 {countdown}s</span>
+        </div>
+      )}
+
+      {nextBetIn !== null && autoBet && countdown > 80 && (
+        <div className="mt-2 rounded-xl border border-blue-500/20 bg-blue-500/10 px-4 py-2.5 text-center">
+          <span className="text-sm text-blue-400">
+            距投注还有 <span className="font-bold">{nextBetIn}s</span>
+            <span className="ml-1 text-xs text-blue-300/50">（封盘前 01:20 下注）</span>
+          </span>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── TG Login Flow ────────────────────────────────────────────────────────────
 
 function TgLoginCard({ onDone }: { onDone: () => void }) {
@@ -918,7 +990,6 @@ export default function Dashboard() {
   const [status, setStatus] = useState<TgStatus | null>(null);
   const [bets, setBets] = useState<BetRecord[]>([]);
   const [draw, setDraw] = useState<DrawState | null>(null);
-  const [nowMs, setNowMs] = useState(Date.now());
   const [nextBetAt, setNextBetAt] = useState<number | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showGroupSetup, setShowGroupSetup] = useState(false);
@@ -1142,16 +1213,13 @@ export default function Dashboard() {
     void fetchStatus();
     void fetchBets();
     void fetchDraw();
-    const statusInterval = setInterval(() => void fetchStatus(), 10_000);
+    const statusInterval = setInterval(() => void fetchStatus(), 20_000);
     const drawInterval = setInterval(() => void fetchDraw(), 30_000);
-    const tickInterval = setInterval(() => setNowMs(Date.now()), 3000);
-    return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
+    return () => { clearInterval(statusInterval); clearInterval(drawInterval); };
   }, [fetchStatus, fetchBets, fetchDraw]);
 
   // ─── Derived state ───────────────────────────────────────────────────────
 
-  const countdown = draw ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;
-  const nextBetIn = nextBetAt && nextBetAt > nowMs ? Math.ceil((nextBetAt - nowMs) / 1000) : null;
   const cardExpiry = card?.expiresAt ? new Date(card.expiresAt) : null;
   const cardDaysLeft = cardExpiry ? Math.ceil((cardExpiry.getTime() - Date.now()) / 86400000) : 0;
 
@@ -1545,61 +1613,7 @@ export default function Dashboard() {
                 )}
               </div>
 
-              {/* Countdown display */}
-              <div className="text-center py-2">
-                <div className={`text-5xl font-bold font-mono tracking-tight transition-colors ${
-                  countdown <= 80 && countdown > 0 ? "text-yellow-400" : "text-white"
-                }`}>
-                  {String(Math.floor(countdown / 60)).padStart(2, "0")}:{String(countdown % 60).padStart(2, "0")}
-                </div>
-                <div className="text-slate-500 text-xs mt-1">距封盘倒计时</div>
-              </div>
-
-              {/* Progress bar showing 80s bet zone */}
-              {draw && (() => {
-                const cycleSec = 210;
-                const pct = Math.min(100, Math.max(0, (countdown / cycleSec) * 100));
-                const betZonePct = Math.min(100, (80 / cycleSec) * 100);
-                return (
-                  <div className="mt-1 mb-2">
-                    <div className="relative h-2 bg-[#0f1220] rounded-full overflow-hidden">
-                      {/* bet zone highlight (last 80s) */}
-                      <div className="absolute right-0 top-0 h-full rounded-full bg-yellow-500/20" style={{ width: `${betZonePct}%` }} />
-                      {/* time remaining bar */}
-                      <div
-                        className={`absolute left-0 top-0 h-full rounded-full transition-all duration-1000 ${
-                          countdown <= 80 ? "bg-yellow-400" : "bg-blue-500"
-                        }`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-[10px] text-slate-600 mt-0.5">
-                      <span>开奖</span>
-                      <span className="text-yellow-600/70">←投注区间 01:20→</span>
-                      <span>封盘</span>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Bet window active */}
-              {status.autoBet && countdown > 0 && countdown <= 80 && (
-                <div className="mt-2 bg-yellow-500/10 border border-yellow-500/30 rounded-xl px-4 py-2.5 text-center">
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse mr-2 align-middle" />
-                  <span className="text-yellow-400 text-sm font-semibold">投注窗口开启中</span>
-                  <span className="text-yellow-400/50 text-xs ml-2">剩余 {countdown}s</span>
-                </div>
-              )}
-
-              {/* Next bet countdown (outside bet window) */}
-              {nextBetIn !== null && status.autoBet && countdown > 80 && (
-                <div className="mt-2 bg-blue-500/10 border border-blue-500/20 rounded-xl px-4 py-2.5 text-center">
-                  <span className="text-blue-400 text-sm">
-                    距投注还有 <span className="font-bold">{nextBetIn}s</span>
-                    <span className="text-blue-300/50 text-xs ml-1">（封盘前 01:20 下注）</span>
-                  </span>
-                </div>
-              )}
+              <LotteryCountdownPanel draw={draw} nextBetAt={nextBetAt} autoBet={status.autoBet} />
 
               {status.riskBlocked && (
                 <div className="mt-2 bg-orange-500/10 border border-orange-500/20 rounded-xl px-4 py-2.5 text-center">
