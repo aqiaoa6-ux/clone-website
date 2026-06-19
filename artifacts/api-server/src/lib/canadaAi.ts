@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  buildCanadaTrueAiSequenceDataset,
+  completeCanadaTrueAiTrainingJob,
+  createCanadaTrueAiTrainingJob,
+  failCanadaTrueAiTrainingJob,
+} from "./canadaTrueAi";
 import { logger } from "./logger";
 
 export type CanadaAiAxis = "A" | "B" | "C" | "S";
@@ -750,6 +756,13 @@ export async function warmupCanadaAiModelFromHistory(
   canadaAiStatus.lastSource = source;
   canadaAiStatus.lastError = null;
   logCanadaAi("info", "[canada-ai] history warmup started", { source, historySize: digitHistory.length, filePath });
+  const dataset = buildCanadaTrueAiSequenceDataset(digitHistory);
+  const jobId = await createCanadaTrueAiTrainingJob({
+    source,
+    trigger: "history-warmup",
+    historySize: digitHistory.length,
+    lookback: dataset.summary.lookback,
+  });
   try {
     const bundle = ensureCanadaAiModel(digitHistory, filePath);
     if (!bundle) {
@@ -757,11 +770,24 @@ export async function warmupCanadaAiModelFromHistory(
       canadaAiStatus.lastFinishedAt = Date.now();
       canadaAiStatus.lastHistorySize = digitHistory.length;
       canadaAiStatus.lastError = "insufficient history";
+      await failCanadaTrueAiTrainingJob(jobId, "insufficient history");
       logCanadaAi("warn", "[canada-ai] history warmup skipped, insufficient history", { source, historySize: digitHistory.length });
       return null;
     }
     updateCanadaAiReady(bundle, filePath);
     canadaAiStatus.lastSource = source;
+    await completeCanadaTrueAiTrainingJob({
+      jobId,
+      historySize: bundle.historySize,
+      artifactPath: filePath,
+      activate: true,
+      metrics: {
+        modelCount: bundle.models.length,
+        accuracyAvg: averageAccuracy(bundle.models),
+        trainedAt: bundle.trainedAt,
+        dataset: dataset.summary,
+      },
+    });
     logCanadaAi("info", "[canada-ai] history warmup completed", {
       source,
       historySize: bundle.historySize,
@@ -778,6 +804,7 @@ export async function warmupCanadaAiModelFromHistory(
     canadaAiStatus.modelExists = fs.existsSync(filePath);
     canadaAiStatus.lastError = normalizeErrorMessage(err);
     canadaAiStatus.lastSource = source;
+    await failCanadaTrueAiTrainingJob(jobId, normalizeErrorMessage(err));
     logCanadaAi("error", "[canada-ai] history warmup failed", {
       source,
       filePath,

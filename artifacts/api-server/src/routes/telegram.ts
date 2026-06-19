@@ -21,6 +21,7 @@ import {
   type CanadaAiChannelHistoryEntry,
   type CanadaAiSignal,
 } from "../lib/canadaAi";
+import { syncCanadaTrueAiDraws } from "../lib/canadaTrueAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
@@ -6410,6 +6411,7 @@ async function syncCanadaAiChannelHistory(
       return false;
     }
     saveCanadaAiChannelHistory(mergedEntries);
+    await syncCanadaTrueAiDraws(mergedEntries, source);
     session.canadaAiChannelLastMsgId = mergedEntries[mergedEntries.length - 1]?.msgId ?? session.canadaAiChannelLastMsgId;
     const digitHistory = channelHistoryEntriesToDigits(mergedEntries);
     patchCanadaAiAdminStatus({ lastHistorySize: digitHistory.length });
