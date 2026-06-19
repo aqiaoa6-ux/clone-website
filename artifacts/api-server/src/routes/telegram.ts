@@ -1199,7 +1199,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     client, stringSession,
     phone: data.phone ?? "",
     groups: connected ? await fetchGroups(client) : [],
-    cfg: sanitizeCfg(data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG }),
+    cfg: sanitizeCfg(data.cfg ? { ...DEFAULT_CFG, ...data.cfg } : { ...DEFAULT_CFG }),
     betLog: [], sseClients: new Set(),
     messageHandler: null, messageHandlerBuilder: null,
     kkpayHandler: null, kkpayHandlerBuilder: null,
@@ -1250,6 +1250,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
 
   if (connected) {
     if (session.watchGroupId) startGroupListener(session);
+    if (session.cfg.autoBet && session.watchGroupId) startPoller(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
@@ -1903,7 +1904,7 @@ function buildStructuredAiFamilySignal(axis: StructuredBetAxis, family: Structur
 
 function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
   const history = recentDigits(session, CANADA_AI_HISTORY_LIMIT);
-  return predictCanadaAiAxisSignals(axis, history).map((item: CanadaAiSignal) => ({
+  const predicted = predictCanadaAiAxisSignals(axis, history).map((item: CanadaAiSignal) => ({
     axis: item.axis,
     family: item.family,
     bet: item.bet,
@@ -1911,6 +1912,7 @@ function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis)
     confidence: item.confidence,
     strength: item.strength,
   }));
+  return predicted.length > 0 ? predicted : structuredSignalsForAxis(session, axis);
 }
 
 function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
