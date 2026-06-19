@@ -22,7 +22,7 @@ import {
 } from "../lib/canadaAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
-import { canadaAiDraws, cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
+import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
 import { eq, and, gt, gte, lt, desc, isNotNull } from "drizzle-orm";
 
 const router = Router();
