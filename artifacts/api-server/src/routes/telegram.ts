@@ -9,11 +9,16 @@ import path from "path";
 import { logger } from "../lib/logger";
 import {
   addCanadaAiAdminLog,
+  channelHistoryEntriesToDigits,
   getCanadaAiAdminStatus,
+  loadCanadaAiChannelHistory,
+  mergeCanadaAiChannelHistory,
   patchCanadaAiAdminStatus,
   predictCanadaAiAxisSignals,
+  saveCanadaAiChannelHistory,
   setCanadaAiAdminSource,
   warmupCanadaAiModelFromHistory,
+  type CanadaAiChannelHistoryEntry,
   type CanadaAiSignal,
 } from "../lib/canadaAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
@@ -436,6 +441,9 @@ export interface TgSession {
   hashResultPollTimer?: ReturnType<typeof setInterval>;
   hashResultLastMsgId: number;
   hashBetDelayTimer?: ReturnType<typeof setTimeout>;
+  canadaAiChannelSyncTimer?: ReturnType<typeof setInterval>;
+  canadaAiChannelLastMsgId: number;
+  canadaAiChannelSyncInFlight: boolean;
   // 加拿大独立监控（admin 面板，支持多群）
   canadaMonitorGroupIds: string[];
   canadaMonitorPollers: Record<string, boolean>;   // groupId → active flag
@@ -994,6 +1002,7 @@ function stopAllTimers(session: TgSession): void {
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (session.lotteryPollTimer) { clearInterval(session.lotteryPollTimer); session.lotteryPollTimer = undefined; }
+  if (session.canadaAiChannelSyncTimer) { clearInterval(session.canadaAiChannelSyncTimer); session.canadaAiChannelSyncTimer = undefined; }
   if (session.globalHandler && session.globalHandlerBuilder) {
     try { session.client.removeEventHandler(session.globalHandler, session.globalHandlerBuilder); } catch { /* ok */ }
     session.globalHandler = null; session.globalHandlerBuilder = null;
@@ -1231,7 +1240,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     chatLog: [],
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-    hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
+    hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0, canadaAiChannelSyncTimer: undefined, canadaAiChannelLastMsgId: 0, canadaAiChannelSyncInFlight: false,
     canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
     privateMonitorGroupIds: (data as unknown as { privateMonitorGroupIds?: string[] }).privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
     privateCountdown30Term: null, privateAlgoLastBetTerm: null,
@@ -1254,7 +1263,9 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
-    void warmupCanadaAiFromChannel(session);
+    void warmupCanadaAiFromChannel(session).then(ok => {
+      if (ok) startCanadaAiChannelSync(session);
+    });
     ensureGlobalPrivateMonitorPollers();
     logger.info({ userId }, "[tg] session restored (online)");
   } else {
@@ -6101,6 +6112,8 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
 const HX28_RESULT_CHANNEL = "hx28kjw";
 const CANADA_AI_RESULT_CHANNEL = "pc28";
 const CANADA_AI_RESULT_CHANNEL_TITLE = "PC28开奖频道-开奖结果查询";
+const CANADA_AI_CHANNEL_BATCH_SIZE = 100;
+const CANADA_AI_CHANNEL_SYNC_INTERVAL_MS = 60_000;
 
 function stopHashResultPoller(session: TgSession): void {
   if (session.hashResultPollTimer) {
@@ -6245,7 +6258,69 @@ async function resolveCanadaAiChannelEntity(session: TgSession): Promise<Paramet
   throw new Error(`Cannot find any entity corresponding to "${raw}"`);
 }
 
-async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
+function stopCanadaAiChannelSync(session: TgSession): void {
+  if (session.canadaAiChannelSyncTimer) {
+    clearInterval(session.canadaAiChannelSyncTimer);
+    session.canadaAiChannelSyncTimer = undefined;
+  }
+}
+
+function buildCanadaAiHistoryEntry(msg: Api.Message): CanadaAiChannelHistoryEntry | null {
+  const parsed = parseCanadaAiChannelDigits(msg.message ?? "");
+  if (!parsed) return null;
+  return {
+    msgId: msg.id,
+    term: parsed.term,
+    digits: parsed.digits,
+  };
+}
+
+async function fetchAllCanadaAiChannelEntries(
+  session: TgSession,
+  chanTarget: Parameters<typeof session.client.getMessages>[0],
+): Promise<CanadaAiChannelHistoryEntry[]> {
+  const allEntries: CanadaAiChannelHistoryEntry[] = [];
+  let offsetId = 0;
+  for (;;) {
+    const batch = await session.client.getMessages(chanTarget, {
+      limit: CANADA_AI_CHANNEL_BATCH_SIZE,
+      ...(offsetId > 0 ? { offsetId } : {}),
+    }) as Api.Message[];
+    if (!batch.length) break;
+    const sorted = [...batch].sort((a, b) => a.id - b.id);
+    allEntries.push(
+      ...sorted
+        .map(msg => buildCanadaAiHistoryEntry(msg))
+        .filter((item): item is CanadaAiChannelHistoryEntry => item !== null),
+    );
+    const oldestId = sorted[0]?.id ?? 0;
+    if (batch.length < CANADA_AI_CHANNEL_BATCH_SIZE || oldestId <= 0 || offsetId === oldestId) break;
+    offsetId = oldestId;
+  }
+  return mergeCanadaAiChannelHistory([], allEntries);
+}
+
+async function fetchIncrementalCanadaAiChannelEntries(
+  session: TgSession,
+  chanTarget: Parameters<typeof session.client.getMessages>[0],
+): Promise<CanadaAiChannelHistoryEntry[]> {
+  const minId = session.canadaAiChannelLastMsgId;
+  if (minId <= 0) return [];
+  const recent = await session.client.getMessages(chanTarget, {
+    limit: CANADA_AI_CHANNEL_BATCH_SIZE,
+    minId,
+  }) as Api.Message[];
+  return [...recent]
+    .sort((a, b) => a.id - b.id)
+    .map(msg => buildCanadaAiHistoryEntry(msg))
+    .filter((item): item is CanadaAiChannelHistoryEntry => item !== null);
+}
+
+async function syncCanadaAiChannelHistory(
+  session: TgSession,
+  mode: "full" | "incremental",
+  retrain: boolean,
+): Promise<boolean> {
   const source = `tg-channel:${CANADA_AI_RESULT_CHANNEL}`;
   setCanadaAiAdminSource(source);
   patchCanadaAiAdminStatus({
@@ -6257,12 +6332,24 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
   addCanadaAiAdminLog("info", "[canada-ai] channel history fetch started", {
     source,
     channel: CANADA_AI_RESULT_CHANNEL,
+    channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
     userId: session.userId,
+    mode,
+    retrain,
   });
   try {
     const chanTarget = await resolveCanadaAiChannelEntity(session);
-    const recent = await session.client.getMessages(chanTarget, { limit: 220 }) as Api.Message[];
-    if (!recent.length) {
+    const existingEntries = loadCanadaAiChannelHistory();
+    if (session.canadaAiChannelLastMsgId <= 0 && existingEntries.length > 0) {
+      session.canadaAiChannelLastMsgId = existingEntries[existingEntries.length - 1]?.msgId ?? 0;
+    }
+    const fetchedEntries = mode === "full"
+      ? await fetchAllCanadaAiChannelEntries(session, chanTarget)
+      : await fetchIncrementalCanadaAiChannelEntries(session, chanTarget);
+    const mergedEntries = mode === "full"
+      ? fetchedEntries
+      : mergeCanadaAiChannelHistory(existingEntries, fetchedEntries);
+    if (!mergedEntries.length) {
       patchCanadaAiAdminStatus({
         phase: "error",
         lastFinishedAt: Date.now(),
@@ -6274,25 +6361,22 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
         channel: CANADA_AI_RESULT_CHANNEL,
         channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
         userId: session.userId,
+        mode,
       });
       logger.warn({ channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history empty");
       return false;
     }
-    const parsed = [...recent]
-      .sort((a, b) => a.id - b.id)
-      .map(msg => parseCanadaAiChannelDigits(msg.message ?? ""))
-      .filter((item): item is { term: number | null; digits: [number, number, number] } => item !== null);
-    const unique = new Map<string, [number, number, number]>();
-    for (const item of parsed) {
-      const key = item.term ? String(item.term) : `${item.digits.join("")}-${unique.size}`;
-      unique.set(key, item.digits);
-    }
-    const digitHistory = [...unique.values()];
+    saveCanadaAiChannelHistory(mergedEntries);
+    session.canadaAiChannelLastMsgId = mergedEntries[mergedEntries.length - 1]?.msgId ?? session.canadaAiChannelLastMsgId;
+    const digitHistory = channelHistoryEntriesToDigits(mergedEntries);
     patchCanadaAiAdminStatus({ lastHistorySize: digitHistory.length });
     logger.info({
       channel: CANADA_AI_RESULT_CHANNEL,
       userId: session.userId,
       historySize: digitHistory.length,
+      fetchedEntries: fetchedEntries.length,
+      totalEntries: mergedEntries.length,
+      mode,
     }, "[canada-ai] channel history fetched");
     addCanadaAiAdminLog("info", "[canada-ai] channel history fetched", {
       source,
@@ -6300,10 +6384,21 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
       channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
       userId: session.userId,
       historySize: digitHistory.length,
+      fetchedEntries: fetchedEntries.length,
+      totalEntries: mergedEntries.length,
+      mode,
     });
     if (digitHistory.length > 0) {
       lotteryDigitHistoryCache = digitHistory.slice(-360);
-      await warmupCanadaAiModelFromHistory(digitHistory, source);
+      if (retrain || fetchedEntries.length > 0 || mode === "full") {
+        await warmupCanadaAiModelFromHistory(digitHistory, source);
+      } else {
+        patchCanadaAiAdminStatus({
+          phase: "ready",
+          lastFinishedAt: Date.now(),
+          lastError: null,
+        });
+      }
     }
     return true;
   } catch (err) {
@@ -6313,6 +6408,7 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
       channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
       userId: session.userId,
       error: err instanceof Error ? err.message : String(err),
+      mode,
     });
     patchCanadaAiAdminStatus({
       phase: "error",
@@ -6322,6 +6418,27 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
     logger.warn({ err, channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history fetch failed");
     return false;
   }
+}
+
+async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
+  return syncCanadaAiChannelHistory(session, "full", true);
+}
+
+function startCanadaAiChannelSync(session: TgSession): void {
+  stopCanadaAiChannelSync(session);
+  session.canadaAiChannelSyncTimer = setInterval(() => {
+    if (tgSessions.get(session.userId) !== session) {
+      stopCanadaAiChannelSync(session);
+      return;
+    }
+    if (session.canadaAiChannelSyncInFlight) return;
+    session.canadaAiChannelSyncInFlight = true;
+    void syncCanadaAiChannelHistory(session, "incremental", false)
+      .catch(() => { /* ignore, status/log already updated */ })
+      .finally(() => {
+        session.canadaAiChannelSyncInFlight = false;
+      });
+  }, CANADA_AI_CHANNEL_SYNC_INTERVAL_MS);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -7036,7 +7153,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       adaptiveSwitchKillMode: false,
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-      hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
+      hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0, canadaAiChannelSyncTimer: undefined, canadaAiChannelLastMsgId: 0, canadaAiChannelSyncInFlight: false,
       canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
       privateMonitorGroupIds: (existing as unknown as { privateMonitorGroupIds?: string[] } | undefined)?.privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
       privateCountdown30Term: null, privateAlgoLastBetTerm: null,
@@ -7070,6 +7187,9 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
+    void warmupCanadaAiFromChannel(session).then(ok => {
+      if (ok) startCanadaAiChannelSync(session);
+    });
     ensureGlobalPrivateMonitorPollers();
     saveSession(session);
     startWatchdog(session);
@@ -7099,6 +7219,9 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
+    void warmupCanadaAiFromChannel(session).then(ok => {
+      if (ok) startCanadaAiChannelSync(session);
+    });
     ensureGlobalPrivateMonitorPollers();
     saveSession(session);
     startWatchdog(session);
@@ -8383,6 +8506,7 @@ router.post("/admin/canada-ai/retrain-from-channel", requireAdminSecret, async (
   let success = false;
   for (const session of onlineSessions) {
     if (await warmupCanadaAiFromChannel(session)) {
+      startCanadaAiChannelSync(session);
       success = true;
       break;
     }

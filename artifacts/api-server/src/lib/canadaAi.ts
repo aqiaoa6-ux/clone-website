@@ -46,6 +46,12 @@ export interface CanadaAiAdminStatus {
   recentLogs: CanadaAiLogEntry[];
 }
 
+export interface CanadaAiChannelHistoryEntry {
+  msgId: number;
+  term: number | null;
+  digits: CanadaAiDigits;
+}
+
 interface CanadaAiFeature {
   labels: CanadaAiAttr[];
   shortRatio: number;
@@ -106,6 +112,7 @@ const TRAIN_EPOCHS = 240;
 const REGULARIZATION = 0.0025;
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_MODEL_PATH = path.resolve(MODULE_DIR, "..", "..", "model-data", "canada-ai-model.json");
+const DEFAULT_CHANNEL_HISTORY_PATH = path.resolve(MODULE_DIR, "..", "..", "model-data", "canada-ai-channel-history.json");
 const REMOTE_HISTORY_PAGES = 8;
 
 let cachedBundle: CanadaAiModelBundle | null = null;
@@ -167,6 +174,59 @@ export function setCanadaAiAdminSource(source: string | null): void {
 
 export function patchCanadaAiAdminStatus(patch: Partial<CanadaAiAdminStatus>): void {
   Object.assign(canadaAiStatus, patch);
+}
+
+function normalizeChannelHistoryEntries(entries: CanadaAiChannelHistoryEntry[]): CanadaAiChannelHistoryEntry[] {
+  return [...entries]
+    .filter(item =>
+      Number.isInteger(item.msgId)
+      && item.msgId > 0
+      && Array.isArray(item.digits)
+      && item.digits.length === 3
+      && item.digits.every(v => Number.isInteger(v) && v >= 0 && v <= 9),
+    )
+    .sort((a, b) => a.msgId - b.msgId);
+}
+
+export function loadCanadaAiChannelHistory(
+  filePath = DEFAULT_CHANNEL_HISTORY_PATH,
+): CanadaAiChannelHistoryEntry[] {
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as CanadaAiChannelHistoryEntry[];
+    if (!Array.isArray(parsed)) return [];
+    return normalizeChannelHistoryEntries(parsed);
+  } catch {
+    return [];
+  }
+}
+
+export function saveCanadaAiChannelHistory(
+  entries: CanadaAiChannelHistoryEntry[],
+  filePath = DEFAULT_CHANNEL_HISTORY_PATH,
+): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(normalizeChannelHistoryEntries(entries), null, 2), "utf8");
+}
+
+export function mergeCanadaAiChannelHistory(
+  currentEntries: CanadaAiChannelHistoryEntry[],
+  incomingEntries: CanadaAiChannelHistoryEntry[],
+): CanadaAiChannelHistoryEntry[] {
+  const merged = new Map<number, CanadaAiChannelHistoryEntry>();
+  for (const item of normalizeChannelHistoryEntries(currentEntries)) merged.set(item.msgId, item);
+  for (const item of normalizeChannelHistoryEntries(incomingEntries)) merged.set(item.msgId, item);
+  return [...merged.values()].sort((a, b) => a.msgId - b.msgId);
+}
+
+export function channelHistoryEntriesToDigits(entries: CanadaAiChannelHistoryEntry[]): CanadaAiDigits[] {
+  const unique = new Map<string, CanadaAiDigits>();
+  for (const item of normalizeChannelHistoryEntries(entries)) {
+    const key = item.term ? String(item.term) : `${item.msgId}:${item.digits.join("")}`;
+    unique.set(key, item.digits);
+  }
+  return [...unique.values()];
 }
 
 function updateCanadaAiReady(bundle: CanadaAiModelBundle, filePath: string) {
