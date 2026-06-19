@@ -571,6 +571,7 @@ export const tgSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
 let lotteryDigitHistoryCache: Array<[number, number, number]> = [];
 const CANADA_AI_HISTORY_LIMIT = 180;
+let canadaAiChannelSyncOwnerUserId: number | null = null;
 // 哈希28 全局开奖历史（所有用户共享，最新优先，最多保留 100 期）
 let hashHistoryCache: HashResult[] = [];
 
@@ -1263,9 +1264,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
-    void warmupCanadaAiFromChannel(session).then(ok => {
-      if (ok) startCanadaAiChannelSync(session);
-    });
+    queueCanadaAiChannelBootstrap(session);
     ensureGlobalPrivateMonitorPollers();
     logger.info({ userId }, "[tg] session restored (online)");
   } else {
@@ -6263,6 +6262,9 @@ function stopCanadaAiChannelSync(session: TgSession): void {
     clearInterval(session.canadaAiChannelSyncTimer);
     session.canadaAiChannelSyncTimer = undefined;
   }
+  if (canadaAiChannelSyncOwnerUserId === session.userId) {
+    canadaAiChannelSyncOwnerUserId = null;
+  }
 }
 
 function buildCanadaAiHistoryEntry(msg: Api.Message): CanadaAiChannelHistoryEntry | null {
@@ -6437,7 +6439,13 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
 }
 
 function startCanadaAiChannelSync(session: TgSession): void {
+  if (canadaAiChannelSyncOwnerUserId !== null && canadaAiChannelSyncOwnerUserId !== session.userId) {
+    const previousOwner = tgSessions.get(canadaAiChannelSyncOwnerUserId);
+    if (previousOwner) stopCanadaAiChannelSync(previousOwner);
+  }
+  canadaAiChannelSyncOwnerUserId = session.userId;
   stopCanadaAiChannelSync(session);
+  canadaAiChannelSyncOwnerUserId = session.userId;
   session.canadaAiChannelSyncTimer = setInterval(() => {
     if (tgSessions.get(session.userId) !== session) {
       stopCanadaAiChannelSync(session);
@@ -6451,6 +6459,15 @@ function startCanadaAiChannelSync(session: TgSession): void {
         session.canadaAiChannelSyncInFlight = false;
       });
   }, CANADA_AI_CHANNEL_SYNC_INTERVAL_MS);
+}
+
+function queueCanadaAiChannelBootstrap(session: TgSession): void {
+  if (canadaAiChannelSyncOwnerUserId !== null && canadaAiChannelSyncOwnerUserId !== session.userId) return;
+  canadaAiChannelSyncOwnerUserId = session.userId;
+  void warmupCanadaAiFromChannel(session).then(ok => {
+    if (ok) startCanadaAiChannelSync(session);
+    else if (canadaAiChannelSyncOwnerUserId === session.userId) canadaAiChannelSyncOwnerUserId = null;
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -7199,9 +7216,7 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
-    void warmupCanadaAiFromChannel(session).then(ok => {
-      if (ok) startCanadaAiChannelSync(session);
-    });
+    queueCanadaAiChannelBootstrap(session);
     ensureGlobalPrivateMonitorPollers();
     saveSession(session);
     startWatchdog(session);
@@ -7231,9 +7246,7 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
-    void warmupCanadaAiFromChannel(session).then(ok => {
-      if (ok) startCanadaAiChannelSync(session);
-    });
+    queueCanadaAiChannelBootstrap(session);
     ensureGlobalPrivateMonitorPollers();
     saveSession(session);
     startWatchdog(session);
