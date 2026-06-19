@@ -149,6 +149,8 @@ export default function AdminPage() {
   // ── canada ai tab ──
   const [canadaAiStatus, setCanadaAiStatus] = useState<CanadaAiAdminStatus | null>(null);
   const [loadingCanadaAi, setLoadingCanadaAi] = useState(false);
+  const [retrainingCanadaAi, setRetrainingCanadaAi] = useState(false);
+  const [canadaAiActionError, setCanadaAiActionError] = useState("");
 
   // ── 后台二级密码门控 ──
   const [secretVerified, setSecretVerified] = useState(false);
@@ -487,6 +489,19 @@ export default function AdminPage() {
       setCanadaAiStatus(null);
     } finally {
       setLoadingCanadaAi(false);
+    }
+  };
+
+  const retrainCanadaAiFromChannel = async () => {
+    setRetrainingCanadaAi(true);
+    setCanadaAiActionError("");
+    try {
+      const r = await api.admin.retrainCanadaAiFromChannel();
+      setCanadaAiStatus(r);
+    } catch (err) {
+      setCanadaAiActionError(err instanceof Error ? err.message : "频道重训失败");
+    } finally {
+      setRetrainingCanadaAi(false);
     }
   };
 
@@ -1811,11 +1826,29 @@ export default function AdminPage() {
           <>
             <div className="flex justify-between items-center">
               <div className="text-slate-400 text-sm">加拿大同款 AI 训练状态</div>
-              <button onClick={() => void loadCanadaAiStatus()} disabled={loadingCanadaAi}
-                className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-3 py-1 rounded-lg transition disabled:opacity-50">
-                {loadingCanadaAi ? "刷新中..." : "刷新"}
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void retrainCanadaAiFromChannel()}
+                  disabled={loadingCanadaAi || retrainingCanadaAi}
+                  className="text-xs text-emerald-400 hover:text-emerald-300 border border-emerald-500/30 px-3 py-1 rounded-lg transition disabled:opacity-50"
+                >
+                  {retrainingCanadaAi ? "重训中..." : "从@pc28重训"}
+                </button>
+                <button
+                  onClick={() => void loadCanadaAiStatus()}
+                  disabled={loadingCanadaAi || retrainingCanadaAi}
+                  className="text-xs text-blue-400 hover:text-blue-300 border border-blue-500/30 px-3 py-1 rounded-lg transition disabled:opacity-50"
+                >
+                  {loadingCanadaAi ? "刷新中..." : "刷新"}
+                </button>
+              </div>
             </div>
+
+            {canadaAiActionError && (
+              <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                操作失败：{canadaAiActionError}
+              </div>
+            )}
 
             {!canadaAiStatus ? (
               <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-10 text-center text-slate-600">
@@ -1855,6 +1888,10 @@ export default function AdminPage() {
                     <h2 className="text-white font-semibold text-sm">模型信息</h2>
                   </div>
                   <div className="px-5 py-4 space-y-3 text-sm">
+                    <div>
+                      <div className="text-slate-500 text-xs mb-1">训练来源</div>
+                      <div className="text-slate-300 text-xs">{canadaAiStatus.lastSource || "-"}</div>
+                    </div>
                     <div>
                       <div className="text-slate-500 text-xs mb-1">模型文件</div>
                       <div className="text-slate-300 break-all font-mono text-xs">{canadaAiStatus.modelPath}</div>

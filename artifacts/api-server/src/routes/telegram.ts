@@ -7,7 +7,14 @@ import { NewMessage, NewMessageEvent, Raw } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
-import { getCanadaAiAdminStatus, predictCanadaAiAxisSignals, type CanadaAiSignal } from "../lib/canadaAi";
+import {
+  addCanadaAiAdminLog,
+  getCanadaAiAdminStatus,
+  predictCanadaAiAxisSignals,
+  setCanadaAiAdminSource,
+  warmupCanadaAiModelFromHistory,
+  type CanadaAiSignal,
+} from "../lib/canadaAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
@@ -1245,6 +1252,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
+    void warmupCanadaAiFromChannel(session);
     ensureGlobalPrivateMonitorPollers();
     logger.info({ userId }, "[tg] session restored (online)");
   } else {
@@ -6088,6 +6096,7 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
 // ─── Hash result channel poller (t.me/hx28kjw) ───────────────────────────────
 
 const HX28_RESULT_CHANNEL = "hx28kjw";
+const CANADA_AI_RESULT_CHANNEL = "pc28";
 
 function stopHashResultPoller(session: TgSession): void {
   if (session.hashResultPollTimer) {
@@ -6167,6 +6176,78 @@ function startHashResultPoller(session: TgSession): void {
       })();
     }, 3000);
   })();
+}
+
+function parseCanadaAiChannelDigits(text: string): { term: number | null; digits: [number, number, number] } | null {
+  const compact = text.replace(/\s+/g, " ");
+  const match = compact.match(/(\d{4,})\s*期[\s\S]*?([0-9])\s*\+\s*([0-9])\s*\+\s*([0-9])\s*=\s*(\d{1,2})/);
+  if (!match) return null;
+  const a = Number(match[2]);
+  const b = Number(match[3]);
+  const c = Number(match[4]);
+  const sum = Number(match[5]);
+  if ([a, b, c].some(v => !Number.isInteger(v) || v < 0 || v > 9)) return null;
+  if (a + b + c !== sum) return null;
+  return {
+    term: Number(match[1]) || null,
+    digits: [a, b, c],
+  };
+}
+
+async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
+  const source = `tg-channel:${CANADA_AI_RESULT_CHANNEL}`;
+  setCanadaAiAdminSource(source);
+  addCanadaAiAdminLog("info", "[canada-ai] channel history fetch started", {
+    source,
+    channel: CANADA_AI_RESULT_CHANNEL,
+    userId: session.userId,
+  });
+  try {
+    const chanTarget = CANADA_AI_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
+    const recent = await session.client.getMessages(chanTarget, { limit: 220 }) as Api.Message[];
+    if (!recent.length) {
+      addCanadaAiAdminLog("warn", "[canada-ai] channel history empty", {
+        source,
+        channel: CANADA_AI_RESULT_CHANNEL,
+        userId: session.userId,
+      });
+      logger.warn({ channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history empty");
+      return;
+    }
+    const parsed = [...recent]
+      .sort((a, b) => a.id - b.id)
+      .map(msg => parseCanadaAiChannelDigits(msg.message ?? ""))
+      .filter((item): item is { term: number | null; digits: [number, number, number] } => item !== null);
+    const unique = new Map<string, [number, number, number]>();
+    for (const item of parsed) {
+      const key = item.term ? String(item.term) : `${item.digits.join("")}-${unique.size}`;
+      unique.set(key, item.digits);
+    }
+    const digitHistory = [...unique.values()];
+    logger.info({
+      channel: CANADA_AI_RESULT_CHANNEL,
+      userId: session.userId,
+      historySize: digitHistory.length,
+    }, "[canada-ai] channel history fetched");
+    addCanadaAiAdminLog("info", "[canada-ai] channel history fetched", {
+      source,
+      channel: CANADA_AI_RESULT_CHANNEL,
+      userId: session.userId,
+      historySize: digitHistory.length,
+    });
+    if (digitHistory.length > 0) {
+      lotteryDigitHistoryCache = digitHistory.slice(-360);
+      await warmupCanadaAiModelFromHistory(digitHistory, source);
+    }
+  } catch (err) {
+    addCanadaAiAdminLog("warn", "[canada-ai] channel history fetch failed", {
+      source,
+      channel: CANADA_AI_RESULT_CHANNEL,
+      userId: session.userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    logger.warn({ err, channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history fetch failed");
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -8216,6 +8297,13 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
 });
 
 router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
+  res.json(getCanadaAiAdminStatus());
+});
+
+router.post("/admin/canada-ai/retrain-from-channel", requireAdminSecret, async (_req, res) => {
+  const session = [...tgSessions.values()].find(s => !!s.me);
+  if (!session) return res.status(400).json({ error: "no_online_tg_session" });
+  await warmupCanadaAiFromChannel(session);
   res.json(getCanadaAiAdminStatus());
 });
 

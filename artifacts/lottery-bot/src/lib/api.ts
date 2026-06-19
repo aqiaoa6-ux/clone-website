@@ -31,6 +31,7 @@ export const api = {
 
   admin: {
     canadaAiStatus: () => api.get<CanadaAiAdminStatus>("/admin/canada-ai/status"),
+    retrainCanadaAiFromChannel: () => api.post<CanadaAiAdminStatus>("/admin/canada-ai/retrain-from-channel", {}),
     hashGroupBets: () => api.get<{ period: string | null; bets: GroupBetEntry[]; totals: { kk: number; usdt: number; cny: number } }>("/admin/hash-group-bets"),
     canadaMonitorGroups: () => api.get<{ groups: { groupId: string; groupTitle: string | undefined; userId: number; active: boolean }[] }>("/admin/canada-monitor-groups"),
     addCanadaMonitorGroup: (groupId: string) => api.post<{ ok: boolean; groupId: string; groupTitle: string; userId: number }>("/admin/canada-monitor-groups/add", { groupId }),
@@ -338,6 +339,7 @@ export interface CanadaAiAdminStatus {
   phase: "idle" | "training" | "ready" | "error";
   modelPath: string;
   modelExists: boolean;
+  lastSource: string | null;
   lastStartedAt: number | null;
   lastFinishedAt: number | null;
   lastTrainedAt: number | null;

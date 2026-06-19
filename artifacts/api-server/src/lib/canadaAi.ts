@@ -35,6 +35,7 @@ export interface CanadaAiAdminStatus {
   phase: "idle" | "training" | "ready" | "error";
   modelPath: string;
   modelExists: boolean;
+  lastSource: string | null;
   lastStartedAt: number | null;
   lastFinishedAt: number | null;
   lastTrainedAt: number | null;
@@ -115,6 +116,7 @@ const canadaAiStatus: CanadaAiAdminStatus = {
   phase: "idle",
   modelPath: DEFAULT_MODEL_PATH,
   modelExists: fs.existsSync(DEFAULT_MODEL_PATH),
+  lastSource: null,
   lastStartedAt: null,
   lastFinishedAt: null,
   lastTrainedAt: null,
@@ -149,6 +151,18 @@ function logCanadaAi(level: CanadaAiLogEntry["level"], message: string, meta?: R
   if (level === "error") logger.error(meta ?? {}, message);
   else if (level === "warn") logger.warn(meta ?? {}, message);
   else logger.info(meta ?? {}, message);
+}
+
+export function addCanadaAiAdminLog(
+  level: CanadaAiLogEntry["level"],
+  message: string,
+  meta?: Record<string, unknown>,
+): void {
+  logCanadaAi(level, message, meta);
+}
+
+export function setCanadaAiAdminSource(source: string | null): void {
+  canadaAiStatus.lastSource = source;
 }
 
 function updateCanadaAiReady(bundle: CanadaAiModelBundle, filePath: string) {
@@ -619,6 +633,7 @@ export async function warmupCanadaAiModel(filePath = DEFAULT_MODEL_PATH): Promis
     canadaAiStatus.phase = "training";
     canadaAiStatus.lastStartedAt = Date.now();
     canadaAiStatus.modelPath = filePath;
+    canadaAiStatus.lastSource = "remote-api";
     canadaAiStatus.lastError = null;
     logCanadaAi("info", "[canada-ai] warmup started", { filePath });
     try {
@@ -658,4 +673,52 @@ export async function warmupCanadaAiModel(filePath = DEFAULT_MODEL_PATH): Promis
     }
   })();
   return warmupPromise;
+}
+
+export async function warmupCanadaAiModelFromHistory(
+  digitHistory: CanadaAiDigits[],
+  source: string,
+  filePath = DEFAULT_MODEL_PATH,
+): Promise<CanadaAiModelBundle | null> {
+  canadaAiStatus.phase = "training";
+  canadaAiStatus.lastStartedAt = Date.now();
+  canadaAiStatus.modelPath = filePath;
+  canadaAiStatus.lastSource = source;
+  canadaAiStatus.lastError = null;
+  logCanadaAi("info", "[canada-ai] history warmup started", { source, historySize: digitHistory.length, filePath });
+  try {
+    const bundle = ensureCanadaAiModel(digitHistory, filePath);
+    if (!bundle) {
+      canadaAiStatus.phase = "error";
+      canadaAiStatus.lastFinishedAt = Date.now();
+      canadaAiStatus.lastHistorySize = digitHistory.length;
+      canadaAiStatus.lastError = "insufficient history";
+      logCanadaAi("warn", "[canada-ai] history warmup skipped, insufficient history", { source, historySize: digitHistory.length });
+      return null;
+    }
+    updateCanadaAiReady(bundle, filePath);
+    canadaAiStatus.lastSource = source;
+    logCanadaAi("info", "[canada-ai] history warmup completed", {
+      source,
+      historySize: bundle.historySize,
+      models: bundle.models.length,
+      trainedAt: bundle.trainedAt,
+      accuracyAvg: averageAccuracy(bundle.models),
+      filePath,
+    });
+    return bundle;
+  } catch (err) {
+    canadaAiStatus.phase = "error";
+    canadaAiStatus.lastFinishedAt = Date.now();
+    canadaAiStatus.modelPath = filePath;
+    canadaAiStatus.modelExists = fs.existsSync(filePath);
+    canadaAiStatus.lastError = normalizeErrorMessage(err);
+    canadaAiStatus.lastSource = source;
+    logCanadaAi("error", "[canada-ai] history warmup failed", {
+      source,
+      filePath,
+      error: normalizeErrorMessage(err),
+    });
+    return null;
+  }
 }
