@@ -6113,6 +6113,7 @@ const CANADA_AI_RESULT_CHANNEL = "pc28";
 const CANADA_AI_RESULT_CHANNEL_TITLE = "PC28开奖频道-开奖结果查询";
 const CANADA_AI_CHANNEL_BATCH_SIZE = 100;
 const CANADA_AI_CHANNEL_SYNC_INTERVAL_MS = 60_000;
+const CANADA_AI_BOOTSTRAP_TRAIN_THRESHOLD = 3000;
 
 function stopHashResultPoller(session: TgSession): void {
   if (session.hashResultPollTimer) {
@@ -6280,6 +6281,7 @@ function buildCanadaAiHistoryEntry(msg: Api.Message): CanadaAiChannelHistoryEntr
 async function fetchAllCanadaAiChannelEntries(
   session: TgSession,
   chanTarget: Parameters<typeof session.client.getMessages>[0],
+  onProgress?: (entries: CanadaAiChannelHistoryEntry[], batchIndex: number) => Promise<void>,
 ): Promise<CanadaAiChannelHistoryEntry[]> {
   const allEntries: CanadaAiChannelHistoryEntry[] = [];
   let offsetId = 0;
@@ -6307,6 +6309,7 @@ async function fetchAllCanadaAiChannelEntries(
       });
       patchCanadaAiAdminStatus({ lastHistorySize: allEntries.length });
     }
+    if (onProgress) await onProgress(allEntries, batchIndex);
     const oldestId = sorted[0]?.id ?? 0;
     if (batch.length < CANADA_AI_CHANNEL_BATCH_SIZE || oldestId <= 0 || offsetId === oldestId) break;
     offsetId = oldestId;
@@ -6357,8 +6360,34 @@ async function syncCanadaAiChannelHistory(
     if (session.canadaAiChannelLastMsgId <= 0 && existingEntries.length > 0) {
       session.canadaAiChannelLastMsgId = existingEntries[existingEntries.length - 1]?.msgId ?? 0;
     }
+    let bootstrapTrained = false;
     const fetchedEntries = mode === "full"
-      ? await fetchAllCanadaAiChannelEntries(session, chanTarget)
+      ? await fetchAllCanadaAiChannelEntries(session, chanTarget, async (entries, batchIndex) => {
+        if (bootstrapTrained || entries.length < CANADA_AI_BOOTSTRAP_TRAIN_THRESHOLD) return;
+        bootstrapTrained = true;
+        const snapshotEntries = mergeCanadaAiChannelHistory(existingEntries, entries);
+        saveCanadaAiChannelHistory(snapshotEntries);
+        session.canadaAiChannelLastMsgId = snapshotEntries[snapshotEntries.length - 1]?.msgId ?? session.canadaAiChannelLastMsgId;
+        const snapshotDigits = channelHistoryEntriesToDigits(snapshotEntries);
+        patchCanadaAiAdminStatus({ lastHistorySize: snapshotDigits.length });
+        addCanadaAiAdminLog("info", "[canada-ai] bootstrap training started", {
+          channel: CANADA_AI_RESULT_CHANNEL,
+          channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
+          userId: session.userId,
+          batchIndex,
+          historySize: snapshotDigits.length,
+          threshold: CANADA_AI_BOOTSTRAP_TRAIN_THRESHOLD,
+        });
+        lotteryDigitHistoryCache = snapshotDigits.slice(-360);
+        await warmupCanadaAiModelFromHistory(snapshotDigits, source);
+        addCanadaAiAdminLog("info", "[canada-ai] bootstrap training completed", {
+          channel: CANADA_AI_RESULT_CHANNEL,
+          channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
+          userId: session.userId,
+          batchIndex,
+          historySize: snapshotDigits.length,
+        });
+      })
       : await fetchIncrementalCanadaAiChannelEntries(session, chanTarget);
     const mergedEntries = mode === "full"
       ? fetchedEntries
