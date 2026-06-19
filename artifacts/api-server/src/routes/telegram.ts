@@ -6098,6 +6098,7 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
 
 const HX28_RESULT_CHANNEL = "hx28kjw";
 const CANADA_AI_RESULT_CHANNEL = "pc28";
+const CANADA_AI_RESULT_CHANNEL_TITLE = "PC28开奖频道-开奖结果查询";
 
 function stopHashResultPoller(session: TgSession): void {
   if (session.hashResultPollTimer) {
@@ -6195,7 +6196,54 @@ function parseCanadaAiChannelDigits(text: string): { term: number | null; digits
   };
 }
 
-async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
+async function resolveCanadaAiChannelEntity(session: TgSession): Promise<Parameters<typeof session.client.getMessages>[0]> {
+  const raw = CANADA_AI_RESULT_CHANNEL.trim();
+  const username = raw.replace(/^@/, "").trim();
+  const attempts = [`@${username}`, `https://t.me/${username}`, username];
+
+  for (const candidate of attempts) {
+    try {
+      const entity = await session.client.getEntity(candidate);
+      if (entity) return entity as Parameters<typeof session.client.getMessages>[0];
+    } catch {
+      // Try next strategy.
+    }
+  }
+
+  try {
+    const resolved = await session.client.invoke(new Api.contacts.ResolveUsername({ username }));
+    const chat = resolved.chats?.[0];
+    if (chat) return chat as Parameters<typeof session.client.getMessages>[0];
+  } catch {
+    // Fallback to dialog search below.
+  }
+
+  try {
+    const dialogs = await session.client.getDialogs({ limit: 200 });
+    const normalized = username.toLowerCase();
+    const normalizedTitle = CANADA_AI_RESULT_CHANNEL_TITLE.toLowerCase();
+    const matched = dialogs.find((dialog) => {
+      const title = (dialog.title ?? "").toLowerCase();
+      const entity = dialog.entity as { username?: string; title?: string } | undefined;
+      const entityUsername = (entity?.username ?? "").toLowerCase();
+      const entityTitle = (entity?.title ?? "").toLowerCase();
+      return entityUsername === normalized
+        || entityUsername.includes(normalized)
+        || entityUsername === "pc28"
+        || title.includes(normalized)
+        || title.includes(normalizedTitle)
+        || entityTitle.includes(normalized)
+        || entityTitle.includes(normalizedTitle);
+    });
+    if (matched?.entity) return matched.entity as Parameters<typeof session.client.getMessages>[0];
+  } catch {
+    // Let the final error below surface.
+  }
+
+  throw new Error(`Cannot find any entity corresponding to "${raw}"`);
+}
+
+async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
   const source = `tg-channel:${CANADA_AI_RESULT_CHANNEL}`;
   setCanadaAiAdminSource(source);
   patchCanadaAiAdminStatus({
@@ -6210,7 +6258,7 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
     userId: session.userId,
   });
   try {
-    const chanTarget = CANADA_AI_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
+    const chanTarget = await resolveCanadaAiChannelEntity(session);
     const recent = await session.client.getMessages(chanTarget, { limit: 220 }) as Api.Message[];
     if (!recent.length) {
       patchCanadaAiAdminStatus({
@@ -6222,10 +6270,11 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
       addCanadaAiAdminLog("warn", "[canada-ai] channel history empty", {
         source,
         channel: CANADA_AI_RESULT_CHANNEL,
+        channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
         userId: session.userId,
       });
       logger.warn({ channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history empty");
-      return;
+      return false;
     }
     const parsed = [...recent]
       .sort((a, b) => a.id - b.id)
@@ -6246,6 +6295,7 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
     addCanadaAiAdminLog("info", "[canada-ai] channel history fetched", {
       source,
       channel: CANADA_AI_RESULT_CHANNEL,
+      channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
       userId: session.userId,
       historySize: digitHistory.length,
     });
@@ -6253,10 +6303,12 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
       lotteryDigitHistoryCache = digitHistory.slice(-360);
       await warmupCanadaAiModelFromHistory(digitHistory, source);
     }
+    return true;
   } catch (err) {
     addCanadaAiAdminLog("warn", "[canada-ai] channel history fetch failed", {
       source,
       channel: CANADA_AI_RESULT_CHANNEL,
+      channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
       userId: session.userId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -6266,6 +6318,7 @@ async function warmupCanadaAiFromChannel(session: TgSession): Promise<void> {
       lastError: err instanceof Error ? err.message : String(err),
     });
     logger.warn({ err, channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history fetch failed");
+    return false;
   }
 }
 
@@ -8320,12 +8373,22 @@ router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
 });
 
 router.post("/admin/canada-ai/retrain-from-channel", requireAdminSecret, async (_req, res) => {
-  const session = [...tgSessions.values()].find(s => !!s.me);
-  if (!session) {
+  const onlineSessions = [...tgSessions.values()].filter(s => !!s.me);
+  if (onlineSessions.length === 0) {
     res.status(400).json({ error: "no_online_tg_session" });
     return;
   }
-  await warmupCanadaAiFromChannel(session);
+  let success = false;
+  for (const session of onlineSessions) {
+    if (await warmupCanadaAiFromChannel(session)) {
+      success = true;
+      break;
+    }
+  }
+  if (!success) {
+    res.status(400).json({ error: "pc28_channel_unreachable" });
+    return;
+  }
   res.json(getCanadaAiAdminStatus());
 });
 
