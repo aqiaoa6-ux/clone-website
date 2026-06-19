@@ -21,7 +21,7 @@ import {
   type CanadaAiChannelHistoryEntry,
   type CanadaAiSignal,
 } from "../lib/canadaAi";
-import { syncCanadaTrueAiDraws } from "../lib/canadaTrueAi";
+import { getCanadaTrueAiAdminStatus, predictCanadaTrueAiAxisSignals, syncCanadaTrueAiDraws } from "../lib/canadaTrueAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
@@ -1915,6 +1915,15 @@ function buildStructuredAiFamilySignal(axis: StructuredBetAxis, family: Structur
 
 function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
   const history = recentDigits(session, CANADA_AI_HISTORY_LIMIT);
+  const truePredicted = predictCanadaTrueAiAxisSignals(axis, history).map((item: CanadaAiSignal) => ({
+    axis: item.axis,
+    family: item.family,
+    bet: item.bet,
+    tag: item.tag,
+    confidence: item.confidence,
+    strength: item.strength,
+  }));
+  if (truePredicted.length > 0) return truePredicted;
   const predicted = predictCanadaAiAxisSignals(axis, history).map((item: CanadaAiSignal) => ({
     axis: item.axis,
     family: item.family,
@@ -8551,6 +8560,10 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
 
 router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
   res.json(getCanadaAiAdminStatus());
+});
+
+router.get("/admin/canada-ai/true-status", requireAdminSecret, async (_req, res) => {
+  res.json(await getCanadaTrueAiAdminStatus());
 });
 
 router.post("/admin/canada-ai/retrain-from-channel", requireAdminSecret, async (_req, res) => {

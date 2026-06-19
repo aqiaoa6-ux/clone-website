@@ -5,7 +5,10 @@ import {
   buildCanadaTrueAiSequenceDataset,
   completeCanadaTrueAiTrainingJob,
   createCanadaTrueAiTrainingJob,
+  DEFAULT_TRUE_AI_MODEL_PATH,
   failCanadaTrueAiTrainingJob,
+  saveCanadaTrueAiModel,
+  trainCanadaTrueAiModel,
 } from "./canadaTrueAi";
 import { logger } from "./logger";
 
@@ -776,16 +779,20 @@ export async function warmupCanadaAiModelFromHistory(
     }
     updateCanadaAiReady(bundle, filePath);
     canadaAiStatus.lastSource = source;
+    const trueBundle = trainCanadaTrueAiModel(digitHistory);
+    if (trueBundle) saveCanadaTrueAiModel(trueBundle, DEFAULT_TRUE_AI_MODEL_PATH);
     await completeCanadaTrueAiTrainingJob({
       jobId,
       historySize: bundle.historySize,
-      artifactPath: filePath,
+      artifactPath: trueBundle ? DEFAULT_TRUE_AI_MODEL_PATH : filePath,
       activate: true,
       metrics: {
         modelCount: bundle.models.length,
         accuracyAvg: averageAccuracy(bundle.models),
         trainedAt: bundle.trainedAt,
         dataset: dataset.summary,
+        trueAiHistorySize: trueBundle?.historySize ?? 0,
+        trueAiHeadCount: trueBundle?.heads.length ?? 0,
       },
     });
     logCanadaAi("info", "[canada-ai] history warmup completed", {

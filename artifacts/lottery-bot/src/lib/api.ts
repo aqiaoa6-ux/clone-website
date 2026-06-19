@@ -31,6 +31,7 @@ export const api = {
 
   admin: {
     canadaAiStatus: () => api.get<CanadaAiAdminStatus>("/admin/canada-ai/status"),
+    canadaTrueAiStatus: () => api.get<CanadaTrueAiAdminStatus>("/admin/canada-ai/true-status"),
     retrainCanadaAiFromChannel: () => api.post<CanadaAiAdminStatus>("/admin/canada-ai/retrain-from-channel", {}),
     hashGroupBets: () => api.get<{ period: string | null; bets: GroupBetEntry[]; totals: { kk: number; usdt: number; cny: number } }>("/admin/hash-group-bets"),
     canadaMonitorGroups: () => api.get<{ groups: { groupId: string; groupTitle: string | undefined; userId: number; active: boolean }[] }>("/admin/canada-monitor-groups"),
@@ -348,6 +349,31 @@ export interface CanadaAiAdminStatus {
   lastAccuracyAvg: number | null;
   lastError: string | null;
   recentLogs: CanadaAiAdminLogEntry[];
+}
+
+export interface CanadaTrueAiAdminStatus {
+  drawCount: number;
+  latestJob: {
+    id: number;
+    status: string;
+    source: string;
+    trigger: string;
+    historySize: number;
+    startedAt: number | null;
+    finishedAt: number | null;
+    errorText: string | null;
+  } | null;
+  activeModel: {
+    id: number;
+    version: string;
+    status: string;
+    historySize: number;
+    lookback: number;
+    artifactPath: string | null;
+    trainedAt: number | null;
+    activatedAt: number | null;
+    metrics: Record<string, unknown> | null;
+  } | null;
 }
 
 export interface BetRecord {

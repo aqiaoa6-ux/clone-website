@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
-import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry, type CanadaAiAdminStatus } from "../lib/api";
+import { api, type AdminCard, type AdminTgSession, type BetRecord, type TgChatMessage, type AdminUser, type GroupBetEntry, type CanadaAiAdminStatus, type CanadaTrueAiAdminStatus } from "../lib/api";
 import BottomNav from "../components/BottomNav";
 
 const TYPE_LABELS: Record<string, { label: string; color: string }> = {
@@ -148,6 +148,7 @@ export default function AdminPage() {
 
   // ── canada ai tab ──
   const [canadaAiStatus, setCanadaAiStatus] = useState<CanadaAiAdminStatus | null>(null);
+  const [canadaTrueAiStatus, setCanadaTrueAiStatus] = useState<CanadaTrueAiAdminStatus | null>(null);
   const [loadingCanadaAi, setLoadingCanadaAi] = useState(false);
   const [retrainingCanadaAi, setRetrainingCanadaAi] = useState(false);
   const [canadaAiActionError, setCanadaAiActionError] = useState("");
@@ -483,10 +484,15 @@ export default function AdminPage() {
   const loadCanadaAiStatus = async () => {
     setLoadingCanadaAi(true);
     try {
-      const r = await api.admin.canadaAiStatus();
+      const [r, trueAi] = await Promise.all([
+        api.admin.canadaAiStatus(),
+        api.admin.canadaTrueAiStatus().catch(() => null),
+      ]);
       setCanadaAiStatus(r);
+      setCanadaTrueAiStatus(trueAi);
     } catch {
       setCanadaAiStatus(null);
+      setCanadaTrueAiStatus(null);
     } finally {
       setLoadingCanadaAi(false);
     }
@@ -498,6 +504,8 @@ export default function AdminPage() {
     try {
       const r = await api.admin.retrainCanadaAiFromChannel();
       setCanadaAiStatus(r);
+      const trueAi = await api.admin.canadaTrueAiStatus().catch(() => null);
+      setCanadaTrueAiStatus(trueAi);
     } catch (err) {
       setCanadaAiActionError(err instanceof Error ? err.message : "频道重训失败");
     } finally {
@@ -1919,6 +1927,57 @@ export default function AdminPage() {
                       </div>
                     )}
                   </div>
+                </div>
+
+                <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
+                  <div className="px-5 py-3 border-b border-[#252a3d]">
+                    <h2 className="text-white font-semibold text-sm">真AI状态</h2>
+                  </div>
+                  {!canadaTrueAiStatus ? (
+                    <div className="px-5 py-6 text-sm text-slate-500">真AI状态暂未接入或数据库表尚未初始化</div>
+                  ) : (
+                    <div className="px-5 py-4 space-y-4 text-sm">
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                        <div>
+                          <div className="text-slate-500 mb-1">入库开奖数</div>
+                          <div className="text-slate-200">{canadaTrueAiStatus.drawCount}</div>
+                        </div>
+                        <div>
+                          <div className="text-slate-500 mb-1">任务状态</div>
+                          <div className="text-slate-200">{canadaTrueAiStatus.latestJob?.status || "-"}</div>
+                        </div>
+                        <div>
+                          <div className="text-slate-500 mb-1">激活模型</div>
+                          <div className="text-slate-200">{canadaTrueAiStatus.activeModel?.version || "-"}</div>
+                        </div>
+                        <div>
+                          <div className="text-slate-500 mb-1">回看窗口</div>
+                          <div className="text-slate-200">{canadaTrueAiStatus.activeModel?.lookback || canadaTrueAiStatus.latestJob?.historySize || "-"}</div>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                        <div className="bg-[#0f1220] border border-[#252a3d] rounded-xl p-3">
+                          <div className="text-slate-400 mb-2">最近训练任务</div>
+                          <div className="text-slate-200">来源：{canadaTrueAiStatus.latestJob?.source || "-"}</div>
+                          <div className="text-slate-200 mt-1">触发：{canadaTrueAiStatus.latestJob?.trigger || "-"}</div>
+                          <div className="text-slate-200 mt-1">样本：{canadaTrueAiStatus.latestJob?.historySize ?? "-"}</div>
+                          <div className="text-slate-200 mt-1">开始：{canadaTrueAiStatus.latestJob?.startedAt ? fmtTime(canadaTrueAiStatus.latestJob.startedAt) : "-"}</div>
+                          <div className="text-slate-200 mt-1">结束：{canadaTrueAiStatus.latestJob?.finishedAt ? fmtTime(canadaTrueAiStatus.latestJob.finishedAt) : "-"}</div>
+                          {canadaTrueAiStatus.latestJob?.errorText && (
+                            <div className="text-red-400 mt-2">错误：{canadaTrueAiStatus.latestJob.errorText}</div>
+                          )}
+                        </div>
+                        <div className="bg-[#0f1220] border border-[#252a3d] rounded-xl p-3">
+                          <div className="text-slate-400 mb-2">当前激活模型</div>
+                          <div className="text-slate-200 break-all">版本：{canadaTrueAiStatus.activeModel?.version || "-"}</div>
+                          <div className="text-slate-200 mt-1">状态：{canadaTrueAiStatus.activeModel?.status || "-"}</div>
+                          <div className="text-slate-200 mt-1">训练样本：{canadaTrueAiStatus.activeModel?.historySize ?? "-"}</div>
+                          <div className="text-slate-200 mt-1 break-all">文件：{canadaTrueAiStatus.activeModel?.artifactPath || "-"}</div>
+                          <div className="text-slate-200 mt-1">训练时间：{canadaTrueAiStatus.activeModel?.trainedAt ? fmtTime(canadaTrueAiStatus.activeModel.trainedAt) : "-"}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-[#161929] border border-[#252a3d] rounded-2xl overflow-hidden">
