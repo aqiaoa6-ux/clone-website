@@ -5736,9 +5736,13 @@ function extractKuaisanResultFromText(text: string): KuaisanResult | null {
 
 async function extractTextFromKuaisanImage(session: TgSession, msg: Api.Message): Promise<string | null> {
   const media = msg.media;
+  const documentMimeType =
+    media instanceof Api.MessageMediaDocument
+      ? String((media.document as { mimeType?: string } | null | undefined)?.mimeType ?? "")
+      : "";
   const isImageMedia =
     media instanceof Api.MessageMediaPhoto
-    || (media instanceof Api.MessageMediaDocument && String(media.document?.mimeType ?? "").startsWith("image/"));
+    || (media instanceof Api.MessageMediaDocument && documentMimeType.startsWith("image/"));
   if (!isImageMedia) return null;
 
   try {
@@ -5754,7 +5758,7 @@ async function extractTextFromKuaisanImage(session: TgSession, msg: Api.Message)
     form.append("language", "chs");
     form.append("isOverlayRequired", "false");
     form.append("OCREngine", "2");
-    form.append("file", new Blob([buffer]), `kuaisan-${msg.id}.jpg`);
+    form.append("file", new Blob([Uint8Array.from(buffer)]), `kuaisan-${msg.id}.jpg`);
 
     const res = await fetch("https://api.ocr.space/parse/image", {
       method: "POST",
