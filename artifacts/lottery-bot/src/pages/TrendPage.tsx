@@ -83,14 +83,16 @@ export default function TrendPage() {
   const [items, setItems] = useState<DrawItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
       const data = await api.lottery.fengpan();
       setItems(parseData(data as LotteryData));
       setLastUpdated(new Date());
+      setLoadError(null);
     } catch {
-      // ignore refresh failures and keep current data
+      setLoadError("走势读取失败，请稍后重试");
     } finally {
       setLoading(false);
     }
@@ -126,6 +128,8 @@ export default function TrendPage() {
       <div className="space-y-3 px-3 py-3">
         {loading ? (
           <div className="py-10 text-center text-sm text-slate-500">加载中...</div>
+        ) : loadError && items.length === 0 ? (
+          <div className="py-10 text-center text-sm text-slate-500">{loadError}</div>
         ) : items.length === 0 ? (
           <div className="py-10 text-center text-sm text-slate-500">暂无数据</div>
         ) : (

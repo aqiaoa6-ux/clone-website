@@ -465,7 +465,10 @@ export default function AdminPage() {
     e.preventDefault();
     setSecretLoading(true); setSecretError("");
     try {
-      const r = await api.admin.authVerify(secretPwd);
+      const r = await Promise.race([
+        api.admin.authVerify(secretPwd),
+        new Promise<never>((_, reject) => window.setTimeout(() => reject(new Error("后台密码验证超时，请重试")), 8_000)),
+      ]);
       if (r.ok) {
         setSecretVerified(true);
         setSecretPwd("");

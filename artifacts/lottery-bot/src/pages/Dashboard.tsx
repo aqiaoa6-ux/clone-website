@@ -1174,6 +1174,14 @@ export default function Dashboard() {
     return () => { clearInterval(statusInterval); clearInterval(drawInterval); clearInterval(tickInterval); };
   }, [fetchStatus, fetchBets, fetchDraw]);
 
+  useEffect(() => {
+    if (tgStep !== "checking") return;
+    const timer = window.setTimeout(() => {
+      setTgStep(prev => prev === "checking" ? "login" : prev);
+    }, 8_000);
+    return () => window.clearTimeout(timer);
+  }, [tgStep]);
+
   // ─── Derived state ───────────────────────────────────────────────────────
 
   const countdown = draw ? Math.max(0, Math.floor((draw.nextCloseTime - nowMs) / 1000)) : 0;

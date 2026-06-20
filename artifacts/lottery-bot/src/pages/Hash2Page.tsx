@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "../context/AuthContext";
 import BottomNav from "../components/BottomNav";
@@ -128,38 +128,62 @@ export default function Hash2Page() {
   const [tgStatus, setTgStatus] = useState<TgStatus | null>(null);
   const [runtime, setRuntime] = useState<Hash2Runtime | null>(null);
   const [seenAlertId, setSeenAlertId] = useState<string>("");
+  const runtimeInFlightRef = useRef<Promise<void> | null>(null);
+  const runtimeQueuedRef = useRef(false);
 
   useEffect(() => {
     let mounted = true;
+    const timeoutId = window.setTimeout(() => {
+      if (!mounted) return;
+      setLoading(false);
+    }, 8_000);
     void (async () => {
-      try {
-        const [cfg, tg, rt] = await Promise.all([api.hash2.config(), api.tg.status(), api.hash2.runtime()]);
-        if (!mounted) return;
-        setConfig(cfg.plans?.length ? cfg : makeDefaultConfig());
-        setTgStatus(tg);
-        setRuntime(rt.runtime);
-      } catch {
-        if (!mounted) return;
-        setConfig(makeDefaultConfig());
-      } finally {
-        if (mounted) setLoading(false);
+      const [cfgRes, tgRes, rtRes] = await Promise.allSettled([api.hash2.config(), api.tg.status(), api.hash2.runtime()]);
+      if (!mounted) return;
+      if (cfgRes.status === "fulfilled") setConfig(cfgRes.value.plans?.length ? cfgRes.value : makeDefaultConfig());
+      else setConfig(makeDefaultConfig());
+      if (tgRes.status === "fulfilled") setTgStatus(tgRes.value);
+      if (rtRes.status === "fulfilled") setRuntime(rtRes.value.runtime);
+      clearTimeout(timeoutId);
+      if (mounted) {
+        setLoading(false);
       }
     })();
-    return () => { mounted = false; };
+    return () => {
+      mounted = false;
+      clearTimeout(timeoutId);
+    };
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      void (async () => {
+    let disposed = false;
+    const fetchRuntime = function runFetchRuntime(): Promise<void> {
+      if (runtimeInFlightRef.current) {
+        runtimeQueuedRef.current = true;
+        return runtimeInFlightRef.current;
+      }
+      const task = (async () => {
         try {
           const rt = await api.hash2.runtime();
-          setRuntime(rt.runtime);
+          if (!disposed) setRuntime(rt.runtime);
         } catch {
-          // ignore poll errors
+          // ignore runtime poll errors
         }
       })();
-    }, 4000);
-    return () => window.clearInterval(timer);
+      runtimeInFlightRef.current = task.finally(() => {
+        runtimeInFlightRef.current = null;
+        if (!disposed && runtimeQueuedRef.current) {
+          runtimeQueuedRef.current = false;
+          void runFetchRuntime();
+        }
+      });
+      return runtimeInFlightRef.current;
+    };
+    const timer = window.setInterval(() => { void fetchRuntime(); }, 8_000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -266,8 +290,7 @@ export default function Hash2Page() {
     try {
       const { config: saved } = await api.hash2.saveConfig(config);
       setConfig(saved);
-      const rt = await api.hash2.runtime();
-      setRuntime(rt.runtime);
+      void api.hash2.runtime().then(rt => setRuntime(rt.runtime)).catch(() => {});
       setAlertMessage("哈希2配置已保存");
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "保存失败");
@@ -281,8 +304,7 @@ export default function Hash2Page() {
     try {
       const res = await api.hash2.testAlert("哈希2提醒测试：止盈止损网页提醒已触发");
       setAlertMessage(res.message);
-      const rt = await api.hash2.runtime();
-      setRuntime(rt.runtime);
+      void api.hash2.runtime().then(rt => setRuntime(rt.runtime)).catch(() => {});
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "提醒测试失败");
     } finally {
