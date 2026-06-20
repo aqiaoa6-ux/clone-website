@@ -5,6 +5,7 @@ import RegisterPage from "./pages/RegisterPage";
 import CardKeyPage from "./pages/CardKeyPage";
 import Hash2Page from "./pages/Hash2Page";
 import CanadaPage from "./pages/CanadaPage";
+import Canada2Page from "./pages/Canada2Page";
 import AdminPage from "./pages/AdminPage";
 
 function ProtectedRoute({ children, requireCard = true, requireAdmin = false }: {
@@ -77,6 +78,11 @@ export default function AppRoutes() {
       <Route path="/canada">
         <ProtectedRoute>
           <CanadaPage />
+        </ProtectedRoute>
+      </Route>
+      <Route path="/canada2">
+        <ProtectedRoute>
+          <Canada2Page />
         </ProtectedRoute>
       </Route>
       <Route path="/">

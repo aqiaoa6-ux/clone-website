@@ -126,6 +126,14 @@ export const api = {
     testAlert: (message?: string) => api.post<{ ok: boolean; message: string; at: number }>("/canada/test-alert", { message }),
   },
 
+  canada2: {
+    config: () => api.get<CanadaConfig>("/canada2/config"),
+    saveConfig: (config: CanadaConfig) => api.post<{ ok: boolean; config: CanadaConfig }>("/canada2/config", config),
+    runtime: () => api.get<{ runtime: CanadaRuntime }>("/canada2/runtime"),
+    resetRuntime: (planId: string) => api.post<{ ok: boolean; runtime: CanadaRuntime }>("/canada2/reset-runtime", { planId }),
+    testAlert: (message?: string) => api.post<{ ok: boolean; message: string; at: number }>("/canada2/test-alert", { message }),
+  },
+
   lottery: {
     fengpan: () => api.get<LotteryData>("/lottery/fengpan"),
   },

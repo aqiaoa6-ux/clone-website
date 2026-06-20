@@ -5,6 +5,7 @@ export default function BottomNav() {
 
   const items = [
     { path: "/hash2",    icon: "#️⃣", label: "哈希2",  show: true },
+    { path: "/canada2",  icon: "🇨🇦", label: "加拿大2", show: true },
     { path: "/canada",   icon: "🍁", label: "加拿大", show: true },
   ].filter(i => i.show);
 
@@ -14,6 +15,7 @@ export default function BottomNav() {
         {items.map(item => {
           const active = location === item.path
             || (item.path === "/hash2" && location.startsWith("/hash2/"))
+            || (item.path === "/canada2" && location.startsWith("/canada2/"))
             || (item.path === "/canada" && location.startsWith("/canada/"));
           return (
             <button
@@ -40,6 +42,7 @@ export function BottomNavStatic() {
 
   const items = [
     { path: "/hash2", icon: "#️⃣", label: "哈希2", show: true },
+    { path: "/canada2", icon: "🇨🇦", label: "加拿大2", show: true },
     { path: "/canada", icon: "🍁", label: "加拿大", show: true },
   ].filter(i => i.show);
 
@@ -49,6 +52,7 @@ export function BottomNavStatic() {
         {items.map(item => {
           const active = location === item.path
             || (item.path === "/hash2" && location.startsWith("/hash2/"))
+            || (item.path === "/canada2" && location.startsWith("/canada2/"))
             || (item.path === "/canada" && location.startsWith("/canada/"));
           return (
             <button
