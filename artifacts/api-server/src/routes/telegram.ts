@@ -5734,52 +5734,6 @@ function extractKuaisanResultFromText(text: string): KuaisanResult | null {
   return synth;
 }
 
-async function extractTextFromKuaisanImage(session: TgSession, msg: Api.Message): Promise<string | null> {
-  const media = msg.media;
-  const documentMimeType =
-    media instanceof Api.MessageMediaDocument
-      ? String((media.document as { mimeType?: string } | null | undefined)?.mimeType ?? "")
-      : "";
-  const isImageMedia =
-    media instanceof Api.MessageMediaPhoto
-    || (media instanceof Api.MessageMediaDocument && documentMimeType.startsWith("image/"));
-  if (!isImageMedia) return null;
-
-  try {
-    const downloaded = await session.client.downloadMedia(msg, {});
-    const buffer = Buffer.isBuffer(downloaded)
-      ? downloaded
-      : typeof downloaded === "string"
-        ? fs.readFileSync(downloaded)
-        : null;
-    if (!buffer || buffer.length === 0) return null;
-
-    const form = new FormData();
-    form.append("language", "chs");
-    form.append("isOverlayRequired", "false");
-    form.append("OCREngine", "2");
-    form.append("file", new Blob([Uint8Array.from(buffer)]), `kuaisan-${msg.id}.jpg`);
-
-    const res = await fetch("https://api.ocr.space/parse/image", {
-      method: "POST",
-      headers: { apikey: process.env.OCR_SPACE_API_KEY?.trim() || "helloworld" },
-      body: form,
-      signal: AbortSignal.timeout(12_000),
-    });
-    if (!res.ok) return null;
-    const data = await res.json() as {
-      ParsedResults?: Array<{ ParsedText?: string }>;
-      IsErroredOnProcessing?: boolean;
-      ErrorMessage?: string[] | string;
-    };
-    if (data.IsErroredOnProcessing) return null;
-    const parsedText = data.ParsedResults?.map(item => item.ParsedText ?? "").join("\n").trim();
-    return parsedText ? parsedText : null;
-  } catch {
-    return null;
-  }
-}
-
 function evaluateKuaisanBet(betLabel: string, r: KuaisanResult): boolean {
   betLabel = normalizeKuaisanBetLabel(betLabel);
   if (r.leopard) {
@@ -6009,21 +5963,6 @@ async function processKuaisanMessage(session: TgSession, text: string, msgId: nu
     }
   }
   return false;
-}
-
-async function processKuaisanTelegramMessage(session: TgSession, msg: Api.Message): Promise<void> {
-  const text = msg.message ?? "";
-  const handledByText = await processKuaisanMessage(session, text, msg.id);
-  if (handledByText) return;
-
-  const ocrText = await extractTextFromKuaisanImage(session, msg);
-  if (!ocrText) return;
-
-  // OCR 图里不一定带“开奖/结果”关键字，补一个前缀避免被旧的文本门槛漏掉。
-  const handledByImage = await processKuaisanMessage(session, `本期开奖 ${ocrText}`, msg.id);
-  if (handledByImage) {
-    logger.info({ msgId: msg.id, ocrText: ocrText.slice(0, 160) }, "[ks] result parsed from image ocr");
-  }
 }
 
 // ─── Hash (哈希) functions ────────────────────────────────────────────────────
@@ -7327,7 +7266,8 @@ function startKuaisanListener(session: TgSession): void {
         for (const msg of sorted) {
           if (msg.id <= session.kuaisanLastMsgId) continue;
           session.kuaisanLastMsgId = msg.id;
-          await processKuaisanTelegramMessage(session, msg);
+          const text = msg.message ?? "";
+          await processKuaisanMessage(session, text, msg.id);
         }
       } catch { /* network hiccup — retry next cycle */ }
     })();
