@@ -851,6 +851,8 @@ function sessionFile(userId: number): string {
 }
 
 const globalPrivateMonitorGroupIds = new Set<string>();
+const pendingSessionWriteTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const pendingSessionSnapshots = new Map<number, PersistedData>();
 
 function privateMonitorGroupsFile(): string {
   const base = process.env.DATA_DIR ?? process.cwd();
@@ -969,13 +971,23 @@ function saveSession(session: TgSession): void {
       } : undefined,
     };
     if (session.canadaMonitorGroupIds.length > 0) (data as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
-    fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
-    // 同步到数据库（异步，失败不影响主流程）
-    const sessionStr = data.sessionString;
-    if (sessionStr) {
-      db.update(users).set({ tgSessionString: sessionStr }).where(eq(users.id, session.userId))
-        .catch(err => logger.warn({ err }, "[tg] db session save failed"));
-    }
+    pendingSessionSnapshots.set(session.userId, data);
+    const prevTimer = pendingSessionWriteTimers.get(session.userId);
+    if (prevTimer) clearTimeout(prevTimer);
+    pendingSessionWriteTimers.set(session.userId, setTimeout(() => {
+      pendingSessionWriteTimers.delete(session.userId);
+      const snapshot = pendingSessionSnapshots.get(session.userId);
+      if (!snapshot) return;
+      pendingSessionSnapshots.delete(session.userId);
+      void fs.promises.writeFile(sessionFile(session.userId), JSON.stringify(snapshot, null, 2), "utf-8")
+        .catch(() => { /* ignore */ });
+      // 同步到数据库（异步，失败不影响主流程）
+      const sessionStr = snapshot.sessionString;
+      if (sessionStr) {
+        db.update(users).set({ tgSessionString: sessionStr }).where(eq(users.id, session.userId))
+          .catch(err => logger.warn({ err }, "[tg] db session save failed"));
+      }
+    }, 80));
   } catch { /* ignore */ }
 }
 
@@ -7668,8 +7680,10 @@ router.post("/tg/config", requireCard, (req, res) => {
   }
   if (body.algorithms !== undefined) session.algIndex = 0;
 
-  // Restart the appropriate listener when group or mode changes
-  if (session.watchGroupId) {
+  const gameModeChanged = body.gameMode !== undefined && body.gameMode !== prev.gameMode;
+
+  // Restart listeners only when the game mode actually changes.
+  if (session.watchGroupId && gameModeChanged) {
     if (session.cfg.gameMode === "kuaisan") {
       stopPoller(session);
       stopHashListener(session);

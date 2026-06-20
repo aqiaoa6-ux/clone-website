@@ -1151,7 +1151,7 @@ export default function Dashboard() {
 
   const saveCfg = async (cfg: Record<string, unknown>) => {
     await api.tg.config(cfg);
-    await fetchStatus();
+    void fetchStatus();
   };
 
   const clearBets = async () => {
