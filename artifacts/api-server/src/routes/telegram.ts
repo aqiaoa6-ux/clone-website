@@ -1019,6 +1019,10 @@ async function fetchGroups(client: TelegramClient): Promise<GroupInfo[]> {
   }
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // ─── Watchdog ─────────────────────────────────────────────────────────────────
 
 function stopAllTimers(session: TgSession): void {
@@ -1231,7 +1235,8 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     userId,
     client, stringSession,
     phone: data.phone ?? "",
-    groups: connected ? await fetchGroups(client) : [],
+    // 启动恢复时不主动拉全量会话列表，避免大量用户一起恢复时把服务拖慢。
+    groups: [],
     cfg: sanitizeCfg(data.cfg ? { ...DEFAULT_CFG, ...data.cfg } : { ...DEFAULT_CFG }),
     betLog: [], sseClients: new Set(),
     messageHandler: null, messageHandlerBuilder: null,
@@ -1331,6 +1336,7 @@ async function restoreAllSessions(): Promise<void> {
       if (!isNaN(userId)) {
         await restoreUserSession(userId, path.join(cwd, f));
         restoredFromFile.add(userId);
+        await delay(1200);
       }
     }
     // legacy single-user session migration
@@ -1350,6 +1356,7 @@ async function restoreAllSessions(): Promise<void> {
       if (!row.tgSessionString) continue;
       logger.info({ userId: row.id }, "[tg] restoring session from DB");
       await restoreUserSessionFromDb(row.id, row.tgSessionString);
+      await delay(1200);
     }
   } catch (err) {
     logger.warn({ err }, "[tg] DB session restore failed");
@@ -1358,7 +1365,8 @@ async function restoreAllSessions(): Promise<void> {
   ensureGlobalPrivateMonitorPollers();
 }
 
-void restoreAllSessions();
+// 先让 Web 服务起来，再后台分批恢复 TG 会话，避免刚启动就把首页请求拖住。
+setTimeout(() => { void restoreAllSessions(); }, 1500);
 
 // ─── Periodic expiry enforcement ──────────────────────────────────────────────
 // Every 60s: disconnect TG sessions whose card has expired and delete the session file.
@@ -7504,7 +7512,7 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     }));
     const me = (result as Api.auth.Authorization).user as Api.User;
     session.me = me;
-    session.groups = await fetchGroups(session.client);
+    session.groups = [];
     if (session.watchGroupId) startGroupListener(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
@@ -7534,7 +7542,7 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     await session.client.signInWithPassword({ apiId, apiHash }, { password: async () => password, onError: async (e: Error) => { throw e; } });
     const me = (await session.client.getMe()) as Api.User;
     session.me = me;
-    session.groups = await fetchGroups(session.client);
+    session.groups = [];
     if (session.watchGroupId) startGroupListener(session);
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
