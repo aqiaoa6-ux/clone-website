@@ -940,72 +940,126 @@ export default function Dashboard() {
   const [debugLoading, setDebugLoading] = useState(false);
   const nextCloseRef = useRef<number>(0);
   const sseRef = useRef<EventSource | null>(null);
+  const statusInFlightRef = useRef<Promise<void> | null>(null);
+  const statusQueuedRef = useRef(false);
+  const betsInFlightRef = useRef<Promise<void> | null>(null);
+  const betsQueuedRef = useRef(false);
+  const drawInFlightRef = useRef<Promise<void> | null>(null);
+  const drawQueuedRef = useRef(false);
 
   // ─── Fetch lottery draw data ─────────────────────────────────────────────
 
-  const fetchDraw = useCallback(async () => {
-    try {
-      const data = await api.lottery.fengpan();
-      const items = data?.message?.all?.keno28?.data ?? [];
-      if (!items.length) return;
-      const latest = items[0]!;
-      const closeMs = latest.closeTime ?? 0;
-      const openMs = latest.openTime ?? 0;
-      const now = Date.now();
-      const cycleMs = closeMs > openMs && closeMs - openMs < 600000 ? closeMs - openMs : 210000;
-      const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
-      nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
-      setDraw({ term: latest.term + (closeMs < now ? 1 : 0), sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3, r3: latest.r3, nextCloseTime: nextCloseRef.current });
-    } catch { /* ignore */ }
-  }, [status?.watchGroupId]);
+  const fetchDraw = useCallback(function runFetchDraw(): Promise<void> {
+    if (drawInFlightRef.current) {
+      drawQueuedRef.current = true;
+      return drawInFlightRef.current;
+    }
+    const task = (async () => {
+      try {
+        const data = await api.lottery.fengpan();
+        const items = data?.message?.all?.keno28?.data ?? [];
+        if (!items.length) return;
+        const latest = items[0]!;
+        const closeMs = latest.closeTime ?? 0;
+        const openMs = latest.openTime ?? 0;
+        const now = Date.now();
+        const cycleMs = closeMs > openMs && closeMs - openMs < 600000 ? closeMs - openMs : 210000;
+        const targetClose = closeMs > now ? closeMs : closeMs + cycleMs;
+        nextCloseRef.current = targetClose > now ? targetClose : now + cycleMs;
+        setDraw({ term: latest.term + (closeMs < now ? 1 : 0), sum1: latest.sum1, sum2: latest.sum2, sum3: latest.sum3, r3: latest.r3, nextCloseTime: nextCloseRef.current });
+      } catch {
+        // ignore draw fetch failures
+      }
+    })();
+    drawInFlightRef.current = task.finally(() => {
+      drawInFlightRef.current = null;
+      if (drawQueuedRef.current) {
+        drawQueuedRef.current = false;
+        void runFetchDraw();
+      }
+    });
+    return drawInFlightRef.current;
+  }, []);
 
   // ─── Fetch status ────────────────────────────────────────────────────────
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const s = await api.tg.status();
-      setStatus(s);
-      if (s.kuaisanPhase) setKuaisanPhase(s.kuaisanPhase);
-      if (s.kuaisanPeriod !== undefined) setKuaisanPeriod(s.kuaisanPeriod ?? null);
-      if (s.kuaisanLastDice) setKuaisanDice(s.kuaisanLastDice);
-      if (s.kuaisanResults?.length) setKuaisanResults(s.kuaisanResults.map(r => ({ label: r.label, dice: Array.from(r.dice), sum: r.sum, leopard: r.leopard })));
-      if (s.kuaisanChatLog?.length) setKuaisanChatLog(s.kuaisanChatLog);
-      if ((s as unknown as Record<string,unknown>).hashPhase) setHashPhase((s as unknown as Record<string,unknown>).hashPhase as string);
-      if ((s as unknown as Record<string,unknown>).hashPeriod !== undefined) setHashPeriod(((s as unknown as Record<string,unknown>).hashPeriod as string | null) ?? null);
-      const hr = (s as unknown as Record<string,unknown>).hashResults as Array<{label:string;value:number;big:boolean;odd:boolean}> | undefined;
-      if (hr?.length) setHashResults(hr);
-      if (!s.connected) { setTgStep("login"); return; }
-      if (s.watchGroupId) {
-        try { localStorage.setItem(TG_LAST_GROUP_KEY, s.watchGroupId); } catch {}
-      }
-      if (!s.watchGroupId) {
-        const { groups: g } = await api.tg.groups();
-        setGroups(g);
-        const savedGroupId = (() => {
-          try { return localStorage.getItem(TG_LAST_GROUP_KEY) ?? ""; } catch { return ""; }
-        })();
-        const savedGroup = savedGroupId
-          ? g.find(item => item.id === savedGroupId || `-100${item.id}` === savedGroupId || item.id === savedGroupId.replace(/^-100/, ""))
-          : undefined;
-        if (savedGroup) {
-          await api.tg.setGroup(savedGroup.id);
-          const restored = await api.tg.status();
-          setStatus(restored);
-          setTgStep("ready");
+  const fetchStatus = useCallback(function runFetchStatus(): Promise<void> {
+    if (statusInFlightRef.current) {
+      statusQueuedRef.current = true;
+      return statusInFlightRef.current;
+    }
+    const task = (async () => {
+      try {
+        const s = await api.tg.status();
+        setStatus(s);
+        if (s.kuaisanPhase) setKuaisanPhase(s.kuaisanPhase);
+        if (s.kuaisanPeriod !== undefined) setKuaisanPeriod(s.kuaisanPeriod ?? null);
+        if (s.kuaisanLastDice) setKuaisanDice(s.kuaisanLastDice);
+        if (s.kuaisanResults?.length) setKuaisanResults(s.kuaisanResults.map(r => ({ label: r.label, dice: Array.from(r.dice), sum: r.sum, leopard: r.leopard })));
+        if (s.kuaisanChatLog?.length) setKuaisanChatLog(s.kuaisanChatLog);
+        if ((s as unknown as Record<string, unknown>).hashPhase) setHashPhase((s as unknown as Record<string, unknown>).hashPhase as string);
+        if ((s as unknown as Record<string, unknown>).hashPeriod !== undefined) setHashPeriod(((s as unknown as Record<string, unknown>).hashPeriod as string | null) ?? null);
+        const hr = (s as unknown as Record<string, unknown>).hashResults as Array<{ label: string; value: number; big: boolean; odd: boolean }> | undefined;
+        if (hr?.length) setHashResults(hr);
+        if (!s.connected) { setTgStep("login"); return; }
+        if (s.watchGroupId) {
+          try { localStorage.setItem(TG_LAST_GROUP_KEY, s.watchGroupId); } catch {}
+        }
+        if (!s.watchGroupId) {
+          const { groups: g } = await api.tg.groups();
+          setGroups(g);
+          const savedGroupId = (() => {
+            try { return localStorage.getItem(TG_LAST_GROUP_KEY) ?? ""; } catch { return ""; }
+          })();
+          const savedGroup = savedGroupId
+            ? g.find(item => item.id === savedGroupId || `-100${item.id}` === savedGroupId || item.id === savedGroupId.replace(/^-100/, ""))
+            : undefined;
+          if (savedGroup) {
+            await api.tg.setGroup(savedGroup.id);
+            const restored = await api.tg.status();
+            setStatus(restored);
+            setTgStep("ready");
+            return;
+          }
+          setTgStep("group");
           return;
         }
-        setTgStep("group");
-        return;
+        setTgStep("ready");
+      } catch {
+        setTgStep("login");
       }
-      setTgStep("ready");
-    } catch { setTgStep("login"); }
+    })();
+    statusInFlightRef.current = task.finally(() => {
+      statusInFlightRef.current = null;
+      if (statusQueuedRef.current) {
+        statusQueuedRef.current = false;
+        void runFetchStatus();
+      }
+    });
+    return statusInFlightRef.current;
   }, []);
 
-  const fetchBets = useCallback(async () => {
-    try {
-      const { bets: b } = await api.tg.bets();
-      setBets(b);
-    } catch { /* ignore */ }
+  const fetchBets = useCallback(function runFetchBets(): Promise<void> {
+    if (betsInFlightRef.current) {
+      betsQueuedRef.current = true;
+      return betsInFlightRef.current;
+    }
+    const task = (async () => {
+      try {
+        const { bets: b } = await api.tg.bets();
+        setBets(b);
+      } catch {
+        // ignore bet fetch failures
+      }
+    })();
+    betsInFlightRef.current = task.finally(() => {
+      betsInFlightRef.current = null;
+      if (betsQueuedRef.current) {
+        betsQueuedRef.current = false;
+        void runFetchBets();
+      }
+    });
+    return betsInFlightRef.current;
   }, []);
 
   // ─── SSE stream ──────────────────────────────────────────────────────────
