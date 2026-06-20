@@ -88,7 +88,8 @@ interface ParsedCanadaResult {
 const CANADA2_MAX_PLANS = 8;
 const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
-const CANADA2_FIXED_BETS = ["big", "small", "odd", "even"] as const;
+const CANADA2_PLAN_BET_MAP = ["big", "big", "small", "small", "odd", "odd", "even", "even"] as const;
+const CANADA2_PLAN_NAME_MAP = ["方案大1", "方案大2", "方案小1", "方案小2", "方案单1", "方案单2", "方案双1", "方案双2"] as const;
 const STOPLOSS_NEXT_PLAN_ID: Record<string, string> = {
   "plan-1": "plan-2",
   "plan-3": "plan-4",
@@ -167,12 +168,25 @@ function canadaFile(userId: number): string {
   return path.join(dataDir(), `.canada2-${userId}.json`);
 }
 
+function defaultPlanBet(index: number): string {
+  return CANADA2_PLAN_BET_MAP[index] ?? "big";
+}
+
+function defaultPlanName(index: number): string {
+  return CANADA2_PLAN_NAME_MAP[index] ?? `方案${index + 1}`;
+}
+
+function isAutoPlanName(name: string): boolean {
+  return CANADA2_PLAN_NAME_MAP.includes(name as (typeof CANADA2_PLAN_NAME_MAP)[number])
+    || /^方案\d+$/.test(name);
+}
+
 function defaultPlan(index: number): CanadaPlan {
   return {
     id: `plan-${index + 1}`,
-    name: `方案${index + 1}`,
+    name: defaultPlanName(index),
     enabled: index % 2 === 0,
-    bets: [...CANADA2_FIXED_BETS],
+    bets: [defaultPlanBet(index)],
     baseAmount: 0,
     handCount: HASH2_MAX_HANDS,
     amountLevels: [...HASH2_DEFAULT_LEVELS],
@@ -234,11 +248,12 @@ function normalizePlan(input: Partial<CanadaPlan> | undefined, index: number): C
   const handCount = Number.isInteger(handCountRaw)
     ? Math.min(Math.max(handCountRaw, 1), HASH2_MAX_HANDS)
     : fallback.handCount;
+  const inputName = typeof input?.name === "string" ? input.name.trim() : "";
   return {
     id: typeof input?.id === "string" && input.id ? input.id : fallback.id,
-    name: typeof input?.name === "string" && input.name.trim() ? input.name.trim().slice(0, 20) : fallback.name,
+    name: inputName && !isAutoPlanName(inputName) ? inputName.slice(0, 20) : fallback.name,
     enabled: !!input?.enabled,
-    bets: [...CANADA2_FIXED_BETS],
+    bets: [defaultPlanBet(index)],
     baseAmount: Math.max(0, Number(input?.baseAmount ?? fallback.baseAmount) || 0),
     handCount,
     amountLevels: normalizeLevels(input?.amountLevels, handCount),

@@ -5,7 +5,8 @@ import { BottomNavStatic } from "../components/BottomNav";
 import TgAccessPanel from "../components/TgAccessPanel";
 import { api, type CanadaConfig, type CanadaPlan, type CanadaRuntime, type TgStatus } from "../lib/api";
 
-const CANADA2_FIXED_BETS = ["big", "small", "odd", "even"] as const;
+const CANADA2_PLAN_BET_MAP = ["big", "big", "small", "small", "odd", "odd", "even", "even"] as const;
+const CANADA2_PLAN_NAME_MAP = ["方案大1", "方案大2", "方案小1", "方案小2", "方案单1", "方案单2", "方案双1", "方案双2"] as const;
 const HASH2_BET_OPTIONS: Array<{ key: string; label: string; group: "玩法1" | "玩法2" }> = [
   { key: "big", label: "大", group: "玩法1" },
   { key: "small", label: "小", group: "玩法1" },
@@ -80,11 +81,12 @@ function makeDefaultLevels(): number[] {
 }
 
 function makeDefaultPlan(index: number): CanadaPlan {
+  const assignedBet = CANADA2_PLAN_BET_MAP[index] ?? "big";
   return {
     id: `plan-${index + 1}`,
-    name: `方案${index + 1}`,
+    name: CANADA2_PLAN_NAME_MAP[index] ?? `方案${index + 1}`,
     enabled: index % 2 === 0,
-    bets: [...CANADA2_FIXED_BETS],
+    bets: [assignedBet],
     baseAmount: 0,
     handCount: 60,
     amountLevels: makeDefaultLevels(),
@@ -169,13 +171,16 @@ export default function Canada2Page() {
   }, []);
 
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
+  const currentAssignedBet = CANADA2_PLAN_BET_MAP[activePlan] ?? "big";
+  const currentAssignedLabel = HASH2_BET_OPTIONS.find(item => item.key === currentAssignedBet)?.label ?? currentAssignedBet;
+  const pairedPlanName = CANADA2_PLAN_NAME_MAP[activePlan % 2 === 0 ? activePlan + 1 : activePlan - 1] ?? "配对方案";
   const toggleSection = (key: string) => {
     setSectionOpen(prev => ({ ...prev, [key]: !prev[key] }));
   };
   const currentLevelSummary = useMemo(() => {
     if (!currentPlan.bets.length) return "";
-    return "大小单双四路独立层级 · 中的回第1手 · 不中的单独进下一手";
-  }, [currentPlan.bets.length]);
+    return `${currentAssignedLabel}专属方案 · 命中回第1手 · 爆手切到${pairedPlanName}`;
+  }, [currentAssignedLabel, currentPlan.bets.length, pairedPlanName]);
   const currentPreview = useMemo(() => {
     const amount = currentPlan.amountLevels[0] ?? currentPlan.baseAmount ?? 0;
     const targetFirst = currentPlan.bets.some(key => key.startsWith("num:")) || currentPlan.format === "target_first";
@@ -195,9 +200,10 @@ export default function Canada2Page() {
   }, [currentPlan.bets]);
 
   const updatePlan = (index: number, patch: Partial<CanadaPlan>) => {
+    const assignedBet = CANADA2_PLAN_BET_MAP[index] ?? "big";
     setConfig(prev => ({
       ...prev,
-      plans: prev.plans.map((plan, i) => i === index ? { ...plan, ...patch, bets: [...CANADA2_FIXED_BETS] } : plan),
+      plans: prev.plans.map((plan, i) => i === index ? { ...plan, ...patch, bets: [assignedBet] } : plan),
       updatedAt: Date.now(),
     }));
   };
@@ -324,7 +330,7 @@ export default function Canada2Page() {
             <div>
               <div className="text-white font-semibold">独立配置模块</div>
               <div className="text-slate-500 text-xs mt-1">
-                固定为大小单双全压，最多保留 8 套方案；默认 1/3/5/7 同时运行，爆手切到 2/4/6/8
+                1/2=大，3/4=小，5/6=单，7/8=双；默认 1/3/5/7 同时运行，爆手切到 2/4/6/8
               </div>
             </div>
             <div className="text-right">
@@ -393,7 +399,7 @@ export default function Canada2Page() {
               <div>
                 <div className="text-white font-semibold">{currentPlan.name}</div>
                 <div className="text-xs text-slate-500 mt-1">
-                  固定下注项：{selectedLabels || "大 / 小 / 单 / 双"}
+                  当前下注项：{selectedLabels || currentAssignedLabel}
                 </div>
                 <div className="text-[10px] text-slate-600 mt-1 break-all">
                   发送预览：{currentPreview || "暂无"}
@@ -546,13 +552,13 @@ export default function Canada2Page() {
             )}
 
             <CollapseSection
-              title="固定下注项"
-              summary="大小单双全压"
+              title="方案下注项"
+              summary={`${currentPlan.name} -> ${currentAssignedLabel}`}
               open={sectionOpen.play1}
               onToggle={() => toggleSection("play1")}
             >
               <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-3 text-sm text-slate-300">
-                当前模块固定为大 / 小 / 单 / 双四路同时下注。每一路独立按手数推进，中了回第1手，爆手后切到配对方案。
+                方案大1 / 方案大2 下注大，方案小1 / 方案小2 下注小，方案单1 / 方案单2 下注单，方案双1 / 方案双2 下注双。默认同时运行 1 / 3 / 5 / 7，爆手后切到配对方案。
               </div>
             </CollapseSection>
 
@@ -563,7 +569,7 @@ export default function Canada2Page() {
               onToggle={() => toggleSection("play2")}
             >
               <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-3 text-sm text-slate-500">
-                哈希（新版）当前仍固定为大小单双全压，组合、特殊号和数字玩法暂不开放。
+                当前方案下注项按方案固定分配，不再使用大小单双全压；组合、特殊号和数字玩法暂不开放。
               </div>
             </CollapseSection>
 
@@ -574,7 +580,7 @@ export default function Canada2Page() {
               onToggle={() => toggleSection("levels")}
             >
               <div className="text-[10px] text-slate-500 mb-3">
-                四路独立进手：中的回第1手，不中的单独进下一手；任一路爆手就切到配对方案
+                当前方案只跑 {currentAssignedLabel} 这一项；命中回第1手，打满手数仍未中就切到 {pairedPlanName}
               </div>
               <div className="grid grid-cols-4 gap-2">
                 {Array.from({ length: 60 }, (_, i) => (
