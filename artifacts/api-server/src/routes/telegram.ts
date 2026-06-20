@@ -554,7 +554,7 @@ interface KuaisanResult {
 
 const KS_BET_LABELS: Record<string, string> = {
   big: "大", small: "小", odd: "单", even: "双",
-  dragon: "龙", tiger: "虎",
+  dragon: "龙", tiger: "虎", tie: "和", he: "合",
   "big-odd": "大单", "big-even": "大双", "small-odd": "小单", "small-even": "小双",
   "big-dragon": "大龙", "small-tiger": "小虎",
   leopard: "豹子",
@@ -5691,7 +5691,93 @@ function computeKuaisanResult(dice: [number, number, number]): KuaisanResult {
   return { dice, sum, big, odd, leopard, dragon, tiger, label };
 }
 
+function isKuaisanTie(r: KuaisanResult): boolean {
+  return !r.leopard && !r.dragon && !r.tiger;
+}
+
+function normalizeKuaisanBetLabel(label: string): string {
+  return label.trim().replace(/合/g, "和");
+}
+
+function extractKuaisanResultFromText(text: string): KuaisanResult | null {
+  if (!text) return null;
+  const compact = text.replace(/\s+/g, " ").trim();
+  const focus = compact.match(/本期开奖([\s\S]{0,120}?)(?:历史开奖|上期开奖结果?|$)/)?.[1]?.trim() ?? compact;
+  const threeInOne = focus.match(/([1-6])[^\d]{0,12}([1-6])[^\d]{0,12}([1-6])/);
+  if (threeInOne) {
+    const dice = [Number(threeInOne[1]), Number(threeInOne[2]), Number(threeInOne[3])] as [number, number, number];
+    if (dice.every(value => value >= 1 && value <= 6)) return computeKuaisanResult(dice);
+  }
+  const labelMatch = focus.match(/(豹子|(大|小)(单|双)(龙|虎|和|合)?|[和合])/);
+  if (!labelMatch) return null;
+  const lbl = normalizeKuaisanBetLabel(labelMatch[0]!);
+  const big = lbl.includes("大");
+  const odd = lbl.includes("单");
+  const leopard = lbl === "豹子";
+  const dragon = lbl.includes("龙");
+  const tiger = lbl.includes("虎");
+  const synth: KuaisanResult = {
+    dice: [0, 0, 0],
+    sum: leopard ? 6 : big ? (odd ? 11 : 12) : (odd ? 9 : 8),
+    big: leopard ? false : big,
+    odd: leopard ? false : odd,
+    leopard,
+    dragon,
+    tiger,
+    label: leopard ? "豹子" : (dragon || tiger ? lbl : `${big ? "大" : "小"}${odd ? "单" : "双"}和`),
+  };
+  if (!leopard && !dragon && !tiger && (lbl === "和" || lbl === "合")) {
+    synth.label = "和";
+  } else if (!leopard && !dragon && !tiger) {
+    synth.label = `${big ? "大" : "小"}${odd ? "单" : "双"}和`;
+  }
+  return synth;
+}
+
+async function extractTextFromKuaisanImage(session: TgSession, msg: Api.Message): Promise<string | null> {
+  const media = msg.media;
+  const isImageMedia =
+    media instanceof Api.MessageMediaPhoto
+    || (media instanceof Api.MessageMediaDocument && String(media.document?.mimeType ?? "").startsWith("image/"));
+  if (!isImageMedia) return null;
+
+  try {
+    const downloaded = await session.client.downloadMedia(msg, {});
+    const buffer = Buffer.isBuffer(downloaded)
+      ? downloaded
+      : typeof downloaded === "string"
+        ? fs.readFileSync(downloaded)
+        : null;
+    if (!buffer || buffer.length === 0) return null;
+
+    const form = new FormData();
+    form.append("language", "chs");
+    form.append("isOverlayRequired", "false");
+    form.append("OCREngine", "2");
+    form.append("file", new Blob([buffer]), `kuaisan-${msg.id}.jpg`);
+
+    const res = await fetch("https://api.ocr.space/parse/image", {
+      method: "POST",
+      headers: { apikey: process.env.OCR_SPACE_API_KEY?.trim() || "helloworld" },
+      body: form,
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as {
+      ParsedResults?: Array<{ ParsedText?: string }>;
+      IsErroredOnProcessing?: boolean;
+      ErrorMessage?: string[] | string;
+    };
+    if (data.IsErroredOnProcessing) return null;
+    const parsedText = data.ParsedResults?.map(item => item.ParsedText ?? "").join("\n").trim();
+    return parsedText ? parsedText : null;
+  } catch {
+    return null;
+  }
+}
+
 function evaluateKuaisanBet(betLabel: string, r: KuaisanResult): boolean {
+  betLabel = normalizeKuaisanBetLabel(betLabel);
   if (r.leopard) {
     if (betLabel === "豹子") return true;
     if (/^指定豹(\d)$/.test(betLabel)) return r.dice[0] === parseInt(betLabel.slice(3));
@@ -5707,6 +5793,7 @@ function evaluateKuaisanBet(betLabel: string, r: KuaisanResult): boolean {
     case "双": return !r.odd;
     case "龙": return r.dragon;
     case "虎": return r.tiger;
+    case "和": return isKuaisanTie(r);
     case "大单": return r.big && r.odd;
     case "大双": return r.big && !r.odd;
     case "小单": return !r.big && r.odd;
@@ -5722,8 +5809,10 @@ function evaluateKuaisanBet(betLabel: string, r: KuaisanResult): boolean {
 }
 
 function getKuaisanOdds(betLabel: string): number {
+  betLabel = normalizeKuaisanBetLabel(betLabel);
   if (betLabel === "豹子") return 33;
   if (/^指定豹\d$/.test(betLabel)) return 200;
+  if (betLabel === "和") return 6;
   if (["大单", "小双"].includes(betLabel)) return 3.4;
   if (["小单", "大双", "大龙", "小虎"].includes(betLabel)) return 4.4;
   const m = betLabel.match(/^总和(\d+)$/);
@@ -5833,8 +5922,8 @@ function stopKuaisanListener(session: TgSession): void {
 }
 
 /** Process a single text message from the kuaisan group */
-async function processKuaisanMessage(session: TgSession, text: string, msgId: number): Promise<void> {
-  if (!text) return;
+async function processKuaisanMessage(session: TgSession, text: string, msgId: number): Promise<boolean> {
+  if (!text) return false;
 
   // Log to chatLog for frontend debugging
   const logEntry = { text: text.slice(0, 200), ts: Date.now(), chatId: session.watchGroupId ?? "" };
@@ -5876,14 +5965,14 @@ async function processKuaisanMessage(session: TgSession, text: string, msgId: nu
     pushEvent(session, "kuaisan:phase", { phase: "betting", period: session.kuaisanPeriod });
     logger.info({ msgId, period: session.kuaisanPeriod }, "[ks] bet open detected via poll");
     if (session.cfg.autoBet) await runKuaisanAutoBet(session);
-    return;
+    return true;
   }
 
   // ── 1. Closing phase ────────────────────────────────────────────────────────
   if (/停止下注|停止投注|已封盘|封盘/.test(text) && session.kuaisanPhase === "betting") {
     session.kuaisanPhase = "closed";
     pushEvent(session, "kuaisan:phase", { phase: "closed" });
-    return;
+    return true;
   }
 
   // ── 2a. Dice buffer: one value per message ("骰子有效，识别点数为: X") ────────
@@ -5900,39 +5989,36 @@ async function processKuaisanMessage(session: TgSession, text: string, msgId: nu
       session.diceBuffer = [];
       publishResult(computeKuaisanResult(three.map(d => d.value) as [number, number, number]));
     }
-    return;
+    return true;
   }
 
   // ── 2b. Single-message 3-dice result (e.g. "开奖：2-4-5 大单虎") ────────────
   // Only trigger on explicit result-announcement keywords (not betting-round keywords)
   const isResultAnnouncement = /开奖|结果|本期[：:是]|上期[：:是]|点数[：:是]/.test(text);
   if (isResultAnnouncement) {
-    const threeInOne = text.match(/([1-6])[^\d]([1-6])[^\d]([1-6])/);
-    if (threeInOne) {
-      const d1 = parseInt(threeInOne[1]!), d2 = parseInt(threeInOne[2]!), d3 = parseInt(threeInOne[3]!);
-      if (d1 >= 1 && d1 <= 6 && d2 >= 1 && d2 <= 6 && d3 >= 1 && d3 <= 6) {
-        session.diceBuffer = [];
-        logger.info({ msgId, d1, d2, d3, text: text.slice(0, 80) }, "[ks] 3-dice result from single msg");
-        publishResult(computeKuaisanResult([d1, d2, d3]));
-        return;
-      }
-    }
-    // Fallback: result label only (e.g. "本期：大单龙")
-    const labelMatch = text.match(/(豹子|(大|小)(单|双)(龙|虎|和)?)/);
-    if (labelMatch) {
-      const lbl = labelMatch[0]!;
-      const big = lbl.includes("大");
-      const odd = lbl.includes("单");
-      const leopard = lbl === "豹子";
-      const dragon = lbl.includes("龙");
-      const tiger = lbl.includes("虎");
-      const sum = leopard ? 6 : big ? (odd ? 11 : 12) : (odd ? 9 : 8);
-      const synth: KuaisanResult = { dice: [0, 0, 0], sum, big: leopard ? false : big, odd: leopard ? false : odd, leopard, dragon, tiger, label: lbl };
+    const parsed = extractKuaisanResultFromText(text);
+    if (parsed) {
       session.diceBuffer = [];
-      logger.info({ msgId, label: lbl, text: text.slice(0, 80) }, "[ks] label-only result");
-      publishResult(synth);
-      return;
+      logger.info({ msgId, dice: Array.from(parsed.dice), label: parsed.label, text: text.slice(0, 80) }, "[ks] result parsed from text");
+      publishResult(parsed);
+      return true;
     }
+  }
+  return false;
+}
+
+async function processKuaisanTelegramMessage(session: TgSession, msg: Api.Message): Promise<void> {
+  const text = msg.message ?? "";
+  const handledByText = await processKuaisanMessage(session, text, msg.id);
+  if (handledByText) return;
+
+  const ocrText = await extractTextFromKuaisanImage(session, msg);
+  if (!ocrText) return;
+
+  // OCR 图里不一定带“开奖/结果”关键字，补一个前缀避免被旧的文本门槛漏掉。
+  const handledByImage = await processKuaisanMessage(session, `本期开奖 ${ocrText}`, msg.id);
+  if (handledByImage) {
+    logger.info({ msgId: msg.id, ocrText: ocrText.slice(0, 160) }, "[ks] result parsed from image ocr");
   }
 }
 
@@ -7237,8 +7323,7 @@ function startKuaisanListener(session: TgSession): void {
         for (const msg of sorted) {
           if (msg.id <= session.kuaisanLastMsgId) continue;
           session.kuaisanLastMsgId = msg.id;
-          const text = msg.message ?? "";
-          await processKuaisanMessage(session, text, msg.id);
+          await processKuaisanTelegramMessage(session, msg);
         }
       } catch { /* network hiccup — retry next cycle */ }
     })();
