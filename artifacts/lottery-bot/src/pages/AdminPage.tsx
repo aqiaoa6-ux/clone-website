@@ -431,16 +431,35 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!user?.isAdmin) { setLocation("/"); return; }
-    // 检查后台密码是否已验证
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      if (cancelled) return;
+      setSecretVerified(false);
+      setSecretChecking(false);
+      setSecretError("后台验证检查超时，请直接输入后台密码进入");
+    }, 8_000);
     api.admin.authStatus().then(r => {
+      if (cancelled) return;
       setSecretVerified(r.verified);
     }).catch(() => {
+      if (cancelled) return;
       setSecretVerified(false);
+      setSecretError("后台验证检查失败，请直接输入后台密码进入");
     }).finally(() => {
+      if (cancelled) return;
+      clearTimeout(timeoutId);
       setSecretChecking(false);
     });
-    void loadCards();
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
   }, [user, setLocation]);
+
+  useEffect(() => {
+    if (!secretVerified) return;
+    void loadCards();
+  }, [secretVerified]);
 
   const handleSecretVerify = async (e: React.FormEvent) => {
     e.preventDefault();
