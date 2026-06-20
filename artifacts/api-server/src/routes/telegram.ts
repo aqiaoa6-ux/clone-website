@@ -1703,7 +1703,7 @@ function buildStructuredAlternative(signal: StructuredSignal): StructuredSignal 
   return {
     axis: signal.axis,
     family: signal.family,
-    bet: `${signal.axis}${oppositeStructuredAttr(structuredSignalAttr(signal), signal.family)}`,
+    bet: `${signal.axis}${oppositeStructuredAttr(signal.bet.slice(1) as StructuredBetAttr, signal.family)}`,
     tag: altTag,
     confidence: clampConfidence(signal.confidence - (signal.tag === "顺势" ? 8 : 6), 45, 72),
     strength: Math.max(0.8, signal.strength - penalty),
