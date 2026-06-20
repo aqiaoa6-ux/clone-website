@@ -5,7 +5,7 @@ export default function BottomNav() {
 
   const items = [
     { path: "/hash2",    icon: "#️⃣", label: "哈希2",  show: true },
-    { path: "/canada2",  icon: "🇨🇦", label: "加拿大2", show: true },
+    { path: "/canada2",  icon: "#️⃣", label: "哈希（新版）", show: true },
     { path: "/canada",   icon: "🍁", label: "加拿大", show: true },
   ].filter(i => i.show);
 
@@ -42,7 +42,7 @@ export function BottomNavStatic() {
 
   const items = [
     { path: "/hash2", icon: "#️⃣", label: "哈希2", show: true },
-    { path: "/canada2", icon: "🇨🇦", label: "加拿大2", show: true },
+    { path: "/canada2", icon: "#️⃣", label: "哈希（新版）", show: true },
     { path: "/canada", icon: "🍁", label: "加拿大", show: true },
   ].filter(i => i.show);
 

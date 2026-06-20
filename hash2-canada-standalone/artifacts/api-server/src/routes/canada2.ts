@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { Api } from "telegram";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -84,8 +85,6 @@ interface ParsedCanadaResult {
   label: string;
 }
 
-type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number; openTime?: number; closeTime?: number };
-
 const CANADA2_MAX_PLANS = 8;
 const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
@@ -102,7 +101,7 @@ const STOPLOSS_PREV_PLAN_ID: Record<string, string> = {
   "plan-6": "plan-5",
   "plan-8": "plan-7",
 };
-const CANADA_RESULT_SOURCE = "http://pc20.net/api/fengpan";
+const HASH_NEW_RESULT_CHANNEL = "hx28kjw";
 const HASH2_DEFAULT_NUMBER_ODDS: Record<string, number> = {
   "0": 888, "1": 288, "2": 136, "3": 86, "4": 48, "5": 38, "6": 32, "7": 26,
   "8": 20, "9": 17, "10": 15, "11": 14, "12": 13, "13": 12, "14": 12, "15": 13,
@@ -140,7 +139,7 @@ function tryEnsureWritableDir(dir: string): boolean {
     fs.unlinkSync(probe);
     return true;
   } catch (err) {
-    logger.warn({ dir, err }, "[canada] data dir not writable");
+    logger.warn({ dir, err }, "[hash-new] data dir not writable");
     return false;
   }
 }
@@ -461,7 +460,7 @@ function autoEnableNextPlanOnHandLimit(
     "warn",
   );
   saveConfig(userId, config);
-  logger.info({ userId, sourcePlan: sourcePlan.id, nextPlan: nextPlan.id }, "[canada] auto enabled next plan after hand limit");
+  logger.info({ userId, sourcePlan: sourcePlan.id, nextPlan: nextPlan.id }, "[hash-new] auto enabled next plan after hand limit");
   return true;
 }
 
@@ -512,20 +511,20 @@ function fmtMoney(n: number): string {
 
 async function sendRiskAlert(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, riskReason: string, period: string, source: "trigger" | "settle"): Promise<void> {
   const pnl = fmtMoney(state.sessionPnl);
-  const title = `【风控提醒】加拿大2 ${plan.name}`;
+  const title = `【风控提醒】哈希（新版） ${plan.name}`;
   const text = `${title}\n${riskReason}\n当前盈亏：${pnl}\n期号：${period}\n来源：${source}`;
   const targetId = session.alertGroupId ?? session.watchGroupId;
   if (targetId) {
     try {
       await session.client.sendMessage(targetId, { message: text });
     } catch (err) {
-      logger.warn({ userId, err }, "[canada] risk tg alert failed");
+      logger.warn({ userId, err }, "[hash-new] risk tg alert failed");
     }
   }
   try {
-    await sendAlertEmail(`风控提醒 加拿大2 ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
+    await sendAlertEmail(`风控提醒 哈希（新版） ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
   } catch (err) {
-    logger.warn({ userId, err }, "[canada] risk email alert failed");
+    logger.warn({ userId, err }, "[hash-new] risk email alert failed");
   }
 }
 
@@ -645,27 +644,6 @@ function parseChannelText(text: string): { type: "open"; period: string } | { ty
   return null;
 }
 
-function parseDrawItem(item: DrawItem): ParsedCanadaResult | null {
-  const term = Number(item.term);
-  if (!Number.isFinite(term) || term <= 0) return null;
-  const hasParts = typeof item.sum1 === "number" && typeof item.sum2 === "number" && typeof item.sum3 === "number";
-  const value = typeof item.result === "number"
-    ? item.result
-    : hasParts
-      ? (item.sum1 as number) + (item.sum2 as number) + (item.sum3 as number)
-      : NaN;
-  if (!Number.isFinite(value)) return null;
-  const bigSmall = value >= 14 ? "大" : "小";
-  const oddEven = value % 2 === 1 ? "单" : "双";
-  const label = (typeof item.r3 === "string" && item.r3.trim().length > 0) ? item.r3.trim() : `${bigSmall}${oddEven}`;
-  return {
-    period: String(term),
-    parts: hasParts ? [item.sum1 as number, item.sum2 as number, item.sum3 as number] : undefined,
-    value,
-    label,
-  };
-}
-
 async function triggerPlanForPeriod(session: TgSession, userId: number, plan: CanadaPlan, state: CanadaPlanRuntime, runtime: CanadaRuntime, period: string): Promise<void> {
   if (!plan.enabled || state.lastSentPeriod === period) return;
   const config = loadConfig(userId);
@@ -729,7 +707,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
   try {
     await session.client.sendMessage(session.watchGroupId, { message });
     state.lastMessage = message;
-    logger.info({ userId, plan: plan.name, period, message }, "[canada] plan sent");
+    logger.info({ userId, plan: plan.name, period, message }, "[hash-new] plan sent");
   } catch (err) {
     state.blockedReason = err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80);
     if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} 发送失败：${state.blockedReason}`, "error");
@@ -815,31 +793,25 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
 async function processUserCanada(session: TgSession): Promise<void> {
   const userId = session.userId;
   const config = loadConfig(userId);
+  if (!config.plans.some(plan => plan.enabled)) return;
   const runtime = loadRuntime(userId, config);
   const primaryPlan = config.plans.find(plan => plan.enabled) ?? config.plans[0] ?? defaultPlan(0);
+  const channel = HASH_NEW_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
   let changed = false;
   const prevMsgId = runtime.lastChannelMsgId;
   const prevActive = runtime.activePeriod;
-  let parsedAny = false;
-  let lastUnparsed = "";
   try {
-    const r = await fetch(CANADA_RESULT_SOURCE, {
-      headers: {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-        "Referer": "http://pc20.net/",
-      },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!r.ok) throw new Error(`upstream_http_${r.status}`);
-    const data = await r.json() as { message?: { all?: { keno28?: { data?: DrawItem[] } } } };
-    const items = data?.message?.all?.keno28?.data ?? [];
-    if (!items.length) {
-      if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "canada2_source_empty") {
+    const msgs = await session.client.getMessages(channel, {
+      limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
+      ...(runtime.lastChannelMsgId > 0 ? { minId: runtime.lastChannelMsgId } : {}),
+    }) as Api.Message[];
+    if (!msgs.length) {
+      if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "hashnew_channel_empty") {
         runtime.lastAlert = {
-          id: "canada2_source_empty",
+          id: "hashnew_channel_empty",
           planId: primaryPlan.id,
           planName: primaryPlan.name,
-          message: "未读取到 pc20.net 的开奖数据：请稍后再试。",
+          message: "未读取到开奖频道 @hx28kjw 的消息：请用当前 TG 账号先加入频道 @hx28kjw（加入后等下一期开奖即可）。",
           at: Date.now(),
           level: "warn",
           voice: false,
@@ -847,68 +819,43 @@ async function processUserCanada(session: TgSession): Promise<void> {
         changed = true;
       }
     } else {
-      const current = items[0];
-      const currentTerm = Number(current?.term ?? 0);
-      if (Number.isFinite(currentTerm) && currentTerm > 0) {
-        const nextActive = (typeof current?.r3 === "string" && current.r3.trim().length > 0)
-          ? String(currentTerm + 1)
-          : String(currentTerm);
-        if (runtime.activePeriod !== nextActive) runtime.activePeriod = nextActive;
-      }
-
-      const sorted = [...items]
-        .filter(item => Number.isFinite(Number(item.term)))
-        .sort((a, b) => Number(a.term) - Number(b.term));
-      for (const item of sorted) {
-        const term = Number(item.term);
-        if (!Number.isFinite(term) || term <= runtime.lastChannelMsgId) continue;
-        if (typeof item.r3 !== "string" || item.r3.trim().length === 0) continue;
-        const parsed = parseDrawItem(item);
-        if (!parsed) {
-          lastUnparsed = `term=${term}`;
-          continue;
-        }
-        parsedAny = true;
-        runtime.lastChannelMsgId = term;
-        runtime.activePeriod = String((Number(parsed.period) || 0) + 1);
-        const activePlans = loadConfig(userId).plans.filter(plan => plan.enabled);
-        if (activePlans.length > 0) {
+      const sorted = [...msgs].sort((a, b) => a.id - b.id);
+      for (const msg of sorted) {
+        if (msg.id <= runtime.lastChannelMsgId) continue;
+        runtime.lastChannelMsgId = msg.id;
+        const text = msg.message ?? "";
+        if (!text) continue;
+        const parsed = parseChannelText(text);
+        if (!parsed) continue;
+        if (parsed.type === "open") {
+          runtime.activePeriod = parsed.period;
+        } else {
+          runtime.activePeriod = String((Number(parsed.result.period) || 0) + 1);
+          const activePlans = loadConfig(userId).plans.filter(plan => plan.enabled);
           for (const plan of activePlans) {
             const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
             runtime.plans[plan.id] = state;
-            await settlePlanResult(session, userId, plan, state, runtime, parsed);
+            await settlePlanResult(session, userId, plan, state, runtime, parsed.result);
           }
-          scheduleCanadaAutoBet(session, parsed.period);
+          scheduleCanadaAutoBet(session, parsed.result.period);
         }
       }
     }
   } catch (err) {
-    logger.warn({ userId, err }, "[canada] loop failed");
-    if (runtime.lastAlert?.id !== "canada2_source_error") {
+    logger.warn({ userId, err }, "[hash-new] loop failed");
+    if (runtime.lastAlert?.id !== "hashnew_channel_error") {
       const msg = err instanceof Error ? err.message : String(err);
       runtime.lastAlert = {
-        id: "canada2_source_error",
+        id: "hashnew_channel_error",
         planId: primaryPlan.id,
         planName: primaryPlan.name,
-        message: `读取开奖源 pc20.net 失败：${msg.slice(0, 140)}`,
+        message: `读取开奖频道 @hx28kjw 失败：${msg.slice(0, 140)}`,
         at: Date.now(),
         level: "warn",
         voice: false,
       };
       changed = true;
     }
-  }
-  if (runtime.lastChannelMsgId !== prevMsgId && !parsedAny && runtime.lastAlert?.id !== "canada2_parse_failed") {
-    runtime.lastAlert = {
-      id: "canada2_parse_failed",
-      planId: primaryPlan.id,
-      planName: primaryPlan.name,
-      message: `已拉取到 pc20.net 数据，但格式未识别。示例：${lastUnparsed || "(无数据)"}。需要调整解析规则。`,
-      at: Date.now(),
-      level: "warn",
-      voice: false,
-    };
-    changed = true;
   }
   if (runtime.lastChannelMsgId !== prevMsgId) changed = true;
   if (runtime.activePeriod !== prevActive) changed = true;
@@ -946,7 +893,7 @@ function scheduleCanadaAutoBet(session: TgSession, settledPeriod: string): void 
       runtime.updatedAt = Date.now();
       saveRuntime(session.userId, runtime);
     })();
-  }, 80_000));
+  }, 50_000));
 }
 
 function startCanadaLoop(): void {
@@ -1011,7 +958,7 @@ router.post("/canada2/test-alert", requireCard, (req, res) => {
     firstPlan,
     typeof message === "string" && message.trim()
       ? message.trim().slice(0, 120)
-      : "加拿大2提醒测试：已触发网页语音提醒",
+      : "哈希（新版）提醒测试：已触发网页语音提醒",
     "info",
   );
   saveRuntime(userId, runtime);

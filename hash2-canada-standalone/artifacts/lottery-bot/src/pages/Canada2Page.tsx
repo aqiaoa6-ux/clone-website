@@ -249,7 +249,7 @@ export default function Canada2Page() {
     try {
       const { config: saved } = await api.canada2.saveConfig(config);
       setConfig(saved);
-      setAlertMessage("加拿大2配置已保存");
+      setAlertMessage("哈希（新版）配置已保存");
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "保存失败");
     } finally {
@@ -260,7 +260,7 @@ export default function Canada2Page() {
   const testAlert = async () => {
     setTestingAlert(true);
     try {
-      const res = await api.canada2.testAlert("加拿大2提醒测试：网页提醒已触发");
+      const res = await api.canada2.testAlert("哈希（新版）提醒测试：网页提醒已触发");
       setAlertMessage(res.message);
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "提醒测试失败");
@@ -289,8 +289,8 @@ export default function Canada2Page() {
               ←
             </button>
             <div>
-              <div className="font-bold text-white">加拿大2</div>
-              <div className="text-[10px] text-slate-500">独立模块，不影响原哈希</div>
+              <div className="font-bold text-white">哈希（新版）</div>
+              <div className="text-[10px] text-slate-500">独立模块，按哈希2模式运行</div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -535,7 +535,7 @@ export default function Canada2Page() {
                 disabled={saving}
                 className="bg-[#252a3d] hover:bg-[#30375a] disabled:opacity-50 text-slate-200 text-sm py-2 rounded-xl transition"
               >
-                {saving ? "保存中..." : "保存加拿大2"}
+                {saving ? "保存中..." : "保存哈希（新版）"}
               </button>
             </div>
 
@@ -563,7 +563,7 @@ export default function Canada2Page() {
               onToggle={() => toggleSection("play2")}
             >
               <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-3 text-sm text-slate-500">
-                加拿大2不使用组合、特殊号和数字玩法，这里保留为空。
+                哈希（新版）当前仍固定为大小单双全压，组合、特殊号和数字玩法暂不开放。
               </div>
             </CollapseSection>
 
@@ -776,7 +776,7 @@ function CanadaLiveOverview({
   const [runtime, setRuntime] = useState<CanadaRuntime | null>(null);
   const [draw, setDraw] = useState<DrawState | null>(null);
   const [nowMs, setNowMs] = useState(Date.now());
-  const seenAlertStorageKey = "canada2_seen_alert_id";
+  const seenAlertStorageKey = "hashnew_seen_alert_id";
   const [seenAlertId, setSeenAlertId] = useState<string>(() => sessionStorage.getItem(seenAlertStorageKey) ?? "");
   const drawSigRef = useRef("");
   const nextCloseRef = useRef(0);
