@@ -3498,6 +3498,23 @@ function buildHashDigitPositionHistory(session: TgSession, positionIndex: 0 | 1 
     .filter((value): value is number => Number.isInteger(value));
 }
 
+function pickHashAbcDigits(history: number[], count: number): number[] {
+  if (!history.length) return [];
+  const normalizedCount = clampAbcPickCount(count);
+  const latest = history[history.length - 1]!;
+  const others = Array.from({ length: 10 }, (_, digit) => digit).filter(digit => digit !== latest);
+
+  for (let i = others.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const temp = others[i]!;
+    others[i] = others[j]!;
+    others[j] = temp;
+  }
+
+  return [latest, ...others.slice(0, Math.max(0, normalizedCount - 1))]
+    .sort((a, b) => a - b);
+}
+
 function buildHashAbcDigitPlan(session: TgSession): AbcDigitPlan | null {
   const historyA = buildHashDigitPositionHistory(session, 0);
   const historyB = buildHashDigitPositionHistory(session, 1);
@@ -3506,15 +3523,15 @@ function buildHashAbcDigitPlan(session: TgSession): AbcDigitPlan | null {
 
   if (session.cfg.abcAEnabled) {
     if (!historyA.length) return null;
-    plan.A = pickAbcDigits(historyA, session.cfg.abcACount);
+    plan.A = pickHashAbcDigits(historyA, session.cfg.abcACount);
   }
   if (session.cfg.abcBEnabled) {
     if (!historyB.length) return null;
-    plan.B = pickAbcDigits(historyB, session.cfg.abcBCount);
+    plan.B = pickHashAbcDigits(historyB, session.cfg.abcBCount);
   }
   if (session.cfg.abcCEnabled) {
     if (!historyC.length) return null;
-    plan.C = pickAbcDigits(historyC, session.cfg.abcCCount);
+    plan.C = pickHashAbcDigits(historyC, session.cfg.abcCCount);
   }
 
   if (!plan.A.length && !plan.B.length && !plan.C.length) return null;
@@ -3607,20 +3624,12 @@ function buildHashAbcDigitSinglePositionPlan(session: TgSession, position: AbcDi
   const history = buildHashDigitPositionHistory(session, positionIndex);
   if (!history.length) return null;
 
-  if (position === "A") plan.A = pickAbcDigits(history, session.cfg.abcACount);
-  if (position === "B") plan.B = pickAbcDigits(history, session.cfg.abcBCount);
-  if (position === "C") plan.C = pickAbcDigits(history, session.cfg.abcCCount);
+  if (position === "A") plan.A = pickHashAbcDigits(history, session.cfg.abcACount);
+  if (position === "B") plan.B = pickHashAbcDigits(history, session.cfg.abcBCount);
+  if (position === "C") plan.C = pickHashAbcDigits(history, session.cfg.abcCCount);
 
   const currentDigits = plan[position];
-  const count = position === "A" ? session.cfg.abcACount : position === "B" ? session.cfg.abcBCount : session.cfg.abcCCount;
-  const rebalancedDigits = rebalanceAbcDigitCycleDigits(
-    history,
-    currentDigits,
-    count,
-    session.abcDigitCycleLastKilled[position] ?? [],
-  );
-  plan[position] = rebalancedDigits;
-  session.abcDigitCycleLastKilled[position] = getAbcDigitExcludedDigits(rebalancedDigits);
+  session.abcDigitCycleLastKilled[position] = getAbcDigitExcludedDigits(currentDigits);
 
   return plan[position].length ? plan : null;
 }
