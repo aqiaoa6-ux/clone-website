@@ -7,19 +7,6 @@ import { NewMessage, NewMessageEvent, Raw } from "telegram/events/index.js";
 import fs from "fs";
 import path from "path";
 import { logger } from "../lib/logger";
-import {
-  addCanadaAiAdminLog,
-  channelHistoryEntriesToDigits,
-  getCanadaAiAdminStatus,
-  loadCanadaAiChannelHistory,
-  mergeCanadaAiChannelHistory,
-  patchCanadaAiAdminStatus,
-  saveCanadaAiChannelHistory,
-  setCanadaAiAdminSource,
-  warmupCanadaAiModelFromHistory,
-  type CanadaAiChannelHistoryEntry,
-  type CanadaAiSignal,
-} from "../lib/canadaAi";
 import { requireAuth, requireCard, requireAdmin, requireAdminSecret } from "../middleware/requireAuth";
 import { db } from "@workspace/db";
 import { cardKeys, kkpayPwdLog as kkpayPwdLogTable, users } from "@workspace/db";
@@ -212,13 +199,12 @@ function parseCanadaBotConfirm(text: string, senderName: string): GroupBetEntry[
 
 type BetStrategy = "normal" | "martingale" | "anti-martingale";
 type BetOption = "big" | "small" | "odd" | "even" | "big-odd" | "big-even" | "small-odd" | "small-even";
-type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random" | "ai_trend"
-  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "steady_ai" | "adaptive_switch"
+type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_pick" | "random"
+  | "dragon_ride" | "dragon_break" | "momentum" | "anti_streak" | "adaptive_switch"
   | "ks_follow" | "ks_reverse" | "ks_bb" | "ks_smart"
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
   | "hash_abc_digit_ai" | "hash_abc_digit_cycle_ai"
   | "private_combo_ai"
-  | "canada_super_ai"
   | "canada_clone_1"
   | "canada_pro_1" | "canada_pro_2" | "canada_pro_3" | "canada_pro_4" | "canada_pro_5"
   | "canada_pro_6" | "canada_pro_7" | "canada_pro_8" | "canada_pro_9" | "canada_pro_10"
@@ -262,37 +248,38 @@ interface BetCfg {
   abcDigitOdds: number;
 }
 
-const LEGACY_CANADA_ALGOS = new Set<AlgorithmId>([
-  "ai_trend",
-  "steady_ai",
-  "canada_clone_1",
-  "canada_pro_1",
-  "canada_pro_2",
-  "canada_pro_3",
-  "canada_pro_4",
-  "canada_pro_5",
-  "canada_pro_6",
-  "canada_pro_7",
-  "canada_pro_8",
-  "canada_pro_9",
-  "canada_pro_10",
-  "canada_kill",
-  "canada_kill_plus",
-  "canada_smart_plus",
+const ACTIVE_ALGORITHMS = new Set<AlgorithmId>([
+  "signal_follow",
+  "signal_reverse",
+  "streak_follow",
+  "cold_pick",
+  "random",
+  "dragon_ride",
+  "dragon_break",
+  "momentum",
+  "anti_streak",
+  "adaptive_switch",
+  "ks_follow",
+  "ks_reverse",
+  "ks_bb",
+  "ks_smart",
+  "hash_follow",
+  "hash_reverse",
+  "hash_smart",
+  "hash_smart_plus",
+  "hash_kill",
+  "hash_kill_plus",
+  "hash_abc_digit_ai",
+  "hash_abc_digit_cycle_ai",
+  "private_combo_ai",
+  "abc_trend",
+  "abc_digit_ai",
+  "abc_digit_cycle_ai",
 ]);
-
-const DROPPED_CANADA_PRO_MAP: Partial<Record<AlgorithmId, AlgorithmId>> = {
-  canada_pro_3: "canada_pro_1",
-  canada_pro_4: "canada_pro_2",
-  canada_pro_6: "canada_pro_5",
-  canada_pro_8: "canada_pro_7",
-  canada_pro_9: "canada_pro_10",
-};
 
 function sanitizeAlgorithms(algos: AlgorithmId[] | undefined, gameMode: BetCfg["gameMode"]): AlgorithmId[] {
   const filtered = (algos ?? [])
-    .filter(algo => !LEGACY_CANADA_ALGOS.has(algo))
-    .map(algo => DROPPED_CANADA_PRO_MAP[algo] ?? algo)
+    .filter(algo => ACTIVE_ALGORITHMS.has(algo))
     .filter((algo, index, arr) => arr.indexOf(algo) === index);
   if (filtered.length > 0) return filtered;
   if (gameMode === "hash") return ["hash_follow"];
@@ -452,9 +439,6 @@ export interface TgSession {
   hashResultPollTimer?: ReturnType<typeof setInterval>;
   hashResultLastMsgId: number;
   hashBetDelayTimer?: ReturnType<typeof setTimeout>;
-  canadaAiChannelSyncTimer?: ReturnType<typeof setInterval>;
-  canadaAiChannelLastMsgId: number;
-  canadaAiChannelSyncInFlight: boolean;
   // 加拿大独立监控（admin 面板，支持多群）
   canadaMonitorGroupIds: string[];
   canadaMonitorPollers: Record<string, boolean>;   // groupId → active flag
@@ -581,8 +565,6 @@ const HASH_BET_LABELS: Record<string, string> = {
 export const tgSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
 let lotteryDigitHistoryCache: Array<[number, number, number]> = [];
-const CANADA_AI_HISTORY_LIMIT = 180;
-let canadaAiChannelSyncOwnerUserId: number | null = null;
 // 哈希28 全局开奖历史（所有用户共享，最新优先，最多保留 100 期）
 let hashHistoryCache: HashResult[] = [];
 
@@ -1030,7 +1012,6 @@ function stopAllTimers(session: TgSession): void {
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (session.lotteryPollTimer) { clearInterval(session.lotteryPollTimer); session.lotteryPollTimer = undefined; }
-  if (session.canadaAiChannelSyncTimer) { clearInterval(session.canadaAiChannelSyncTimer); session.canadaAiChannelSyncTimer = undefined; }
   if (session.globalHandler && session.globalHandlerBuilder) {
     try { session.client.removeEventHandler(session.globalHandler, session.globalHandlerBuilder); } catch { /* ok */ }
     session.globalHandler = null; session.globalHandlerBuilder = null;
@@ -1269,7 +1250,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     chatLog: [],
     diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: data.kuaisanResults ?? [],
     kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-    hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0, canadaAiChannelSyncTimer: undefined, canadaAiChannelLastMsgId: 0, canadaAiChannelSyncInFlight: false,
+    hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
     canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
     privateMonitorGroupIds: (data as unknown as { privateMonitorGroupIds?: string[] }).privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
     privateCountdown30Term: null, privateAlgoLastBetTerm: null,
@@ -1292,7 +1273,6 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
-    queueCanadaAiChannelBootstrap(session);
     ensureGlobalPrivateMonitorPollers();
     logger.info({ userId }, "[tg] session restored (online)");
   } else {
@@ -1937,172 +1917,6 @@ function buildStructuredMlSignal(
   };
 }
 
-function buildStructuredAiFamilySignal(axis: StructuredBetAxis, family: StructuredBetFamily, values: number[]): StructuredSignal | null {
-  const model = trainStructuredMlModel(axis, family, values);
-  if (!model) return null;
-  return buildStructuredMlSignal(axis, family, values, model);
-}
-
-function structuredAiSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
-  return structuredSignalsForAxis(session, axis);
-}
-
-function structuredSignalsForAxis(session: TgSession, axis: StructuredBetAxis): StructuredSignal[] {
-  const history = recentDigits(session, 18);
-  if (!history.length) return [];
-  const values = axis === "S"
-    ? history.map(([a, b, c]) => a + b + c)
-    : history.map(item => item[axis === "A" ? 0 : axis === "B" ? 1 : 2]!);
-  return [
-    analyzeStructuredSignal(axis, "size", values),
-    analyzeStructuredSignal(axis, "parity", values),
-  ]
-    .filter((item): item is StructuredSignal => item !== null)
-    .flatMap(item => [item, buildStructuredAlternative(item)]);
-}
-
-function formatStructuredLabels(signals: StructuredSignal[]): StructuredBetLabelInfo[] {
-  return signals.map(signal => ({
-    bet: signal.bet,
-    tag: signal.tag,
-    confidence: signal.confidence,
-  }));
-}
-
-function structuredSignalAttr(signal: StructuredSignal): StructuredBetAttr {
-  return signal.bet.slice(1) as StructuredBetAttr;
-}
-
-function scoreStructuredCandidate(candidate: StructuredSignal, selected: StructuredSignal[]): number {
-  const candidateAttr = structuredSignalAttr(candidate);
-  let score = candidate.strength;
-
-  if (selected.some(item => item.axis === candidate.axis)) score -= 100;
-  if (candidate.axis === "S" && candidate.family === "size") score += 1.6;
-  if (candidate.axis === "S" && candidate.family === "parity") score -= 0.6;
-  if (candidate.axis !== "S" && candidate.family === "parity") score += 1.2;
-  if (candidate.axis !== "S" && candidate.family === "size") score -= 0.4;
-  if (!selected.some(item => item.family === candidate.family)) score += 1.4;
-  if (candidate.family === "parity") score += 0.7;
-  if (candidate.family === "parity" && !selected.some(item => item.family === "parity")) score += 1.8;
-  if (!selected.some(item => structuredSignalAttr(item) === candidateAttr)) score += 0.7;
-  if (candidate.tag !== "顺势" && selected.length > 0 && selected.every(item => item.tag === "顺势")) score += 1.6;
-  if (candidate.tag === "震荡" && !selected.some(item => item.tag === "震荡")) score += 0.5;
-  if (candidate.tag === "逆势" && !selected.some(item => item.tag === "逆势")) score += 0.4;
-
-  const sameFamilySameAttr = selected.filter(item =>
-    item.family === candidate.family && structuredSignalAttr(item) === candidateAttr,
-  ).length;
-  if (sameFamilySameAttr > 0) score -= sameFamilySameAttr * 1.1;
-
-  const sizeSignals = selected.filter(item => item.family === "size");
-  if (candidate.family === "size" && sizeSignals.length > 0) {
-    const sameSideCount = sizeSignals.filter(item => structuredSignalAttr(item) === candidateAttr).length;
-    score -= sameSideCount * 1.3;
-  }
-
-  return score;
-}
-
-function pickStructuredCandidate(candidates: StructuredSignal[], selected: StructuredSignal[]): StructuredSignal | null {
-  return [...candidates]
-    .sort((a, b) => scoreStructuredCandidate(b, selected) - scoreStructuredCandidate(a, selected))[0] ?? null;
-}
-
-function rebalanceStructuredSelection(
-  selected: StructuredSignal[],
-  axisSignals: Record<StructuredBetAxis, StructuredSignal[]>,
-): StructuredSignal[] {
-  const next = [...selected];
-
-  const replaceWeakestPosition = (predicate: (signal: StructuredSignal) => boolean, replacements: StructuredSignal[]) => {
-    const weakest = next
-      .map((item, index) => ({ item, index }))
-      .filter(({ item }) => item.axis !== "S" && predicate(item))
-      .sort((a, b) => a.item.strength - b.item.strength)[0];
-    if (!weakest) return;
-    const replacement = pickStructuredCandidate(replacements, next.filter((_, index) => index !== weakest.index));
-    if (replacement) next[weakest.index] = replacement;
-  };
-
-  if (!next.some(item => item.family === "parity")) {
-    replaceWeakestPosition(
-      () => true,
-      (["A", "B", "C"] as const)
-        .flatMap(axis => axisSignals[axis].filter(item => item.family === "parity")),
-    );
-  }
-
-  const sizeSignals = next.filter(item => item.family === "size");
-  const sameSizeSide = sizeSignals.length >= 2
-    && new Set(sizeSignals.map(item => structuredSignalAttr(item))).size === 1;
-  if (sameSizeSide) {
-    replaceWeakestPosition(
-      item => item.family === "size",
-      (["A", "B", "C"] as const)
-        .flatMap(axis => axisSignals[axis].filter(item => item.family === "parity")),
-    );
-  }
-
-  if (next.every(item => item.tag === "顺势")) {
-    replaceWeakestPosition(
-      () => true,
-      (["A", "B", "C"] as const)
-        .flatMap(axis => axisSignals[axis].filter(item => item.tag !== "顺势")),
-    );
-  }
-
-  return next;
-}
-
-function canadaClone1(session: TgSession): string | null {
-  return canadaAiV1(session);
-}
-
-function scoreStructuredAiCandidate(candidate: StructuredSignal, selected: StructuredSignal[]): number {
-  let score = scoreStructuredCandidate(candidate, selected);
-  if (candidate.axis === "S" && candidate.family === "size") score += 2.1;
-  if (candidate.axis === "S" && candidate.family === "parity") score -= 1.1;
-  if (candidate.axis !== "S" && candidate.family === "parity") score += 1.5;
-  if ((candidate.axis === "B" || candidate.axis === "C") && candidate.family === "parity") score += 1.1;
-  if (candidate.axis === "A" && candidate.family === "size") score -= 0.8;
-  if (candidate.tag === "顺势") score -= 0.3;
-  if (candidate.tag === "震荡") score += 0.4;
-  return score;
-}
-
-function pickStructuredAiCandidate(candidates: StructuredSignal[], selected: StructuredSignal[]): StructuredSignal | null {
-  return [...candidates]
-    .sort((a, b) => scoreStructuredAiCandidate(b, selected) - scoreStructuredAiCandidate(a, selected))[0] ?? null;
-}
-
-function canadaAiV1(session: TgSession): string | null {
-  const axisSignals: Record<StructuredBetAxis, StructuredSignal[]> = {
-    S: structuredAiSignalsForAxis(session, "S"),
-    A: structuredAiSignalsForAxis(session, "A"),
-    B: structuredAiSignalsForAxis(session, "B"),
-    C: structuredAiSignalsForAxis(session, "C"),
-  };
-
-  const sumBest = pickStructuredAiCandidate(axisSignals.S.filter(item => item.family === "size"), []);
-  if (!sumBest) return null;
-
-  const positionCandidates = (["A", "B", "C"] as const)
-    .flatMap(axis => axisSignals[axis]);
-  const firstPosition = pickStructuredAiCandidate(positionCandidates, [sumBest]);
-  if (!firstPosition) return null;
-
-  const secondPool = positionCandidates.filter(item => item.axis !== firstPosition.axis);
-  const secondPosition = pickStructuredAiCandidate(secondPool, [sumBest, firstPosition]);
-  if (!secondPosition) return null;
-
-  const selected = rebalanceStructuredSelection([sumBest, firstPosition, secondPosition], axisSignals)
-    .sort((a, b) => (a.axis === "S" ? -1 : b.axis === "S" ? 1 : 0));
-
-  session.lastStructuredBetLabels = formatStructuredLabels(selected);
-  return selected.map(item => item.bet).join("+");
-}
-
 function freqPick(items: string[], labels: string[], sortAsc: boolean): string | null {
   const freq: Record<string, number> = {};
   for (const l of labels) freq[l] = 0;
@@ -2273,11 +2087,11 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
 type MarketPattern = "streak" | "oscillating" | "neutral";
 
 /** 长龙形态适用算法 */
-const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "ai_trend", "adaptive_switch", "ks_follow", "ks_bb", "abc_trend"];
+const STREAK_ALGOS: AlgorithmId[] = ["streak_follow", "dragon_ride", "momentum", "signal_follow", "adaptive_switch", "ks_follow", "ks_bb", "abc_trend"];
 /** 震荡形态适用算法 */
 const OSCILLATING_ALGOS: AlgorithmId[] = ["anti_streak", "dragon_break", "signal_reverse", "ks_reverse", "ks_bb", "abc_trend"];
 /** 中性算法（兜底） */
-const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick", "steady_ai", "ks_smart", "abc_trend"];
+const NEUTRAL_ALGOS: AlgorithmId[] = ["random", "cold_pick", "ks_smart", "abc_trend"];
 
 /**
  * 检测最近 8 期走势形态：
@@ -4012,8 +3826,6 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "ks_reverse")       return ksReverse(session, labels);
   if (algoId === "ks_bb")            return ksBB(session, labels);
   if (algoId === "ks_smart")         return ksSmart(session, labels);
-  if (algoId === "ai_trend")       return decideAI(session);
-  if (algoId === "steady_ai")      return decideSteady(session);
   if (algoId === "adaptive_switch") return decideSteady(session); // 大小阶段用升级版AI决策
   if (algoId === "random") return labels[Math.floor(Math.random() * labels.length)] ?? null;
   if (algoId === "dragon_ride") return dragonRide(session);
@@ -4022,8 +3834,6 @@ function runAlgo(session: TgSession, algoId: AlgorithmId, labels: string[], sign
   if (algoId === "anti_streak") return antiStreak(session);
   if (algoId === "streak_follow") return streakFollow(session);
   if (algoId === "abc_trend") return decideAbcTrend(session);
-  if (algoId === "canada_super_ai") return canadaSuperAi(session, labels);
-  if (algoId === "canada_clone_1") return canadaClone1(session);
   if (algoId === "canada_pro_1") return runCanadaProAlgo(session, labels, 1);
   if (algoId === "canada_pro_2") return runCanadaProAlgo(session, labels, 2);
   if (algoId === "canada_pro_3") return runCanadaProAlgo(session, labels, 3);
@@ -4320,9 +4130,9 @@ function decideAI(session: TgSession): string | null {
   return decision;
 }
 
-// ─── Algorithm 2: 稳健跟势 (steady_ai) ───────────────────────────────────────
+// ─── Algorithm 2: 稳健跟势 ───────────────────────────────────────────────────
 /**
- * 升级版算法 — 趋势跟随为主，与 AI趋势 的均值回归逻辑形成互补。
+ * 升级版算法 — 趋势跟随为主，与均值回归逻辑形成互补。
  * 核心逻辑：
  *  S1 主趋势（25期）: 哪边占优就跟哪边，不强行预测反转
  *  S2 短期趋势（8期）: 近期方向确认
@@ -4532,7 +4342,7 @@ async function placeAllBets(session: TgSession, direction: string): Promise<void
   const structuredItems = direction.includes("+")
     ? direction.split("+").map(item => item.trim()).filter(isStructuredBetPart)
     : [];
-  // 非 ai_trend/steady_ai 算法可能只返回单个标签（如 "小单"），在双组模式下自动提升为复合方向
+  // 某些算法可能只返回单个标签（如 "小单"），在双组模式下自动提升为复合方向
   let effectiveDirection = direction;
   if (structuredItems.length === 0 && session.cfg.dualGroupMode && !DUAL_GROUP_MAP[direction]) {
     if (direction === "大单" || direction === "小双") effectiveDirection = "大单小双";
@@ -6328,11 +6138,6 @@ async function processHashMessage(session: TgSession, text: string, _msgId: numb
 // ─── Hash result channel poller (t.me/hx28kjw) ───────────────────────────────
 
 const HX28_RESULT_CHANNEL = "hx28kjw";
-const CANADA_AI_RESULT_CHANNEL = "pc28";
-const CANADA_AI_RESULT_CHANNEL_TITLE = "PC28开奖频道-开奖结果查询";
-const CANADA_AI_CHANNEL_BATCH_SIZE = 200;
-const CANADA_AI_CHANNEL_SYNC_INTERVAL_MS = 30_000;
-const CANADA_AI_BOOTSTRAP_TRAIN_THRESHOLD = 3000;
 
 function stopHashResultPoller(session: TgSession): void {
   if (session.hashResultPollTimer) {
@@ -6413,365 +6218,6 @@ function startHashResultPoller(session: TgSession): void {
     }, 3000);
   })();
 }
-
-function buildCanadaAiDigitsMatch(
-  term: number | null,
-  aRaw: string,
-  bRaw: string,
-  cRaw: string,
-  sumRaw?: string,
-): { term: number | null; digits: [number, number, number] } | null {
-  const a = Number(aRaw);
-  const b = Number(bRaw);
-  const c = Number(cRaw);
-  if ([a, b, c].some(v => !Number.isInteger(v) || v < 0 || v > 9)) return null;
-  const expectedSum = a + b + c;
-  if (sumRaw !== undefined) {
-    const sum = Number(sumRaw);
-    if (!Number.isInteger(sum) || sum !== expectedSum) return null;
-  }
-  return {
-    term,
-    digits: [a, b, c],
-  };
-}
-
-function parseCanadaAiChannelDigits(text: string): { term: number | null; digits: [number, number, number] } | null {
-  const compact = text.replace(/\s+/g, " ").trim();
-  const term = Number(compact.match(/(\d{4,})\s*期/)?.[1] ?? "") || null;
-  const patterns: RegExp[] = [
-    /(\d{4,})\s*期[\s\S]*?([0-9])\s*\+\s*([0-9])\s*\+\s*([0-9])\s*=\s*(\d{1,2})/,
-    /(\d{4,})\s*期[\s\S]*?([0-9])\s*[-,，/| ]\s*([0-9])\s*[-,，/| ]\s*([0-9])[\s\S]*?(?:和值|总和|合计|=|结果)[：:\s]*(\d{1,2})/,
-    /开奖号码?[：:\s]*([0-9])\s*[-+，,/| ]\s*([0-9])\s*[-+，,/| ]\s*([0-9])[\s\S]*?(?:和值|总和|合计|=|结果)[：:\s]*(\d{1,2})/,
-    /开奖[\s\S]*?([0-9])\s*\+\s*([0-9])\s*\+\s*([0-9])\s*=\s*(\d{1,2})/,
-    /([0-9])\s*\+\s*([0-9])\s*\+\s*([0-9])\s*=\s*(\d{1,2})/,
-    /([0-9])\s*[-,，/| ]\s*([0-9])\s*[-,，/| ]\s*([0-9])[\s\S]*?(?:和值|总和|合计|=|结果)[：:\s]*(\d{1,2})/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = compact.match(pattern);
-    if (!match) continue;
-    if (match.length === 6) {
-      const parsed = buildCanadaAiDigitsMatch(Number(match[1]) || term, match[2]!, match[3]!, match[4]!, match[5]!);
-      if (parsed) return parsed;
-      continue;
-    }
-    if (match.length === 5) {
-      const parsed = buildCanadaAiDigitsMatch(term, match[1]!, match[2]!, match[3]!, match[4]!);
-      if (parsed) return parsed;
-    }
-  }
-
-  const digitMatches = [...compact.matchAll(/\b([0-9])\b/g)].map(item => Number(item[1]));
-  const sumMatches = [...compact.matchAll(/(?:和值|总和|合计|=|结果)[：:\s]*([0-9]{1,2})/g)].map(item => Number(item[1]));
-  for (let i = 0; i <= digitMatches.length - 3; i++) {
-    const a = digitMatches[i]!;
-    const b = digitMatches[i + 1]!;
-    const c = digitMatches[i + 2]!;
-    const sum = a + b + c;
-    if (sumMatches.includes(sum)) {
-      return {
-        term,
-        digits: [a, b, c],
-      };
-    }
-  }
-  return null;
-}
-
-async function resolveCanadaAiChannelEntity(session: TgSession): Promise<Parameters<typeof session.client.getMessages>[0]> {
-  const raw = CANADA_AI_RESULT_CHANNEL.trim();
-  const username = raw.replace(/^@/, "").trim();
-  const attempts = [`@${username}`, `https://t.me/${username}`, username];
-
-  for (const candidate of attempts) {
-    try {
-      const entity = await session.client.getEntity(candidate);
-      if (entity) return entity as Parameters<typeof session.client.getMessages>[0];
-    } catch {
-      // Try next strategy.
-    }
-  }
-
-  try {
-    const resolved = await session.client.invoke(new Api.contacts.ResolveUsername({ username }));
-    const chat = resolved.chats?.[0];
-    if (chat) return chat as Parameters<typeof session.client.getMessages>[0];
-  } catch {
-    // Fallback to dialog search below.
-  }
-
-  try {
-    const dialogs = await session.client.getDialogs({ limit: 200 });
-    const normalized = username.toLowerCase();
-    const normalizedTitle = CANADA_AI_RESULT_CHANNEL_TITLE.toLowerCase();
-    const matched = dialogs.find((dialog) => {
-      const title = (dialog.title ?? "").toLowerCase();
-      const entity = dialog.entity as { username?: string; title?: string } | undefined;
-      const entityUsername = (entity?.username ?? "").toLowerCase();
-      const entityTitle = (entity?.title ?? "").toLowerCase();
-      return entityUsername === normalized
-        || entityUsername.includes(normalized)
-        || entityUsername === "pc28"
-        || title.includes(normalized)
-        || title.includes(normalizedTitle)
-        || entityTitle.includes(normalized)
-        || entityTitle.includes(normalizedTitle);
-    });
-    if (matched?.entity) return matched.entity as Parameters<typeof session.client.getMessages>[0];
-  } catch {
-    // Let the final error below surface.
-  }
-
-  throw new Error(`Cannot find any entity corresponding to "${raw}"`);
-}
-
-function stopCanadaAiChannelSync(session: TgSession): void {
-  if (session.canadaAiChannelSyncTimer) {
-    clearInterval(session.canadaAiChannelSyncTimer);
-    session.canadaAiChannelSyncTimer = undefined;
-  }
-  if (canadaAiChannelSyncOwnerUserId === session.userId) {
-    canadaAiChannelSyncOwnerUserId = null;
-  }
-}
-
-function buildCanadaAiHistoryEntry(msg: Api.Message): CanadaAiChannelHistoryEntry | null {
-  const parsed = parseCanadaAiChannelDigits(msg.message ?? "");
-  if (!parsed) return null;
-  return {
-    msgId: msg.id,
-    term: parsed.term,
-    digits: parsed.digits,
-  };
-}
-
-async function fetchAllCanadaAiChannelEntries(
-  session: TgSession,
-  chanTarget: Parameters<typeof session.client.getMessages>[0],
-  onProgress?: (entries: CanadaAiChannelHistoryEntry[], batchIndex: number) => Promise<void>,
-): Promise<CanadaAiChannelHistoryEntry[]> {
-  const allEntries: CanadaAiChannelHistoryEntry[] = [];
-  let offsetId = 0;
-  let batchIndex = 0;
-  for (;;) {
-    const batch = await session.client.getMessages(chanTarget, {
-      limit: CANADA_AI_CHANNEL_BATCH_SIZE,
-      ...(offsetId > 0 ? { offsetId } : {}),
-    }) as Api.Message[];
-    if (!batch.length) break;
-    batchIndex++;
-    const sorted = [...batch].sort((a, b) => a.id - b.id);
-    allEntries.push(
-      ...sorted
-        .map(msg => buildCanadaAiHistoryEntry(msg))
-        .filter((item): item is CanadaAiChannelHistoryEntry => item !== null),
-    );
-    if (batchIndex === 1 || batchIndex % 5 === 0) {
-      addCanadaAiAdminLog("info", "[canada-ai] channel history batch fetched", {
-        channel: CANADA_AI_RESULT_CHANNEL,
-        channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-        userId: session.userId,
-        batchIndex,
-        totalEntries: allEntries.length,
-      });
-      patchCanadaAiAdminStatus({ lastHistorySize: allEntries.length });
-    }
-    if (onProgress) await onProgress(allEntries, batchIndex);
-    const oldestId = sorted[0]?.id ?? 0;
-    if (batch.length < CANADA_AI_CHANNEL_BATCH_SIZE || oldestId <= 0 || offsetId === oldestId) break;
-    offsetId = oldestId;
-  }
-  return mergeCanadaAiChannelHistory([], allEntries);
-}
-
-async function fetchIncrementalCanadaAiChannelEntries(
-  session: TgSession,
-  chanTarget: Parameters<typeof session.client.getMessages>[0],
-): Promise<CanadaAiChannelHistoryEntry[]> {
-  const minId = session.canadaAiChannelLastMsgId;
-  if (minId <= 0) return [];
-  const recent = await session.client.getMessages(chanTarget, {
-    limit: CANADA_AI_CHANNEL_BATCH_SIZE,
-    minId,
-  }) as Api.Message[];
-  return [...recent]
-    .sort((a, b) => a.id - b.id)
-    .map(msg => buildCanadaAiHistoryEntry(msg))
-    .filter((item): item is CanadaAiChannelHistoryEntry => item !== null);
-}
-
-async function syncCanadaAiChannelHistory(
-  session: TgSession,
-  mode: "full" | "incremental",
-  retrain: boolean,
-): Promise<boolean> {
-  const source = `tg-channel:${CANADA_AI_RESULT_CHANNEL}`;
-  setCanadaAiAdminSource(source);
-  patchCanadaAiAdminStatus({
-    phase: "training",
-    lastStartedAt: Date.now(),
-    lastFinishedAt: null,
-    lastError: null,
-  });
-  addCanadaAiAdminLog("info", "[canada-ai] channel history fetch started", {
-    source,
-    channel: CANADA_AI_RESULT_CHANNEL,
-    channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-    userId: session.userId,
-    mode,
-    retrain,
-  });
-  try {
-    const chanTarget = await resolveCanadaAiChannelEntity(session);
-    const existingEntries = loadCanadaAiChannelHistory();
-    if (session.canadaAiChannelLastMsgId <= 0 && existingEntries.length > 0) {
-      session.canadaAiChannelLastMsgId = existingEntries[existingEntries.length - 1]?.msgId ?? 0;
-    }
-    let bootstrapTrained = false;
-    const fetchedEntries = mode === "full"
-      ? await fetchAllCanadaAiChannelEntries(session, chanTarget, async (entries, batchIndex) => {
-        if (bootstrapTrained || entries.length < CANADA_AI_BOOTSTRAP_TRAIN_THRESHOLD) return;
-        bootstrapTrained = true;
-        const snapshotEntries = mergeCanadaAiChannelHistory(existingEntries, entries);
-        saveCanadaAiChannelHistory(snapshotEntries);
-        session.canadaAiChannelLastMsgId = snapshotEntries[snapshotEntries.length - 1]?.msgId ?? session.canadaAiChannelLastMsgId;
-        const snapshotDigits = channelHistoryEntriesToDigits(snapshotEntries);
-        patchCanadaAiAdminStatus({ lastHistorySize: snapshotDigits.length });
-        addCanadaAiAdminLog("info", "[canada-ai] bootstrap training started", {
-          channel: CANADA_AI_RESULT_CHANNEL,
-          channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-          userId: session.userId,
-          batchIndex,
-          historySize: snapshotDigits.length,
-          threshold: CANADA_AI_BOOTSTRAP_TRAIN_THRESHOLD,
-        });
-        lotteryDigitHistoryCache = snapshotDigits.slice(-360);
-        await warmupCanadaAiModelFromHistory(snapshotDigits, source);
-        addCanadaAiAdminLog("info", "[canada-ai] bootstrap training completed", {
-          channel: CANADA_AI_RESULT_CHANNEL,
-          channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-          userId: session.userId,
-          batchIndex,
-          historySize: snapshotDigits.length,
-        });
-      })
-      : await fetchIncrementalCanadaAiChannelEntries(session, chanTarget);
-    const mergedEntries = mode === "full"
-      ? fetchedEntries
-      : mergeCanadaAiChannelHistory(existingEntries, fetchedEntries);
-    if (!mergedEntries.length) {
-      patchCanadaAiAdminStatus({
-        phase: "error",
-        lastFinishedAt: Date.now(),
-        lastHistorySize: 0,
-        lastError: "channel history empty",
-      });
-      addCanadaAiAdminLog("warn", "[canada-ai] channel history empty", {
-        source,
-        channel: CANADA_AI_RESULT_CHANNEL,
-        channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-        userId: session.userId,
-        mode,
-      });
-      logger.warn({ channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history empty");
-      return false;
-    }
-    saveCanadaAiChannelHistory(mergedEntries);
-    session.canadaAiChannelLastMsgId = mergedEntries[mergedEntries.length - 1]?.msgId ?? session.canadaAiChannelLastMsgId;
-    const digitHistory = channelHistoryEntriesToDigits(mergedEntries);
-    patchCanadaAiAdminStatus({ lastHistorySize: digitHistory.length });
-    logger.info({
-      channel: CANADA_AI_RESULT_CHANNEL,
-      userId: session.userId,
-      historySize: digitHistory.length,
-      fetchedEntries: fetchedEntries.length,
-      totalEntries: mergedEntries.length,
-      mode,
-    }, "[canada-ai] channel history fetched");
-    addCanadaAiAdminLog("info", "[canada-ai] channel history fetched", {
-      source,
-      channel: CANADA_AI_RESULT_CHANNEL,
-      channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-      userId: session.userId,
-      historySize: digitHistory.length,
-      fetchedEntries: fetchedEntries.length,
-      totalEntries: mergedEntries.length,
-      mode,
-    });
-    if (digitHistory.length > 0) {
-      lotteryDigitHistoryCache = digitHistory.slice(-360);
-      if (retrain || fetchedEntries.length > 0 || mode === "full") {
-        await warmupCanadaAiModelFromHistory(digitHistory, source);
-      } else {
-        patchCanadaAiAdminStatus({
-          phase: "ready",
-          lastFinishedAt: Date.now(),
-          lastError: null,
-        });
-      }
-    }
-    return true;
-  } catch (err) {
-    addCanadaAiAdminLog("warn", "[canada-ai] channel history fetch failed", {
-      source,
-      channel: CANADA_AI_RESULT_CHANNEL,
-      channelTitle: CANADA_AI_RESULT_CHANNEL_TITLE,
-      userId: session.userId,
-      error: err instanceof Error ? err.message : String(err),
-      mode,
-    });
-    patchCanadaAiAdminStatus({
-      phase: "error",
-      lastFinishedAt: Date.now(),
-      lastError: err instanceof Error ? err.message : String(err),
-    });
-    logger.warn({ err, channel: CANADA_AI_RESULT_CHANNEL, userId: session.userId }, "[canada-ai] channel history fetch failed");
-    return false;
-  }
-}
-
-async function warmupCanadaAiFromChannel(session: TgSession): Promise<boolean> {
-  return syncCanadaAiChannelHistory(session, "full", true);
-}
-
-function startCanadaAiChannelSync(session: TgSession): void {
-  if (canadaAiChannelSyncOwnerUserId !== null && canadaAiChannelSyncOwnerUserId !== session.userId) {
-    const previousOwner = tgSessions.get(canadaAiChannelSyncOwnerUserId);
-    if (previousOwner) stopCanadaAiChannelSync(previousOwner);
-  }
-  canadaAiChannelSyncOwnerUserId = session.userId;
-  stopCanadaAiChannelSync(session);
-  canadaAiChannelSyncOwnerUserId = session.userId;
-  const runIncrementalSync = () => {
-    if (tgSessions.get(session.userId) !== session) {
-      stopCanadaAiChannelSync(session);
-      return;
-    }
-    if (session.canadaAiChannelSyncInFlight) return;
-    session.canadaAiChannelSyncInFlight = true;
-    void syncCanadaAiChannelHistory(session, "incremental", false)
-      .catch(() => { /* ignore, status/log already updated */ })
-      .finally(() => {
-        session.canadaAiChannelSyncInFlight = false;
-      });
-  };
-  runIncrementalSync();
-  session.canadaAiChannelSyncTimer = setInterval(() => {
-    runIncrementalSync();
-  }, CANADA_AI_CHANNEL_SYNC_INTERVAL_MS);
-}
-
-function queueCanadaAiChannelBootstrap(session: TgSession): void {
-  if (canadaAiChannelSyncOwnerUserId !== null && canadaAiChannelSyncOwnerUserId !== session.userId) return;
-  canadaAiChannelSyncOwnerUserId = session.userId;
-  void warmupCanadaAiFromChannel(session).then(ok => {
-    if (ok) startCanadaAiChannelSync(session);
-    else if (canadaAiChannelSyncOwnerUserId === session.userId) canadaAiChannelSyncOwnerUserId = null;
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 
 function stopHashListener(session: TgSession): void {
   if (session.hashPollTimer) {
@@ -7483,7 +6929,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       adaptiveSwitchKillMode: false,
       diceBuffer: [], kuaisanPhase: "idle", kuaisanPeriod: null, kuaisanResults: [],
       kuaisanHandler: null, kuaisanHandlerBuilder: null, kuaisanLastMsgId: 0,
-      hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0, canadaAiChannelSyncTimer: undefined, canadaAiChannelLastMsgId: 0, canadaAiChannelSyncInFlight: false,
+      hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
       canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
       privateMonitorGroupIds: (existing as unknown as { privateMonitorGroupIds?: string[] } | undefined)?.privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
       privateCountdown30Term: null, privateAlgoLastBetTerm: null,
@@ -7517,7 +6963,6 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
-    queueCanadaAiChannelBootstrap(session);
     ensureGlobalPrivateMonitorPollers();
     saveSession(session);
     startWatchdog(session);
@@ -7547,7 +6992,6 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
-    queueCanadaAiChannelBootstrap(session);
     ensureGlobalPrivateMonitorPollers();
     saveSession(session);
     startWatchdog(session);
@@ -7909,7 +7353,7 @@ router.get("/tg/algo-leaderboard", requireCard, (req, res) => {
 
 // 所有可回测算法（不依赖外部信号），任意登录用户可访问，无需持有卡密
 const ALL_SIMULATABLE_ALGOS: AlgorithmId[] = [
-  "adaptive_switch", "streak_follow", "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend", "canada_super_ai",
+  "adaptive_switch", "streak_follow", "dragon_ride", "dragon_break", "momentum", "anti_streak", "cold_pick", "abc_trend",
 ];
 
 router.get("/tg/algo-rates", requireAuth, (req, res) => {
@@ -8577,10 +8021,6 @@ router.get("/admin/private-monitor-groups", requireAdminSecret, async (_req, res
     });
   }
   res.json({ groups });
-});
-
-router.get("/admin/canada-ai/status", requireAdminSecret, (_req, res) => {
-  res.json(getCanadaAiAdminStatus());
 });
 
 router.post("/admin/private-monitor-groups/add", requireAdminSecret, (req, res) => {

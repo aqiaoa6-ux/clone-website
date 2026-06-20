@@ -25,7 +25,6 @@ const ALGO_LABELS: Record<string, string> = {
   ks_bb:            "快三-AABB",
   ks_smart:         "快三-均值回归",
   abc_trend:        "加拿大-ABC走势",
-  canada_super_ai:  "加拿大-超级AI",
   abc_digit_ai:     "加拿大-ABC三位数字AI",
   abc_digit_cycle_ai:"加拿大-ABC轮打AI",
   private_combo_ai: "加拿大-新群综合AI",
@@ -39,8 +38,6 @@ const ALGO_LABELS: Record<string, string> = {
 };
 
 const REMOVED_CANADA_ALGOS = new Set([
-  "ai_trend",
-  "steady_ai",
   "canada_clone_1",
   "canada_pro_1",
   "canada_pro_2",
