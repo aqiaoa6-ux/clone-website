@@ -62,6 +62,7 @@ const privateSseClients = new Set<Response>();
 const privateGroupTitleCache = new Map<string, string>();
 const PRIVATE_MAX_BETS = 2000;
 const PRIVATE_WINDOW_MS = 10 * 60 * 1000;
+const PRIVATE_MONITOR_SINGLE_BET_CAP = 300;
 
 function resolvePeerForClient(groupId: string): string | ReturnType<typeof bigInt> {
   const gid = groupId.trim();
@@ -1944,10 +1945,34 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
   if (activeBets.length < 8) return null;
 
   const weighted = activeBets.slice(0, 160);
-  const sumDir = (dirs: string[]) => weighted.reduce((sum, bet, index) => {
-    const weight = 1 + Math.max(0, 24 - index) * 0.04;
-    return dirs.includes(bet.direction) ? sum + bet.amount * weight : sum;
+  const normalizePlayer = (name: string, index: number): string => {
+    const normalized = name.trim().toLowerCase();
+    return normalized || `anon-${index}`;
+  };
+  const playerDirectionInfluence = new Map<string, number>();
+  const sumAmountDir = (dirs: string[]) => weighted.reduce((sum, bet) => {
+    const capped = Math.min(Math.max(0, bet.amount), PRIVATE_MONITOR_SINGLE_BET_CAP);
+    return dirs.includes(bet.direction) ? sum + capped : sum;
   }, 0);
+
+  for (const [index, bet] of weighted.entries()) {
+    const recencyWeight = 1 + Math.max(0, 24 - index) * 0.04;
+    const cappedAmount = Math.min(Math.max(0, bet.amount), PRIVATE_MONITOR_SINGLE_BET_CAP);
+    // 新群监控以“人数/玩家方向”优先，金额只做很弱的辅助，避免大注带偏。
+    const influence = recencyWeight * (1 + (cappedAmount / PRIVATE_MONITOR_SINGLE_BET_CAP) * 0.35);
+    const key = `${normalizePlayer(bet.senderName, index)}|${bet.direction}`;
+    const prev = playerDirectionInfluence.get(key) ?? 0;
+    if (influence > prev) playerDirectionInfluence.set(key, influence);
+  }
+
+  const sumDir = (dirs: string[]) => {
+    let total = 0;
+    for (const [key, influence] of playerDirectionInfluence) {
+      const dir = key.slice(key.lastIndexOf("|") + 1);
+      if (dirs.includes(dir)) total += influence;
+    }
+    return total;
+  };
 
   const bigAmt = sumDir(["大", "大单", "大双"]);
   const smallAmt = sumDir(["小", "小单", "小双"]);
@@ -1958,6 +1983,12 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
     大双: sumDir(["大双"]),
     小单: sumDir(["小单"]),
     小双: sumDir(["小双"]),
+  };
+  const amountPressure = {
+    大单: sumAmountDir(["大单"]),
+    大双: sumAmountDir(["大双"]),
+    小单: sumAmountDir(["小单"]),
+    小双: sumAmountDir(["小双"]),
   };
 
   const totalSize = bigAmt + smallAmt;
@@ -2001,10 +2032,10 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
       .slice(-18);
 
     const monitorPressure: Record<KillGroupOption, number> = {
-      大单: comboTotals["大单"] + bigAmt * 0.22 + oddAmt * 0.22,
-      大双: comboTotals["大双"] + bigAmt * 0.22 + evenAmt * 0.22,
-      小单: comboTotals["小单"] + smallAmt * 0.22 + oddAmt * 0.22,
-      小双: comboTotals["小双"] + smallAmt * 0.22 + evenAmt * 0.22,
+      大单: comboTotals["大单"] + amountPressure["大单"] * 0.18 + bigAmt * 0.18 + oddAmt * 0.18,
+      大双: comboTotals["大双"] + amountPressure["大双"] * 0.18 + bigAmt * 0.18 + evenAmt * 0.18,
+      小单: comboTotals["小单"] + amountPressure["小单"] * 0.18 + smallAmt * 0.18 + oddAmt * 0.18,
+      小双: comboTotals["小双"] + amountPressure["小双"] * 0.18 + smallAmt * 0.18 + evenAmt * 0.18,
     };
     const avgPressure = Object.values(monitorPressure).reduce((sum, value) => sum + value, 0) / 4 || 0;
     const killScores: Record<KillGroupOption, number> = { "大单": 0, "大双": 0, "小单": 0, "小双": 0 };
