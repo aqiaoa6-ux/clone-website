@@ -345,16 +345,31 @@ export default function AdminPage() {
     const totals: Record<PrivateSummaryDir, number> = {
       大: 0, 小: 0, 单: 0, 双: 0, 大单: 0, 大双: 0, 小单: 0, 小双: 0,
     };
+    const peopleSets: Record<PrivateSummaryDir, Set<string>> = {
+      大: new Set(), 小: new Set(), 单: new Set(), 双: new Set(),
+      大单: new Set(), 大双: new Set(), 小单: new Set(), 小双: new Set(),
+    };
     const add = (dir: PrivateSummaryDir, amount: number) => { totals[dir] += amount; };
+    const addPerson = (dir: PrivateSummaryDir, senderName: string) => {
+      const key = senderName.trim() || "未知用户";
+      peopleSets[dir].add(key);
+    };
 
     for (const b of privateBets) {
       const amount = Number(b.amount);
       if (!isFinite(amount) || amount <= 0) continue;
       const dir = b.direction.trim() as PrivateSummaryDir | string;
-      if (dir in totals) add(dir as PrivateSummaryDir, amount);
+      if (dir in totals) {
+        add(dir as PrivateSummaryDir, amount);
+        addPerson(dir as PrivateSummaryDir, b.senderName);
+      }
     }
 
-    return PRIVATE_SUMMARY_DIRS.map(dir => ({ dir, amount: totals[dir] }));
+    return PRIVATE_SUMMARY_DIRS.map(dir => ({
+      dir,
+      amount: totals[dir],
+      people: peopleSets[dir].size,
+    }));
   }, [privateBets]);
 
   const loadPrivateGroups = async () => {
@@ -2623,6 +2638,9 @@ export default function AdminPage() {
                       <div className={`text-sm font-semibold ${dirColor}`}>{item.dir}</div>
                       <div className="mt-1 text-white font-mono text-base">
                         {item.amount.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        人数 {item.people}
                       </div>
                     </div>
                   );
