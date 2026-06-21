@@ -4646,6 +4646,20 @@ async function runPrivateMonitorAutoBet(session: TgSession, triggerTerm: number)
   await placeAllBets(session, direction);
 }
 
+async function broadcastPrivateMonitorAutoBet(triggerTerm: number): Promise<void> {
+  const targets = [...tgSessions.values()].filter(session =>
+    !!session.me
+    && session.cfg.autoBet
+    && !!session.watchGroupId
+    && session.cfg.gameMode === "lottery"
+    && session.cfg.algorithms.includes("private_combo_ai"),
+  );
+  await Promise.allSettled(targets.map(async session => {
+    session.privateCountdown30Term = triggerTerm;
+    await runPrivateMonitorAutoBet(session, triggerTerm);
+  }));
+}
+
 // ─── Kill-Group Mode ───────────────────────────────────────────────────────────
 // 四组杀组：AI 从 [大单/大双/小单/小双] 中挑出最可能不出的那一组杀掉，
 // 同时投注剩余三组。
@@ -6569,8 +6583,10 @@ async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise
           privateCurrentTerm = t;
           privateBets.length = 0;
           privateLastBetAt = 0;
-          session.privateCountdown30Term = null;
-          session.privateAlgoLastBetTerm = null;
+          for (const tgSession of tgSessions.values()) {
+            tgSession.privateCountdown30Term = null;
+            tgSession.privateAlgoLastBetTerm = null;
+          }
           pushPrivateAdminEvent("bets:reset", { term: privateCurrentTerm, lastBetAt: privateLastBetAt, bets: [] });
         }
         continue;
@@ -6583,9 +6599,11 @@ async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise
         continue;
       }
 
-      if (privateCurrentTerm && isPrivateMonitorCountdown30(text) && session.privateCountdown30Term !== privateCurrentTerm) {
-        session.privateCountdown30Term = privateCurrentTerm;
-        void runPrivateMonitorAutoBet(session, privateCurrentTerm);
+      if (privateCurrentTerm && isPrivateMonitorCountdown30(text)) {
+        const alreadyTriggered = [...tgSessions.values()].every(s => s.privateCountdown30Term === privateCurrentTerm);
+        if (!alreadyTriggered) {
+          void broadcastPrivateMonitorAutoBet(privateCurrentTerm);
+        }
       }
 
       const u = msg.sender as Api.User | null;
