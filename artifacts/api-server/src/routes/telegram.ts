@@ -2046,7 +2046,7 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
       .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
       .slice(-18);
 
-    // 新群监控所有模式统一按“人数少 + 金额少”的冷门方向处理。
+    // 杀组模式保持“选三组下注，杀最热那组”。
     const monitorPressure: Record<KillGroupOption, number> = {
       大单: comboTotals["大单"] + amountPressure["大单"] * 0.42 + bigAmt * 0.22 + bigAmountPressure * 0.12 + oddAmt * 0.22 + oddAmountPressure * 0.12,
       大双: comboTotals["大双"] + amountPressure["大双"] * 0.42 + bigAmt * 0.22 + bigAmountPressure * 0.12 + evenAmt * 0.22 + evenAmountPressure * 0.12,
@@ -2060,15 +2060,15 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
     for (const opt of KILL_GROUP_ALL) {
       const pressureBias = avgPressure > 0 ? (monitorPressure[opt] - avgPressure) / avgPressure : 0;
       const amountBias = avgAmountPressure > 0 ? (amountPressure[opt] - avgAmountPressure) / avgAmountPressure : 0;
-      killScores[opt] -= pressureBias * 6.8 + amountBias * 3.2;
+      killScores[opt] += pressureBias * 6.8 + amountBias * 3.2;
     }
 
     if (Math.abs(sizeBias) >= 0.12) {
-      const sizeSide = sizeBias > 0 ? ["大单", "大双"] : ["小单", "小双"];
+      const sizeSide = sizeBias > 0 ? ["小单", "小双"] : ["大单", "大双"];
       for (const opt of sizeSide) killScores[opt as KillGroupOption] += Math.abs(sizeBias) * 2.4;
     }
     if (Math.abs(parityBias) >= 0.12) {
-      const parityTargets = parityBias > 0 ? ["大单", "小单"] : ["大双", "小双"];
+      const parityTargets = parityBias > 0 ? ["大双", "小双"] : ["大单", "小单"];
       for (const opt of parityTargets) killScores[opt as KillGroupOption] += Math.abs(parityBias) * 2.1;
     }
 
@@ -2077,33 +2077,33 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
         const slice = history.slice(-Math.min(size, history.length));
         for (const opt of KILL_GROUP_ALL) {
           const freq = slice.filter(r => r === opt).length / slice.length;
-          killScores[opt] -= (freq - 0.25) * w * 4.2;
+          killScores[opt] += (freq - 0.25) * w * 4.2;
         }
       }
 
       const latest = history[history.length - 1]!;
       let streak = 0;
       for (let i = history.length - 1; i >= 0 && history[i] === latest; i--) streak++;
-      if (streak >= 2) killScores[latest] -= 999;
-      else if (streak === 1) killScores[latest] -= 2.4;
+      if (streak >= 2) killScores[latest] += 999;
+      else if (streak === 1) killScores[latest] += 2.4;
 
       for (const opt of KILL_GROUP_ALL) {
         let absence = 0;
         for (let i = history.length - 1; i >= 0 && history[i] !== opt; i--) absence++;
-        if (absence >= 8) killScores[opt] += 10;
-        else if (absence >= 6) killScores[opt] += 5;
-        else if (absence >= 4) killScores[opt] += 1.8;
+        if (absence >= 8) killScores[opt] -= 10;
+        else if (absence >= 6) killScores[opt] -= 5;
+        else if (absence >= 4) killScores[opt] -= 1.8;
       }
     }
 
-    const coldestByMonitor = [...KILL_GROUP_ALL]
-      .sort((a, b) => monitorPressure[a] - monitorPressure[b]);
-    killScores[coldestByMonitor[0]!] += 3.5;
-    killScores[coldestByMonitor[1]!] += 1.2;
-    const lightestByAmount = [...KILL_GROUP_ALL]
-      .sort((a, b) => amountPressure[a] - amountPressure[b]);
-    killScores[lightestByAmount[0]!] += 2.8;
-    killScores[lightestByAmount[1]!] += 1.1;
+    const hottestByMonitor = [...KILL_GROUP_ALL]
+      .sort((a, b) => monitorPressure[b] - monitorPressure[a]);
+    killScores[hottestByMonitor[0]!] += 3.5;
+    killScores[hottestByMonitor[1]!] += 1.2;
+    const heaviestByAmount = [...KILL_GROUP_ALL]
+      .sort((a, b) => amountPressure[b] - amountPressure[a]);
+    killScores[heaviestByAmount[0]!] += 2.8;
+    killScores[heaviestByAmount[1]!] += 1.1;
 
     const killed = [...KILL_GROUP_ALL]
       .sort((a, b) => {
