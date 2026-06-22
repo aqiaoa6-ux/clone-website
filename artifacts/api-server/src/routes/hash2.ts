@@ -83,7 +83,7 @@ interface ParsedHash2Result {
 const HASH2_MAX_PLANS = 5;
 const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
-const HASH2_RESULT_CHANNEL = "hx28kjw";
+const CANADA_NEW_RESULT_CHANNEL = "hx28kjw";
 const HASH2_ALLOWED_BETS = new Set([
   "big", "small", "odd", "even",
   "big-odd", "big-even", "small-odd", "small-even",
@@ -644,7 +644,7 @@ async function processUserHash2(session: TgSession): Promise<void> {
   const enabledPlans = config.plans.filter(plan => plan.enabled);
   if (enabledPlans.length === 0) return;
   const runtime = loadRuntime(userId, config);
-  const channel = HASH2_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
+  const channel = CANADA_NEW_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
   try {
     const msgs = await session.client.getMessages(channel, {
       limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
@@ -752,7 +752,7 @@ router.post("/hash2/test-alert", requireCard, (req, res) => {
     firstPlan,
     typeof message === "string" && message.trim()
       ? message.trim().slice(0, 120)
-      : "哈希2提醒测试：已触发网页语音提醒",
+      : "加拿大新版提醒测试：已触发网页语音提醒",
     "info",
   );
   saveRuntime(userId, runtime);

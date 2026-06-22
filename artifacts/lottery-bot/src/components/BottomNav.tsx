@@ -15,7 +15,7 @@ export default function BottomNav() {
 
   const items = [
     { path: "/",         icon: "🏠", label: "主控台", show: true },
-    { path: "/hash2",    icon: "#️⃣", label: "哈希2",  show: true },
+    { path: "/hash2",    icon: "#️⃣", label: "加拿大新版",  show: true },
     { path: "/trend",    icon: "📊", label: "走势",   show: true },
     { path: "/card-key", icon: "🎫", label: "卡密",   show: true },
     { path: "/tutorial", icon: "📖", label: "教程",   show: true },

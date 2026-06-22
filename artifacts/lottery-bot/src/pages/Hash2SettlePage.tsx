@@ -155,7 +155,7 @@ export default function Hash2SettlePage() {
       } catch (e) {
         if (!mounted) return;
         setConfig(makeFallbackConfig());
-        setErrorMessage(e instanceof Error ? e.message : "读取哈希2配置失败");
+        setErrorMessage(e instanceof Error ? e.message : "读取加拿大新版配置失败");
       } finally {
         if (mounted) setLoading(false);
       }
@@ -212,8 +212,8 @@ export default function Hash2SettlePage() {
               ←
             </button>
             <div>
-              <div className="font-bold text-white">哈希2结算</div>
-              <div className="text-[10px] text-slate-500">按当前方案赔率手工结算，不会真实下注</div>
+              <div className="font-bold text-white">加拿大新版结算</div>
+              <div className="text-[10px] text-slate-500">按当前加拿大模式方案赔率手工结算，不会真实下注</div>
             </div>
           </div>
           <button
@@ -229,7 +229,7 @@ export default function Hash2SettlePage() {
         <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-white font-semibold">独立结算页</div>
+              <div className="text-white font-semibold">加拿大新版结算页</div>
               <div className="text-slate-500 text-xs mt-1">
                 例：初始金额 100，下注大 5，中奖后按所选方案赔率自动算余额
               </div>

@@ -291,7 +291,7 @@ export default function Hash2Page() {
       const { config: saved } = await api.hash2.saveConfig(config);
       setConfig(saved);
       void api.hash2.runtime().then(rt => setRuntime(rt.runtime)).catch(() => {});
-      setAlertMessage("哈希2配置已保存");
+      setAlertMessage("加拿大新版配置已保存");
     } catch (e) {
       setAlertMessage(e instanceof Error ? e.message : "保存失败");
     } finally {
@@ -302,7 +302,7 @@ export default function Hash2Page() {
   const testAlert = async () => {
     setTestingAlert(true);
     try {
-      const res = await api.hash2.testAlert("哈希2提醒测试：止盈止损网页提醒已触发");
+      const res = await api.hash2.testAlert("加拿大新版提醒测试：止盈止损网页提醒已触发");
       setAlertMessage(res.message);
       void api.hash2.runtime().then(rt => setRuntime(rt.runtime)).catch(() => {});
     } catch (e) {
@@ -332,8 +332,8 @@ export default function Hash2Page() {
               ←
             </button>
             <div>
-              <div className="font-bold text-white">哈希2</div>
-              <div className="text-[10px] text-slate-500">独立模块，不影响原哈希</div>
+              <div className="font-bold text-white">加拿大新版</div>
+              <div className="text-[10px] text-slate-500">加拿大模式，方案逻辑保持不变</div>
             </div>
           </div>
           <button
@@ -349,7 +349,7 @@ export default function Hash2Page() {
         <div className="bg-[#161929] border border-[#252a3d] rounded-2xl p-4">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-white font-semibold">独立配置模块</div>
+              <div className="text-white font-semibold">加拿大模式配置</div>
               <div className="text-slate-500 text-xs mt-1">
                 玩法1/玩法2可同时配置，最多保留 5 套方案，每套独立 60 手
               </div>
@@ -373,7 +373,7 @@ export default function Hash2Page() {
               </div>
             </div>
             <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">投注群组</div>
+              <div className="text-slate-500">加拿大投注群组</div>
               <div className="text-white mt-1 truncate">
                 {tgStatus?.watchGroupTitle ?? "未选择"}
               </div>
@@ -381,7 +381,7 @@ export default function Hash2Page() {
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3 text-xs">
             <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
-              <div className="text-slate-500">当前期号</div>
+              <div className="text-slate-500">加拿大当前期号</div>
               <div className="text-white mt-1">{runtime?.activePeriod ?? "等待中"}</div>
             </div>
             <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-2">
@@ -402,7 +402,7 @@ export default function Hash2Page() {
               disabled={saving}
               className="bg-[#252a3d] hover:bg-[#30375a] disabled:opacity-50 text-slate-200 text-sm py-2 rounded-xl transition"
             >
-              {saving ? "保存中..." : "保存哈希2"}
+              {saving ? "保存中..." : "保存加拿大新版"}
             </button>
             <button
               onClick={() => setLocation("/hash2/settle")}
@@ -438,10 +438,10 @@ export default function Hash2Page() {
               <div>
                 <div className="text-white font-semibold">{currentPlan.name}</div>
                 <div className="text-xs text-slate-500 mt-1">
-                  已选下注项：{selectedLabels || "暂无"}
+                  已选加拿大下注项：{selectedLabels || "暂无"}
                 </div>
                 <div className="text-[10px] text-slate-600 mt-1 break-all">
-                  发送预览：{currentPreview || "暂无"}
+                  加拿大发单预览：{currentPreview || "暂无"}
                 </div>
               </div>
               <button
