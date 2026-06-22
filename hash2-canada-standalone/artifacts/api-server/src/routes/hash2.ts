@@ -1,5 +1,4 @@
 import { Router } from "express";
-import { Api } from "telegram";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -85,6 +84,8 @@ interface ParsedHash2Result {
   label: string;
 }
 
+type DrawItem = { term: number; r3?: string; sum1?: number; sum2?: number; sum3?: number; result?: number; openTime?: number; closeTime?: number };
+
 const HASH2_MAX_PLANS = 6;
 const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
@@ -97,7 +98,7 @@ const STOPLOSS_PREV_PLAN_ID: Record<string, string> = {
   "plan-2": "plan-1",
   "plan-3": "plan-2",
 };
-const HASH2_RESULT_CHANNEL = "hx28kjw";
+const CANADA_RESULT_SOURCE = "http://pc20.net/api/fengpan";
 const HASH2_ALLOWED_BETS = new Set([
   "big", "small", "odd", "even",
   "big-odd", "big-even", "small-odd", "small-even",
@@ -534,7 +535,7 @@ function fmtMoney(n: number): string {
 
 async function sendRiskAlert(session: TgSession, userId: number, plan: Hash2Plan, state: Hash2PlanRuntime, riskReason: string, period: string, source: "trigger" | "settle"): Promise<void> {
   const pnl = fmtMoney(state.sessionPnl);
-  const title = `【风控提醒】哈希2 ${plan.name}`;
+  const title = `【风控提醒】加拿大新版 ${plan.name}`;
   const text = `${title}\n${riskReason}\n当前盈亏：${pnl}\n期号：${period}\n来源：${source}`;
   const targetId = session.alertGroupId ?? session.watchGroupId;
   if (targetId) {
@@ -545,7 +546,7 @@ async function sendRiskAlert(session: TgSession, userId: number, plan: Hash2Plan
     }
   }
   try {
-    await sendAlertEmail(`风控提醒 哈希2 ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
+    await sendAlertEmail(`风控提醒 加拿大新版 ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
   } catch (err) {
     logger.warn({ userId, err }, "[hash2] risk email alert failed");
   }
@@ -665,6 +666,27 @@ function parseChannelText(text: string): { type: "open"; period: string } | { ty
     };
   }
   return null;
+}
+
+function parseDrawItem(item: DrawItem): ParsedHash2Result | null {
+  const term = Number(item.term);
+  if (!Number.isFinite(term) || term <= 0) return null;
+  const hasParts = typeof item.sum1 === "number" && typeof item.sum2 === "number" && typeof item.sum3 === "number";
+  const value = typeof item.result === "number"
+    ? item.result
+    : hasParts
+      ? (item.sum1 as number) + (item.sum2 as number) + (item.sum3 as number)
+      : NaN;
+  if (!Number.isFinite(value)) return null;
+  const bigSmall = value >= 14 ? "大" : "小";
+  const oddEven = value % 2 === 1 ? "单" : "双";
+  const label = (typeof item.r3 === "string" && item.r3.trim().length > 0) ? item.r3.trim() : `${bigSmall}${oddEven}`;
+  return {
+    period: String(term),
+    parts: hasParts ? [item.sum1 as number, item.sum2 as number, item.sum3 as number] : undefined,
+    value,
+    label,
+  };
 }
 
 async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime, period: string): Promise<void> {
@@ -814,53 +836,98 @@ async function processUserHash2(session: TgSession): Promise<void> {
   const config = loadConfig(userId);
   if (!config.plans.some(plan => plan.enabled)) return;
   const runtime = loadRuntime(userId, config);
-  const channel = HASH2_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
   let changed = false;
   const prevMsgId = runtime.lastChannelMsgId;
   const prevActive = runtime.activePeriod;
+  let parsedAny = false;
+  let lastUnparsed = "";
+  const primaryPlan = config.plans.find(plan => plan.enabled) ?? config.plans[0] ?? defaultPlan(0);
   try {
-    const msgs = await session.client.getMessages(channel, {
-      limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
-      ...(runtime.lastChannelMsgId > 0 ? { minId: runtime.lastChannelMsgId } : {}),
-    }) as Api.Message[];
-    if (!msgs.length) {
-      if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "hash2_channel_empty") {
+    const r = await fetch(CANADA_RESULT_SOURCE, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+        Referer: "http://pc20.net/",
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!r.ok) throw new Error(`upstream_http_${r.status}`);
+    const data = await r.json() as { message?: { all?: { keno28?: { data?: DrawItem[] } } } };
+    const items = data?.message?.all?.keno28?.data ?? [];
+    if (!items.length) {
+      if (runtime.lastChannelMsgId === 0 && runtime.lastAlert?.id !== "hash2_source_empty") {
         const plan = config.plans.find(item => item.enabled) ?? config.plans[0]!;
         runtime.lastAlert = {
-          id: "hash2_channel_empty",
+          id: "hash2_source_empty",
           planId: plan.id,
           planName: plan.name,
-          message: "未读取到开奖频道 @hx28kjw 的消息：请用当前 TG 账号先加入频道 @hx28kjw（加入后等下一期开奖即可）。",
+          message: "未读取到加拿大开奖源 pc20.net 的数据：请稍后再试。",
           at: Date.now(),
           level: "warn",
           voice: false,
         };
         changed = true;
       }
-    }
-    const sorted = [...msgs].sort((a, b) => a.id - b.id);
-    for (const msg of sorted) {
-      if (msg.id <= runtime.lastChannelMsgId) continue;
-      runtime.lastChannelMsgId = msg.id;
-      const text = msg.message ?? "";
-      if (!text) continue;
-      const parsed = parseChannelText(text);
-      if (!parsed) continue;
-      if (parsed.type === "open") {
-        runtime.activePeriod = parsed.period;
-      } else {
-        runtime.activePeriod = String((Number(parsed.result.period) || 0) + 1);
+    } else {
+      const current = items[0];
+      const currentTerm = Number(current?.term ?? 0);
+      if (Number.isFinite(currentTerm) && currentTerm > 0) {
+        const nextActive = (typeof current?.r3 === "string" && current.r3.trim().length > 0)
+          ? String(currentTerm + 1)
+          : String(currentTerm);
+        if (runtime.activePeriod !== nextActive) runtime.activePeriod = nextActive;
+      }
+
+      const sorted = [...items]
+        .filter(item => Number.isFinite(Number(item.term)))
+        .sort((a, b) => Number(a.term) - Number(b.term));
+      for (const item of sorted) {
+        const term = Number(item.term);
+        if (!Number.isFinite(term) || term <= runtime.lastChannelMsgId) continue;
+        if (typeof item.r3 !== "string" || item.r3.trim().length === 0) continue;
+        const parsed = parseDrawItem(item);
+        if (!parsed) {
+          lastUnparsed = `term=${term}`;
+          continue;
+        }
+        parsedAny = true;
+        runtime.lastChannelMsgId = term;
+        runtime.activePeriod = String((Number(parsed.period) || 0) + 1);
         const activePlans = loadConfig(userId).plans.filter(plan => plan.enabled);
         for (const plan of activePlans) {
           const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
           runtime.plans[plan.id] = state;
-          await settlePlanResult(session, userId, plan, state, runtime, parsed.result);
+          await settlePlanResult(session, userId, plan, state, runtime, parsed);
         }
-        scheduleHash2AutoBet(session, parsed.result.period);
+        scheduleHash2AutoBet(session, parsed.period);
       }
     }
   } catch (err) {
     logger.warn({ userId, err }, "[hash2] loop failed");
+    if (runtime.lastAlert?.id !== "hash2_source_error") {
+      const msg = err instanceof Error ? err.message : String(err);
+      runtime.lastAlert = {
+        id: "hash2_source_error",
+        planId: primaryPlan.id,
+        planName: primaryPlan.name,
+        message: `读取加拿大开奖源 pc20.net 失败：${msg.slice(0, 140)}`,
+        at: Date.now(),
+        level: "warn",
+        voice: false,
+      };
+      changed = true;
+    }
+  }
+  if (runtime.lastChannelMsgId !== prevMsgId && !parsedAny && runtime.lastAlert?.id !== "hash2_parse_failed") {
+    runtime.lastAlert = {
+      id: "hash2_parse_failed",
+      planId: primaryPlan.id,
+      planName: primaryPlan.name,
+      message: `已拉取到 pc20.net 数据，但格式未识别。示例：${lastUnparsed || "(无数据)"}。需要调整解析规则。`,
+      at: Date.now(),
+      level: "warn",
+      voice: false,
+    };
+    changed = true;
   }
   if (runtime.lastChannelMsgId !== prevMsgId) changed = true;
   if (runtime.activePeriod !== prevActive) changed = true;
@@ -896,7 +963,7 @@ function scheduleHash2AutoBet(session: TgSession, settledPeriod: string): void {
       runtime.updatedAt = Date.now();
       saveRuntime(session.userId, runtime);
     })();
-  }, 50_000));
+  }, 80_000));
 }
 
 function startHash2Loop(): void {
@@ -961,7 +1028,7 @@ router.post("/hash2/test-alert", requireCard, (req, res) => {
     firstPlan,
     typeof message === "string" && message.trim()
       ? message.trim().slice(0, 120)
-      : "哈希2提醒测试：已触发网页语音提醒",
+      : "加拿大新版提醒测试：已触发网页语音提醒",
     "info",
   );
   saveRuntime(userId, runtime);

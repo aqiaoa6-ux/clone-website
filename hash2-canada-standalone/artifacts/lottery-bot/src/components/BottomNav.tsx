@@ -4,7 +4,7 @@ export default function BottomNav() {
   const [location, setLocation] = useLocation();
 
   const items = [
-    { path: "/hash2",    icon: "#️⃣", label: "哈希2",  show: true },
+    { path: "/hash2",    icon: "#️⃣", label: "加拿大新版",  show: true },
     { path: "/canada2",  icon: "#️⃣", label: "哈希（新版）", show: true },
     { path: "/canada",   icon: "🍁", label: "加拿大", show: true },
   ].filter(i => i.show);
@@ -41,7 +41,7 @@ export function BottomNavStatic() {
   const [location, setLocation] = useLocation();
 
   const items = [
-    { path: "/hash2", icon: "#️⃣", label: "哈希2", show: true },
+    { path: "/hash2", icon: "#️⃣", label: "加拿大新版", show: true },
     { path: "/canada2", icon: "#️⃣", label: "哈希（新版）", show: true },
     { path: "/canada", icon: "🍁", label: "加拿大", show: true },
   ].filter(i => i.show);
