@@ -2042,10 +2042,6 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
   }
 
   if (session.cfg.killGroupMode) {
-    const history = [...lotteryHistoryCache, ...session.recentResults]
-      .filter((r): r is KillGroupOption => (KILL_GROUP_ALL as readonly string[]).includes(r))
-      .slice(-18);
-
     // 杀组模式保持“选三组下注，杀最热那组”。
     const monitorPressure: Record<KillGroupOption, number> = {
       大单: comboTotals["大单"] + amountPressure["大单"] * 0.42 + bigAmt * 0.22 + bigAmountPressure * 0.12 + oddAmt * 0.22 + oddAmountPressure * 0.12,
@@ -2070,30 +2066,6 @@ function decidePrivateMonitorComboBet(session: TgSession): string | null {
     if (Math.abs(parityBias) >= 0.12) {
       const parityTargets = parityBias > 0 ? ["大双", "小双"] : ["大单", "小单"];
       for (const opt of parityTargets) killScores[opt as KillGroupOption] += Math.abs(parityBias) * 2.1;
-    }
-
-    if (history.length >= 4) {
-      for (const { size, w } of [{ size: 4, w: 3.2 }, { size: 8, w: 2.0 }, { size: 12, w: 1.1 }]) {
-        const slice = history.slice(-Math.min(size, history.length));
-        for (const opt of KILL_GROUP_ALL) {
-          const freq = slice.filter(r => r === opt).length / slice.length;
-          killScores[opt] += (freq - 0.25) * w * 4.2;
-        }
-      }
-
-      const latest = history[history.length - 1]!;
-      let streak = 0;
-      for (let i = history.length - 1; i >= 0 && history[i] === latest; i--) streak++;
-      if (streak >= 2) killScores[latest] += 999;
-      else if (streak === 1) killScores[latest] += 2.4;
-
-      for (const opt of KILL_GROUP_ALL) {
-        let absence = 0;
-        for (let i = history.length - 1; i >= 0 && history[i] !== opt; i--) absence++;
-        if (absence >= 8) killScores[opt] -= 10;
-        else if (absence >= 6) killScores[opt] -= 5;
-        else if (absence >= 4) killScores[opt] -= 1.8;
-      }
     }
 
     const hottestByMonitor = [...KILL_GROUP_ALL]
