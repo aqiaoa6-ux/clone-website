@@ -115,6 +115,10 @@ const HASH2_DEFAULT_SPECIAL_ODDS: Record<string, number> = {
   pair: 3.4,
   straight: 18,
 };
+const HASH2_PROFIT_BOUNCE_GROUPS = [
+  ["num:1", "num:3", "num:5", "num:7"],
+  ["num:2", "num:4", "num:6", "num:8"],
+] as const;
 const hash2LoopInFlight = new Set<number>();
 const hash2BetDelayTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -468,6 +472,39 @@ function payoutOdds(key: string, plan: Hash2Plan): number {
   return 0;
 }
 
+function normalizedBetSet(bets: string[]): string {
+  return [...bets].sort().join("|");
+}
+
+function nextProfitBounceBets(bets: string[]): string[] | null {
+  const current = normalizedBetSet(bets);
+  const first = normalizedBetSet([...HASH2_PROFIT_BOUNCE_GROUPS[0]]);
+  const second = normalizedBetSet([...HASH2_PROFIT_BOUNCE_GROUPS[1]]);
+  if (current === first) return [...HASH2_PROFIT_BOUNCE_GROUPS[1]];
+  if (current === second) return [...HASH2_PROFIT_BOUNCE_GROUPS[0]];
+  return null;
+}
+
+function applyProfitBounce(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime): boolean {
+  if (plan.targetProfit <= 0 || state.sessionPnl < plan.targetProfit) return false;
+  const nextBets = nextProfitBounceBets(plan.bets);
+  if (!nextBets) return false;
+  const fromLabel = plan.bets.map(betKeyLabel).join("");
+  const toLabel = nextBets.map(betKeyLabel).join("");
+  plan.bets = nextBets;
+  state.sessionPnl = 0;
+  state.currentLevel = 0;
+  state.betLevels = Object.fromEntries(nextBets.map(key => [key, 0]));
+  state.pendingAmounts = {};
+  state.pendingAmount = 0;
+  state.blockedReason = undefined;
+  state.updatedAt = Date.now();
+  if (plan.webAlertEnabled) {
+    runtime.lastAlert = makeAlert(plan, `${plan.name} 止盈回切 ${fromLabel} -> ${toLabel}`, "success");
+  }
+  return true;
+}
+
 function parseChannelText(text: string): { type: "open"; period: string } | { type: "result"; result: ParsedHash2Result } | null {
   const openMatch = text.match(/第\s*(\d{4,})\s*期\s*开始/);
   if (openMatch) {
@@ -549,9 +586,9 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ha
   }
 }
 
-function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime, result: ParsedHash2Result): void {
-  if (!plan.enabled) return;
-  if (state.pendingPeriod !== result.period || state.lastSettledPeriod === result.period) return;
+function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Hash2Runtime, result: ParsedHash2Result): boolean {
+  if (!plan.enabled) return false;
+  if (state.pendingPeriod !== result.period || state.lastSettledPeriod === result.period) return false;
 
   Object.assign(
     state,
@@ -588,6 +625,9 @@ function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Has
   state.pendingAmount = 0;
   state.updatedAt = Date.now();
 
+  const bounced = applyProfitBounce(plan, state, runtime);
+  if (bounced) return true;
+
   const riskReason = planRiskReason(plan, state);
   if (riskReason) {
     state.blockedReason = riskReason;
@@ -595,6 +635,7 @@ function settlePlanResult(plan: Hash2Plan, state: Hash2PlanRuntime, runtime: Has
   } else {
     state.blockedReason = undefined;
   }
+  return false;
 }
 
 async function processUserHash2(session: TgSession): Promise<void> {
@@ -614,6 +655,7 @@ async function processUserHash2(session: TgSession): Promise<void> {
       return;
     }
     const sorted = [...msgs].sort((a, b) => a.id - b.id);
+    let configChanged = false;
     for (const msg of sorted) {
       if (msg.id <= runtime.lastChannelMsgId) continue;
       runtime.lastChannelMsgId = msg.id;
@@ -627,11 +669,12 @@ async function processUserHash2(session: TgSession): Promise<void> {
         for (const plan of enabledPlans) {
           const state = runtime.plans[plan.id] ?? defaultPlanRuntime();
           runtime.plans[plan.id] = state;
-          settlePlanResult(plan, state, runtime, parsed.result);
+          if (settlePlanResult(plan, state, runtime, parsed.result)) configChanged = true;
         }
         scheduleHash2AutoBet(session, parsed.result.period);
       }
     }
+    if (configChanged) saveConfig(userId, config);
   } catch (err) {
     logger.warn({ userId, err }, "[hash2] loop failed");
   }
