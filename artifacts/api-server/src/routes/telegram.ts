@@ -6482,12 +6482,14 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
         continue;
       }
 
-      if (canadaCurrentBetTerm && isCanadaMonitorCountdown30(text)) {
+      const countdownTriggerTerm = canadaCurrentBetTerm ?? currentLotteryTerm;
+      if (countdownTriggerTerm && isCanadaMonitorCountdown30(text)) {
         const alreadyTriggered = [...tgSessions.values()]
           .filter(s => s.cfg.algorithms.includes("canada_monitor_kill_ai"))
-          .every(s => s.canadaCountdown30Term === canadaCurrentBetTerm);
+          .every(s => s.canadaCountdown30Term === countdownTriggerTerm);
         if (!alreadyTriggered) {
-          void broadcastCanadaMonitorAutoBet(canadaCurrentBetTerm);
+          if (canadaCurrentBetTerm === null) canadaCurrentBetTerm = countdownTriggerTerm;
+          void broadcastCanadaMonitorAutoBet(countdownTriggerTerm);
         }
       }
 
