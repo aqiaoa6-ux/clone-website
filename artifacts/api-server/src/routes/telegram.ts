@@ -1936,8 +1936,8 @@ function buildHistory(session: TgSession): string[] {
     : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
 }
 
-function getPrivateMonitorActiveBets(): GroupBetEntry[] {
-  const term = getPrivateLiveTerm();
+function getPrivateMonitorActiveBets(termOverride?: number | null): GroupBetEntry[] {
+  const term = termOverride ?? getPrivateLiveTerm();
   return term ? privateBets.filter(b => b.termContext === term) : privateBets.slice(0, 200);
 }
 
@@ -1945,8 +1945,8 @@ function hasMonitorKillAlgo(session: TgSession): boolean {
   return session.cfg.algorithms.includes("private_combo_ai") || session.cfg.algorithms.includes("canada_monitor_kill_ai");
 }
 
-function getCanadaMonitorActiveBets(): GroupBetEntry[] {
-  const term = getCanadaLiveTerm();
+function getCanadaMonitorActiveBets(termOverride?: number | null): GroupBetEntry[] {
+  const term = termOverride ?? getCanadaLiveTerm();
   return term ? canadaBets.filter(b => b.termContext === term) : canadaBets.slice(0, 200);
 }
 
@@ -1966,9 +1966,9 @@ function sumKillGroupAmounts(activeBets: GroupBetEntry[]): Record<KillGroupOptio
   return comboAmounts;
 }
 
-function decideAmountBasedKillGroup(source: "private" | "canada" | "merged"): KillGroupOption | null {
-  const privateComboAmounts = sumKillGroupAmounts(getPrivateMonitorActiveBets());
-  const canadaComboAmounts = sumKillGroupAmounts(getCanadaMonitorActiveBets());
+function decideAmountBasedKillGroup(source: "private" | "canada" | "merged", triggerTerm?: number | null): KillGroupOption | null {
+  const privateComboAmounts = sumKillGroupAmounts(getPrivateMonitorActiveBets(triggerTerm ?? null));
+  const canadaComboAmounts = sumKillGroupAmounts(getCanadaMonitorActiveBets(triggerTerm ?? null));
   const comboAmounts: Record<KillGroupOption, number> = {
     大单: privateComboAmounts.大单 + canadaComboAmounts.大单,
     大双: privateComboAmounts.大双 + canadaComboAmounts.大双,
@@ -4694,13 +4694,45 @@ async function runMonitorKillAutoBet(session: TgSession, triggerTerm: number, so
     return;
   }
 
-  const killed = decideAmountBasedKillGroup("merged");
+  const privateComboAmounts = sumKillGroupAmounts(getPrivateMonitorActiveBets(triggerTerm));
+  const canadaComboAmounts = sumKillGroupAmounts(getCanadaMonitorActiveBets(triggerTerm));
+  const mergedComboAmounts: Record<KillGroupOption, number> = {
+    大单: privateComboAmounts.大单 + canadaComboAmounts.大单,
+    大双: privateComboAmounts.大双 + canadaComboAmounts.大双,
+    小单: privateComboAmounts.小单 + canadaComboAmounts.小单,
+    小双: privateComboAmounts.小双 + canadaComboAmounts.小双,
+  };
+  const killed = decideAmountBasedKillGroup("merged", triggerTerm);
   if (!killed) return;
+  const betSides = KILL_GROUP_ALL.filter(item => item !== killed);
+  logger.info(
+    {
+      triggerTerm,
+      source,
+      watchGroupId: session.watchGroupId,
+      tgUserId: session.me?.id?.toString?.() ?? null,
+      privateComboAmounts,
+      canadaComboAmounts,
+      mergedComboAmounts,
+      killed,
+      betSides,
+    },
+    "[monitor-kill-ai] pre-bet decision",
+  );
   session.lastAlgoUsed = resolveMonitorAlgoId(session);
   session.lastBetPeriod = triggerTerm;
-  session.lastRawAlgoDir = `kill:${killed}`;
+  session.lastRawAlgoDir = `kill:${killed}|term:${triggerTerm}|merged:${JSON.stringify(mergedComboAmounts)}`;
   markMonitorAlgoTriggered(session, triggerTerm);
-  pushEvent(session, "bet:kill", { killed, algo: session.lastAlgoUsed, source });
+  pushEvent(session, "bet:kill", {
+    killed,
+    algo: session.lastAlgoUsed,
+    source,
+    triggerTerm,
+    privateComboAmounts,
+    canadaComboAmounts,
+    mergedComboAmounts,
+    betSides,
+  });
   await placeKillGroupBets(session, killed);
 }
 
