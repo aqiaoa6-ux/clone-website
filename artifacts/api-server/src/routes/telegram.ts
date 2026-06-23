@@ -4663,18 +4663,6 @@ async function runCanadaMonitorAutoBet(session: TgSession, triggerTerm: number):
   if (!session.cfg.algorithms.includes("canada_monitor_kill_ai")) return;
   if (session.canadaAlgoLastBetTerm === triggerTerm) return;
 
-  if (session.currentCloseTimeMs > 0) {
-    const timeToClose = session.currentCloseTimeMs - Date.now();
-    const targetMs = PRIVATE_MONITOR_BET_COUNTDOWN_SEC * 1000;
-    if (timeToClose < 0 || Math.abs(timeToClose - targetMs) > 20_000) {
-      logger.info(
-        { timeToCloseSec: Math.round(timeToClose / 1000), triggerTerm },
-        "[canada-monitor-kill-ai] countdown mismatch, skip trigger",
-      );
-      return;
-    }
-  }
-
   const { betLog } = session;
   const nowMs = Date.now();
   for (const stale of betLog.filter(b => b.status === "sent" && nowMs - b.timestamp > 240_000)) stale.status = "lost";
