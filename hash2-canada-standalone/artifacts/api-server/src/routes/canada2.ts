@@ -628,12 +628,21 @@ function payoutOdds(key: string, plan: CanadaPlan): number {
   return 0;
 }
 
+function normalizeChannelText(text: string): string {
+  return text
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\r/g, "")
+    .trim();
+}
+
 function parseChannelText(text: string): { type: "open"; period: string } | { type: "result"; result: ParsedCanadaResult } | null {
-  const openMatch = text.match(/第\s*(\d{4,})\s*期\s*开始/);
+  const normalized = normalizeChannelText(text);
+  const openMatch = normalized.match(/第\s*(\d{4,})\s*期\s*开始/);
   if (openMatch) {
     return { type: "open", period: openMatch[1]! };
   }
-  const full = text.match(/(\d{4,})期\s*(\d+)[+＋](\d+)[+＋](\d+)[=＝](\d{1,2})\s*(大单|大双|小单|小双)/);
+  const full = normalized.match(/(?:第\s*)?(\d{4,})\s*期[^\d\n]{0,12}?(\d{1,2})\s*[+＋]\s*(\d{1,2})\s*[+＋]\s*(\d{1,2})\s*[=＝]\s*(\d{1,2})\s*(大单|大双|小单|小双)/);
   if (full) {
     return {
       type: "result",
@@ -645,7 +654,7 @@ function parseChannelText(text: string): { type: "open"; period: string } | { ty
       },
     };
   }
-  const partial = text.match(/(\d{4,})期[^\n]*?(\d{1,2})\s*(大单|大双|小单|小双)/);
+  const partial = normalized.match(/(?:第\s*)?(\d{4,})\s*期[\s\S]{0,40}?(\d{1,2})\s*(大单|大双|小单|小双)/);
   if (partial) {
     return {
       type: "result",
@@ -815,6 +824,8 @@ async function processUserCanada(session: TgSession): Promise<void> {
   let changed = false;
   const prevMsgId = runtime.lastChannelMsgId;
   const prevActive = runtime.activePeriod;
+  let parsedAny = false;
+  let lastUnparsed = "";
   try {
     const msgs = await session.client.getMessages(channel, {
       limit: runtime.lastChannelMsgId > 0 ? 20 : 10,
@@ -841,7 +852,11 @@ async function processUserCanada(session: TgSession): Promise<void> {
         const text = msg.message ?? "";
         if (!text) continue;
         const parsed = parseChannelText(text);
-        if (!parsed) continue;
+        if (!parsed) {
+          lastUnparsed = normalizeChannelText(text).slice(0, 120);
+          continue;
+        }
+        parsedAny = true;
         if (parsed.type === "open") {
           runtime.activePeriod = parsed.period;
         } else {
@@ -871,6 +886,18 @@ async function processUserCanada(session: TgSession): Promise<void> {
       };
       changed = true;
     }
+  }
+  if (runtime.lastChannelMsgId !== prevMsgId && !parsedAny && runtime.lastAlert?.id !== "hashnew_parse_failed") {
+    runtime.lastAlert = {
+      id: "hashnew_parse_failed",
+      planId: primaryPlan.id,
+      planName: primaryPlan.name,
+      message: `已读取到开奖频道 @hx28kjw 的消息，但格式未识别。示例：${lastUnparsed || "(无数据)"}。`,
+      at: Date.now(),
+      level: "warn",
+      voice: false,
+    };
+    changed = true;
   }
   if (runtime.lastChannelMsgId !== prevMsgId) changed = true;
   if (runtime.activePeriod !== prevActive) changed = true;
