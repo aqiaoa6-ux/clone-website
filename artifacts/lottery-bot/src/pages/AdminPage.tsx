@@ -36,6 +36,7 @@ const fmtMsgTime = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { ho
 const fmtPct = (value: number | null | undefined) => typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "-";
 type PrivateSummaryDir = "大" | "小" | "单" | "双" | "大单" | "大双" | "小单" | "小双";
 const PRIVATE_SUMMARY_DIRS: PrivateSummaryDir[] = ["大", "小", "单", "双", "大单", "大双", "小单", "小双"];
+const ADMIN_BET_LIST_LIMIT = 1000;
 
 export default function AdminPage() {
   const { user, logout } = useAuth();
@@ -559,7 +560,7 @@ export default function AdminPage() {
           if (ev.type === "init") {
             betBufferRef.current = [];
             resetPendingRef.current = null;
-            setHashBets((ev.bets as GroupBetEntry[]) ?? []);
+            setHashBets(((ev.bets as GroupBetEntry[]) ?? []).slice(0, ADMIN_BET_LIST_LIMIT));
             setHashPeriod((ev.period as string | null) ?? null);
             if (ev.term) setHashTerm(ev.term as number);
             if (ev.lastBetAt) setHashLastBetAt(ev.lastBetAt as number);
@@ -577,7 +578,7 @@ export default function AdminPage() {
             void fetch("/api/admin/hash-group-bets", { credentials: "include" })
               .then(r => r.ok ? r.json() : null)
               .then((d: { bets?: GroupBetEntry[]; period?: string | null } | null) => {
-                if (d?.bets) { setHashBets(d.bets); setHashPeriod(d.period ?? null); }
+                if (d?.bets) { setHashBets(d.bets.slice(0, ADMIN_BET_LIST_LIMIT)); setHashPeriod(d.period ?? null); }
               }).catch(() => { /* ignore */ });
           } else if (ev.type === "history:update") {
             if (ev.history && (ev.history as PeriodRecord[]).length > 0) setHashHistory(prev => mergeHistory(prev, ev.history as PeriodRecord[]));
@@ -594,7 +595,7 @@ export default function AdminPage() {
             if (ev.snap) setHashSnap(ev.snap as { term: number; dirs: Record<string, { kk: number; usdt: number; cny: number }>; closedAt: number });
             else setHashSnap(null);
             resetPendingRef.current = {
-              bets: (ev.bets as GroupBetEntry[]) ?? [],
+              bets: ((ev.bets as GroupBetEntry[]) ?? []).slice(0, ADMIN_BET_LIST_LIMIT),
               period: (ev.period as string | null) ?? null,
             };
           }
@@ -627,14 +628,14 @@ export default function AdminPage() {
         const newBets = [...buf].reverse();
         if (reset !== null) {
           resetPendingRef.current = null;
-          setHashBets([...reset.bets, ...newBets].slice(0, 500));
+          setHashBets([...reset.bets, ...newBets].slice(0, ADMIN_BET_LIST_LIMIT));
           setHashPeriod(reset.period);
         } else {
-          setHashBets(prev => [...newBets, ...prev].slice(0, 500));
+          setHashBets(prev => [...newBets, ...prev].slice(0, ADMIN_BET_LIST_LIMIT));
         }
       } else if (reset !== null) {
         resetPendingRef.current = null;
-        setHashBets(reset.bets.slice(0, 500));
+        setHashBets(reset.bets.slice(0, ADMIN_BET_LIST_LIMIT));
         setHashPeriod(reset.period);
       }
     }, 1000);
@@ -668,12 +669,12 @@ export default function AdminPage() {
           const ev = JSON.parse(e.data as string) as Record<string, unknown>;
           if (ev.type === "init") {
             privateBetBufferRef.current = [];
-            setPrivateBets((ev.bets as GroupBetEntry[]) ?? []);
+            setPrivateBets(((ev.bets as GroupBetEntry[]) ?? []).slice(0, ADMIN_BET_LIST_LIMIT));
             setPrivateTerm((ev.term as number | null) ?? null);
             setPrivateLastBetAt((ev.lastBetAt as number) ?? 0);
           } else if (ev.type === "bets:reset") {
             privateBetBufferRef.current = [];
-            setPrivateBets((ev.bets as GroupBetEntry[]) ?? []);
+            setPrivateBets(((ev.bets as GroupBetEntry[]) ?? []).slice(0, ADMIN_BET_LIST_LIMIT));
             setPrivateTerm((ev.term as number | null) ?? null);
             setPrivateLastBetAt((ev.lastBetAt as number) ?? 0);
           } else if (ev.type === "bets:batch") {
@@ -686,7 +687,7 @@ export default function AdminPage() {
             void fetch("/api/admin/private-bets", { credentials: "include" })
               .then(r => r.ok ? r.json() : null)
               .then((d: { bets?: GroupBetEntry[]; term?: number | null } | null) => {
-                if (d?.bets) { setPrivateBets(d.bets); setPrivateTerm(d.term ?? null); }
+                if (d?.bets) { setPrivateBets(d.bets.slice(0, ADMIN_BET_LIST_LIMIT)); setPrivateTerm(d.term ?? null); }
               }).catch(() => { /* ignore */ });
           }
         } catch { /* ignore */ }
@@ -707,7 +708,7 @@ export default function AdminPage() {
       if (buf.length === 0) return;
       privateBetBufferRef.current = [];
       const newBets = [...buf].reverse();
-      setPrivateBets(prev => [...newBets, ...prev].slice(0, 500));
+      setPrivateBets(prev => [...newBets, ...prev].slice(0, ADMIN_BET_LIST_LIMIT));
     }, 1000);
 
     return () => {
