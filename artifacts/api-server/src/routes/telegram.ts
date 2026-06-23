@@ -1962,29 +1962,8 @@ function decideAmountBasedKillGroup(activeBets: GroupBetEntry[], source: "privat
   for (const bet of activeBets) {
     const amount = Math.max(0, Number(bet.amount) || 0);
     if (amount <= 0) continue;
-    if ((KILL_GROUP_ALL as readonly string[]).includes(bet.direction)) {
-      comboAmounts[bet.direction as KillGroupOption] += amount;
-      continue;
-    }
-    if (bet.direction === "大") {
-      comboAmounts["大单"] += amount;
-      comboAmounts["大双"] += amount;
-      continue;
-    }
-    if (bet.direction === "小") {
-      comboAmounts["小单"] += amount;
-      comboAmounts["小双"] += amount;
-      continue;
-    }
-    if (bet.direction === "单") {
-      comboAmounts["大单"] += amount;
-      comboAmounts["小单"] += amount;
-      continue;
-    }
-    if (bet.direction === "双") {
-      comboAmounts["大双"] += amount;
-      comboAmounts["小双"] += amount;
-    }
+    if (!(KILL_GROUP_ALL as readonly string[]).includes(bet.direction)) continue;
+    comboAmounts[bet.direction as KillGroupOption] += amount;
   }
 
   const totalAmount = Object.values(comboAmounts).reduce((sum, value) => sum + value, 0);
