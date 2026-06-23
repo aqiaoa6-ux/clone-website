@@ -90,6 +90,12 @@ const HASH2_MAX_HANDS = 60;
 const HASH2_DEFAULT_LEVELS = Array.from({ length: HASH2_MAX_HANDS }, (_, i) => i + 1);
 const CANADA2_PLAN_BET_MAP = ["big", "big", "small", "small", "odd", "odd", "even", "even"] as const;
 const CANADA2_PLAN_NAME_MAP = ["方案大1", "方案大2", "方案小1", "方案小2", "方案单1", "方案单2", "方案双1", "方案双2"] as const;
+const HASH2_ALLOWED_BETS = new Set([
+  "big", "small", "odd", "even",
+  "big-odd", "big-even", "small-odd", "small-even",
+  "extreme-big", "extreme-small", "leopard", "pair", "straight",
+  ...Array.from({ length: 28 }, (_, i) => `num:${i}`),
+]);
 const STOPLOSS_NEXT_PLAN_ID: Record<string, string> = {
   "plan-1": "plan-2",
   "plan-3": "plan-4",
@@ -249,11 +255,14 @@ function normalizePlan(input: Partial<CanadaPlan> | undefined, index: number): C
     ? Math.min(Math.max(handCountRaw, 1), HASH2_MAX_HANDS)
     : fallback.handCount;
   const inputName = typeof input?.name === "string" ? input.name.trim() : "";
+  const bets = Array.isArray(input?.bets)
+    ? input.bets.filter((bet): bet is string => typeof bet === "string" && HASH2_ALLOWED_BETS.has(bet))
+    : fallback.bets;
   return {
     id: typeof input?.id === "string" && input.id ? input.id : fallback.id,
     name: inputName && !isAutoPlanName(inputName) ? inputName.slice(0, 20) : fallback.name,
     enabled: !!input?.enabled,
-    bets: [defaultPlanBet(index)],
+    bets: [...new Set(bets)],
     baseAmount: Math.max(0, Number(input?.baseAmount ?? fallback.baseAmount) || 0),
     handCount,
     amountLevels: normalizeLevels(input?.amountLevels, handCount),
@@ -548,14 +557,6 @@ async function sendRiskAlert(session: TgSession, userId: number, plan: CanadaPla
   const pnl = fmtMoney(state.sessionPnl);
   const title = `【风控提醒】哈希（新版） ${plan.name}`;
   const text = `${title}\n${riskReason}\n当前盈亏：${pnl}\n期号：${period}\n来源：${source}`;
-  const targetId = session.alertGroupId ?? session.watchGroupId;
-  if (targetId) {
-    try {
-      await session.client.sendMessage(targetId, { message: text });
-    } catch (err) {
-      logger.warn({ userId, err }, "[hash-new] risk tg alert failed");
-    }
-  }
   try {
     await sendAlertEmail(`风控提醒 哈希（新版） ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
   } catch (err) {

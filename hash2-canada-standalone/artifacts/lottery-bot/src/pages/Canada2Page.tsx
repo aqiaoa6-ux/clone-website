@@ -171,16 +171,14 @@ export default function Canada2Page() {
   }, []);
 
   const currentPlan = config.plans[activePlan] ?? makeDefaultPlan(activePlan);
-  const currentAssignedBet = CANADA2_PLAN_BET_MAP[activePlan] ?? "big";
-  const currentAssignedLabel = HASH2_BET_OPTIONS.find(item => item.key === currentAssignedBet)?.label ?? currentAssignedBet;
   const pairedPlanName = CANADA2_PLAN_NAME_MAP[activePlan % 2 === 0 ? activePlan + 1 : activePlan - 1] ?? "配对方案";
   const toggleSection = (key: string) => {
     setSectionOpen(prev => ({ ...prev, [key]: !prev[key] }));
   };
   const currentLevelSummary = useMemo(() => {
     if (!currentPlan.bets.length) return "";
-    return `${currentAssignedLabel}专属方案 · 命中回第1手 · 爆手切到${pairedPlanName}`;
-  }, [currentAssignedLabel, currentPlan.bets.length, pairedPlanName]);
+    return `当前方案下注项独立层级 · 命中回第1手 · 爆手切到${pairedPlanName}`;
+  }, [currentPlan.bets.length, pairedPlanName]);
   const currentPreview = useMemo(() => {
     const amount = currentPlan.amountLevels[0] ?? currentPlan.baseAmount ?? 0;
     const targetFirst = currentPlan.bets.some(key => key.startsWith("num:")) || currentPlan.format === "target_first";
@@ -200,12 +198,20 @@ export default function Canada2Page() {
   }, [currentPlan.bets]);
 
   const updatePlan = (index: number, patch: Partial<CanadaPlan>) => {
-    const assignedBet = CANADA2_PLAN_BET_MAP[index] ?? "big";
     setConfig(prev => ({
       ...prev,
-      plans: prev.plans.map((plan, i) => i === index ? { ...plan, ...patch, bets: [assignedBet] } : plan),
+      plans: prev.plans.map((plan, i) => i === index ? { ...plan, ...patch } : plan),
       updatedAt: Date.now(),
     }));
+  };
+
+  const toggleBet = (betKey: string) => {
+    const exists = currentPlan.bets.includes(betKey);
+    updatePlan(activePlan, {
+      bets: exists
+        ? currentPlan.bets.filter(item => item !== betKey)
+        : [...currentPlan.bets, betKey],
+    });
   };
 
   const setLevel = (levelIndex: number, value: string) => {
@@ -330,7 +336,7 @@ export default function Canada2Page() {
             <div>
               <div className="text-white font-semibold">独立配置模块</div>
               <div className="text-slate-500 text-xs mt-1">
-                1/2=大，3/4=小，5/6=单，7/8=双；默认 1/3/5/7 同时运行，爆手切到 2/4/6/8
+                保留 1/2、3/4、5/6、7/8 配对切换逻辑；每套方案的玩法1、玩法2都可自由多选
               </div>
             </div>
             <div className="text-right">
@@ -399,7 +405,7 @@ export default function Canada2Page() {
               <div>
                 <div className="text-white font-semibold">{currentPlan.name}</div>
                 <div className="text-xs text-slate-500 mt-1">
-                  当前下注项：{selectedLabels || currentAssignedLabel}
+                  当前下注项：{selectedLabels || "暂无"}
                 </div>
                 <div className="text-[10px] text-slate-600 mt-1 break-all">
                   发送预览：{currentPreview || "暂无"}
@@ -552,24 +558,54 @@ export default function Canada2Page() {
             )}
 
             <CollapseSection
-              title="方案下注项"
-              summary={`${currentPlan.name} -> ${currentAssignedLabel}`}
+              title="玩法1"
+              summary={HASH2_BET_OPTIONS.filter(item => item.group === "玩法1" && currentPlan.bets.includes(item.key)).map(item => item.label).join(" / ") || "未选择"}
               open={sectionOpen.play1}
               onToggle={() => toggleSection("play1")}
             >
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-3 text-sm text-slate-300">
-                方案大1 / 方案大2 下注大，方案小1 / 方案小2 下注小，方案单1 / 方案单2 下注单，方案双1 / 方案双2 下注双。默认同时运行 1 / 3 / 5 / 7，爆手后切到配对方案。
+              <div className="flex flex-wrap gap-2">
+                {HASH2_BET_OPTIONS.filter(item => item.group === "玩法1").map(item => {
+                  const active = currentPlan.bets.includes(item.key);
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => toggleBet(item.key)}
+                      className={`px-3 py-1.5 rounded-xl text-sm border transition ${
+                        active
+                          ? "bg-red-500/20 border-red-500/40 text-red-300"
+                          : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
               </div>
             </CollapseSection>
 
             <CollapseSection
               title="玩法2"
-              summary="已固定，不开放"
+              summary={HASH2_BET_OPTIONS.filter(item => item.group === "玩法2" && currentPlan.bets.includes(item.key)).map(item => item.label).join(" / ") || "未选择"}
               open={sectionOpen.play2}
               onToggle={() => toggleSection("play2")}
             >
-              <div className="rounded-xl border border-[#252a3d] bg-[#0f1220] px-3 py-3 text-sm text-slate-500">
-                当前方案下注项按方案固定分配，不再使用大小单双全压；组合、特殊号和数字玩法暂不开放。
+              <div className="flex flex-wrap gap-2">
+                {HASH2_BET_OPTIONS.filter(item => item.group === "玩法2").map(item => {
+                  const active = currentPlan.bets.includes(item.key);
+                  return (
+                    <button
+                      key={item.key}
+                      onClick={() => toggleBet(item.key)}
+                      className={`px-2.5 py-1.5 rounded-xl text-sm border transition ${
+                        active
+                          ? "bg-blue-500/20 border-blue-500/40 text-blue-300"
+                          : "bg-[#0f1220] border-[#252a3d] text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      {item.label}
+                    </button>
+                  );
+                })}
               </div>
             </CollapseSection>
 
@@ -580,7 +616,7 @@ export default function Canada2Page() {
               onToggle={() => toggleSection("levels")}
             >
               <div className="text-[10px] text-slate-500 mb-3">
-                当前方案只跑 {currentAssignedLabel} 这一项；命中回第1手，打满手数仍未中就切到 {pairedPlanName}
+                每个下注项按自己的层级递进；命中对应项回第1手，打满手数仍未中就切到 {pairedPlanName}
               </div>
               <div className="grid grid-cols-4 gap-2">
                 {Array.from({ length: 60 }, (_, i) => (
