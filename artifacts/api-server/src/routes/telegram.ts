@@ -1950,21 +1950,31 @@ function getCanadaMonitorActiveBets(): GroupBetEntry[] {
   return term ? canadaBets.filter(b => b.termContext === term) : canadaBets.slice(0, 200);
 }
 
-function decideAmountBasedKillGroup(activeBets: GroupBetEntry[], source: "private" | "canada"): KillGroupOption | null {
-  if (activeBets.length === 0) return null;
+function sumKillGroupAmounts(activeBets: GroupBetEntry[]): Record<KillGroupOption, number> {
   const comboAmounts: Record<KillGroupOption, number> = {
     大单: 0,
     大双: 0,
     小单: 0,
     小双: 0,
   };
-
   for (const bet of activeBets) {
     const amount = Math.max(0, Number(bet.amount) || 0);
     if (amount <= 0) continue;
     if (!(KILL_GROUP_ALL as readonly string[]).includes(bet.direction)) continue;
     comboAmounts[bet.direction as KillGroupOption] += amount;
   }
+  return comboAmounts;
+}
+
+function decideAmountBasedKillGroup(source: "private" | "canada" | "merged"): KillGroupOption | null {
+  const privateComboAmounts = sumKillGroupAmounts(getPrivateMonitorActiveBets());
+  const canadaComboAmounts = sumKillGroupAmounts(getCanadaMonitorActiveBets());
+  const comboAmounts: Record<KillGroupOption, number> = {
+    大单: privateComboAmounts.大单 + canadaComboAmounts.大单,
+    大双: privateComboAmounts.大双 + canadaComboAmounts.大双,
+    小单: privateComboAmounts.小单 + canadaComboAmounts.小单,
+    小双: privateComboAmounts.小双 + canadaComboAmounts.小双,
+  };
 
   const totalAmount = Object.values(comboAmounts).reduce((sum, value) => sum + value, 0);
   if (totalAmount <= 0) return null;
@@ -1976,12 +1986,12 @@ function decideAmountBasedKillGroup(activeBets: GroupBetEntry[], source: "privat
 
   if (!killed) return null;
   const betSides = KILL_GROUP_ALL.filter(item => item !== killed);
-  logger.info({ source, killed, comboAmounts, betSides }, "[monitor-kill-ai] amount-only kill decision");
+  logger.info({ source, killed, privateComboAmounts, canadaComboAmounts, comboAmounts, betSides }, "[monitor-kill-ai] merged-combo kill decision");
   return killed;
 }
 
 function decideCanadaMonitorKillGroup(): KillGroupOption | null {
-  return decideAmountBasedKillGroup(getCanadaMonitorActiveBets(), "canada");
+  return decideAmountBasedKillGroup("canada");
 }
 
 function decidePrivateMonitorComboBet(session: TgSession): string | null {
@@ -4684,10 +4694,7 @@ async function runMonitorKillAutoBet(session: TgSession, triggerTerm: number, so
     return;
   }
 
-  const killed = decideAmountBasedKillGroup(
-    source === "private" ? getPrivateMonitorActiveBets() : getCanadaMonitorActiveBets(),
-    source,
-  );
+  const killed = decideAmountBasedKillGroup("merged");
   if (!killed) return;
   session.lastAlgoUsed = resolveMonitorAlgoId(session);
   session.lastBetPeriod = triggerTerm;
