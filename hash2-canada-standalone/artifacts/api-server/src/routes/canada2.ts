@@ -502,13 +502,33 @@ function resetPlanRuntimeForRestart(plan: CanadaPlan, state: CanadaPlanRuntime):
 }
 
 function autoReturnToPlanOneOnTakeProfit(
-  _userId: number,
-  _config: CanadaConfig,
-  _runtime: CanadaRuntime,
-  _sourcePlan: CanadaPlan,
-  _riskReason: string,
+  userId: number,
+  config: CanadaConfig,
+  runtime: CanadaRuntime,
+  sourcePlan: CanadaPlan,
+  riskReason: string,
 ): boolean {
-  return false;
+  if (!riskReason.includes("止盈")) return false;
+  const currentPlan = config.plans.find(plan => plan.id === sourcePlan.id);
+  const prevPlanId = STOPLOSS_PREV_PLAN_ID[sourcePlan.id];
+  if (!currentPlan || !prevPlanId) return false;
+  const prevPlan = config.plans.find(plan => plan.id === prevPlanId);
+  if (!prevPlan) return false;
+  const prevPlanRuntime = runtime.plans[prevPlan.id] ?? defaultPlanRuntime();
+  runtime.plans[prevPlan.id] = prevPlanRuntime;
+  currentPlan.enabled = false;
+  prevPlan.enabled = true;
+  resetPlanRuntimeForRestart(prevPlan, prevPlanRuntime);
+  config.updatedAt = Date.now();
+  runtime.updatedAt = Date.now();
+  runtime.lastAlert = makeAlert(
+    prevPlan,
+    `${sourcePlan.name} ${riskReason}，已回到${prevPlan.name}第一手`,
+    "success",
+  );
+  saveConfig(userId, config);
+  logger.info({ userId, sourcePlan: sourcePlan.id, prevPlan: prevPlan.id }, "[hash-new] auto returned to previous plan after take profit");
+  return true;
 }
 
 function canRunAutoChainedPlan(plan: CanadaPlan, runtime: CanadaRuntime): boolean {
