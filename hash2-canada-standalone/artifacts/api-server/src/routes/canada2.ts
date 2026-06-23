@@ -593,7 +593,7 @@ function buildPlanMessage(plan: CanadaPlan, entries: Array<{ key: string; amount
     const isNumberBet = key.startsWith("num:");
     const targetFirst = forceTargetFirst || plan.format === "target_first";
     if (isNumberBet) {
-      return targetFirst ? `${label}/${formatStake(amount)}` : `${formatStake(amount)}/${label}`;
+      return targetFirst ? `${label}押${formatStake(amount)}` : `${formatStake(amount)}押${label}`;
     }
     return targetFirst ? `${label}${formatStake(amount)}` : `${formatStake(amount)}${label}`;
   });

@@ -157,7 +157,7 @@ export default function Hash2Page() {
       .map(key => {
         const label = HASH2_BET_OPTIONS.find(item => item.key === key)?.label ?? key;
         const amt = Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
-        if (key.startsWith("num:")) return targetFirst ? `${label}/${amt}` : `${amt}/${label}`;
+        if (key.startsWith("num:")) return targetFirst ? `${label}押${amt}` : `${amt}押${label}`;
         return targetFirst ? `${label}${amt}` : `${amt}${label}`;
       })
       .join("  ");

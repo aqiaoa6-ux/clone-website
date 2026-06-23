@@ -537,14 +537,6 @@ async function sendRiskAlert(session: TgSession, userId: number, plan: Hash2Plan
   const pnl = fmtMoney(state.sessionPnl);
   const title = `【风控提醒】加拿大新版 ${plan.name}`;
   const text = `${title}\n${riskReason}\n当前盈亏：${pnl}\n期号：${period}\n来源：${source}`;
-  const targetId = session.alertGroupId ?? session.watchGroupId;
-  if (targetId) {
-    try {
-      await session.client.sendMessage(targetId, { message: text });
-    } catch (err) {
-      logger.warn({ userId, err }, "[hash2] risk tg alert failed");
-    }
-  }
   try {
     await sendAlertEmail(`风控提醒 加拿大新版 ${plan.name} ${riskReason}`, `userId=${userId}\n${text}`);
   } catch (err) {
@@ -581,7 +573,7 @@ function buildPlanMessage(plan: Hash2Plan, entries: Array<{ key: string; amount:
     const isNumberBet = key.startsWith("num:");
     const targetFirst = forceTargetFirst || plan.format === "target_first";
     if (isNumberBet) {
-      return targetFirst ? `${label}/${formatStake(amount)}` : `${formatStake(amount)}/${label}`;
+      return targetFirst ? `${label}押${formatStake(amount)}` : `${formatStake(amount)}押${label}`;
     }
     return targetFirst ? `${label}${formatStake(amount)}` : `${formatStake(amount)}${label}`;
   });
