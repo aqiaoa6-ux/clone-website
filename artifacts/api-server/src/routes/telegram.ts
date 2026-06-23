@@ -206,7 +206,6 @@ type AlgorithmId = "signal_follow" | "signal_reverse" | "streak_follow" | "cold_
   | "hash_follow" | "hash_reverse" | "hash_smart" | "hash_smart_plus" | "hash_kill" | "hash_kill_plus"
   | "hash_abc_digit_ai" | "hash_abc_digit_cycle_ai"
   | "private_combo_ai"
-  | "canada_monitor_kill_ai"
   | "canada_clone_1"
   | "canada_pro_1" | "canada_pro_2" | "canada_pro_3" | "canada_pro_4" | "canada_pro_5"
   | "canada_pro_6" | "canada_pro_7" | "canada_pro_8" | "canada_pro_9" | "canada_pro_10"
@@ -274,7 +273,6 @@ const ACTIVE_ALGORITHMS = new Set<AlgorithmId>([
   "hash_abc_digit_ai",
   "hash_abc_digit_cycle_ai",
   "private_combo_ai",
-  "canada_monitor_kill_ai",
   "abc_trend",
   "abc_digit_ai",
   "abc_digit_cycle_ai",
@@ -457,8 +455,6 @@ export interface TgSession {
   privatePollCursor: number;
   privateCountdown30Term: number | null;
   privateAlgoLastBetTerm: number | null;
-  canadaCountdown30Term: number | null;
-  canadaAlgoLastBetTerm: number | null;
 }
 
 interface PersistedData {
@@ -1258,7 +1254,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     hashPhase: "idle", hashPeriod: null, hashResults: data.hashResults ?? [], hashLastMsgId: 0, hashResultLastMsgId: 0,
     canadaMonitorGroupIds: data.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
     privateMonitorGroupIds: (data as unknown as { privateMonitorGroupIds?: string[] }).privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
-    privateCountdown30Term: null, privateAlgoLastBetTerm: null, canadaCountdown30Term: null, canadaAlgoLastBetTerm: null,
+    privateCountdown30Term: null, privateAlgoLastBetTerm: null,
     balance: data.balance ?? 1000000,
     todayPnl: data.todayPnl ?? 0,
     todayResetAt: data.todayResetAt ?? todayMidnight(),
@@ -1936,62 +1932,14 @@ function buildHistory(session: TgSession): string[] {
     : [...lotteryHistoryCache.slice(-10), ...session.recentResults];
 }
 
-function getPrivateMonitorActiveBets(termOverride?: number | null): GroupBetEntry[] {
-  const term = termOverride ?? getPrivateLiveTerm();
+function getPrivateMonitorActiveBets(): GroupBetEntry[] {
+  const term = getPrivateLiveTerm();
   return term ? privateBets.filter(b => b.termContext === term) : privateBets.slice(0, 200);
 }
 
-function hasMonitorKillAlgo(session: TgSession): boolean {
-  return session.cfg.algorithms.includes("private_combo_ai") || session.cfg.algorithms.includes("canada_monitor_kill_ai");
-}
-
-function getCanadaMonitorActiveBets(termOverride?: number | null): GroupBetEntry[] {
-  const term = termOverride ?? getCanadaLiveTerm();
+function getCanadaMonitorActiveBets(): GroupBetEntry[] {
+  const term = getCanadaLiveTerm();
   return term ? canadaBets.filter(b => b.termContext === term) : canadaBets.slice(0, 200);
-}
-
-function sumKillGroupAmounts(activeBets: GroupBetEntry[]): Record<KillGroupOption, number> {
-  const comboAmounts: Record<KillGroupOption, number> = {
-    大单: 0,
-    大双: 0,
-    小单: 0,
-    小双: 0,
-  };
-  for (const bet of activeBets) {
-    const amount = Math.max(0, Number(bet.amount) || 0);
-    if (amount <= 0) continue;
-    if (!(KILL_GROUP_ALL as readonly string[]).includes(bet.direction)) continue;
-    comboAmounts[bet.direction as KillGroupOption] += amount;
-  }
-  return comboAmounts;
-}
-
-function decideAmountBasedKillGroup(source: "private" | "canada" | "merged", triggerTerm?: number | null): KillGroupOption | null {
-  const privateComboAmounts = sumKillGroupAmounts(getPrivateMonitorActiveBets(triggerTerm ?? null));
-  const canadaComboAmounts = sumKillGroupAmounts(getCanadaMonitorActiveBets(triggerTerm ?? null));
-  const comboAmounts: Record<KillGroupOption, number> = {
-    大单: privateComboAmounts.大单 + canadaComboAmounts.大单,
-    大双: privateComboAmounts.大双 + canadaComboAmounts.大双,
-    小单: privateComboAmounts.小单 + canadaComboAmounts.小单,
-    小双: privateComboAmounts.小双 + canadaComboAmounts.小双,
-  };
-
-  const totalAmount = Object.values(comboAmounts).reduce((sum, value) => sum + value, 0);
-  if (totalAmount <= 0) return null;
-
-  const killed = [...KILL_GROUP_ALL].sort((a, b) => {
-    if (comboAmounts[b] !== comboAmounts[a]) return comboAmounts[b] - comboAmounts[a];
-    return a.localeCompare(b, "zh-CN");
-  })[0] ?? null;
-
-  if (!killed) return null;
-  const betSides = KILL_GROUP_ALL.filter(item => item !== killed);
-  logger.info({ source, killed, privateComboAmounts, canadaComboAmounts, comboAmounts, betSides }, "[monitor-kill-ai] merged-combo kill decision");
-  return killed;
-}
-
-function decideCanadaMonitorKillGroup(): KillGroupOption | null {
-  return decideAmountBasedKillGroup("canada");
 }
 
 function decidePrivateMonitorComboBet(session: TgSession): string | null {
@@ -4644,32 +4592,10 @@ function isPrivateMonitorCountdown30(text: string): boolean {
     || new RegExp(`${sec}秒.{0,8}(封盘|截止|停止下注|开奖)`).test(text);
 }
 
-function isCanadaMonitorCountdown30(text: string): boolean {
-  const sec = PRIVATE_MONITOR_BET_COUNTDOWN_SEC;
-  return text.includes(`封盘剩余${sec}秒`)
-    || text.includes(`即将封盘，剩余${sec}秒`)
-    || text.includes(`即将封盘,剩余${sec}秒`)
-    || new RegExp(`(倒计时|剩余|还有|封盘).{0,8}${sec}秒`).test(text)
-    || new RegExp(`${sec}秒.{0,8}(封盘|截止|停止下注|开奖)`).test(text);
-}
-
-function markMonitorAlgoTriggered(session: TgSession, triggerTerm: number): void {
-  session.privateAlgoLastBetTerm = triggerTerm;
-  session.canadaAlgoLastBetTerm = triggerTerm;
-}
-
-function hasMonitorAlgoTriggered(session: TgSession, triggerTerm: number): boolean {
-  return session.privateAlgoLastBetTerm === triggerTerm || session.canadaAlgoLastBetTerm === triggerTerm;
-}
-
-function resolveMonitorAlgoId(session: TgSession): AlgorithmId {
-  return session.cfg.algorithms.includes("private_combo_ai") ? "private_combo_ai" : "canada_monitor_kill_ai";
-}
-
-async function runMonitorKillAutoBet(session: TgSession, triggerTerm: number, source: "private" | "canada"): Promise<void> {
+async function runPrivateMonitorAutoBet(session: TgSession, triggerTerm: number): Promise<void> {
   if (!session.cfg.autoBet || !session.watchGroupId || session.cfg.gameMode !== "lottery") return;
-  if (!hasMonitorKillAlgo(session)) return;
-  if (hasMonitorAlgoTriggered(session, triggerTerm)) return;
+  if (!session.cfg.algorithms.includes("private_combo_ai")) return;
+  if (session.privateAlgoLastBetTerm === triggerTerm) return;
 
   const { betLog } = session;
   const nowMs = Date.now();
@@ -4677,10 +4603,23 @@ async function runMonitorKillAutoBet(session: TgSession, triggerTerm: number, so
   if (betLog.some(b => b.status === "sent" && !b.isChase)) return;
   if (session.betPlacedThisCycle) return;
 
+  if (session.currentCloseTimeMs > 0) {
+    const timeToClose = session.currentCloseTimeMs - nowMs;
+    const targetMs = PRIVATE_MONITOR_BET_COUNTDOWN_SEC * 1000;
+    // 新群算法只允许在接近 30 秒时触发，防止旧消息回放或跨期文案提前触发。
+    if (timeToClose < 0 || Math.abs(timeToClose - targetMs) > 20_000) {
+      logger.info(
+        { timeToCloseSec: Math.round(timeToClose / 1000), triggerTerm },
+        "[private-combo-ai] countdown mismatch, skip trigger",
+      );
+      return;
+    }
+  }
+
   if (session.cfg.chaseOnly) {
     if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
       await placeChaseOnly(session);
-      markMonitorAlgoTriggered(session, triggerTerm);
+      session.privateAlgoLastBetTerm = triggerTerm;
     }
     return;
   }
@@ -4689,73 +4628,21 @@ async function runMonitorKillAutoBet(session: TgSession, triggerTerm: number, so
   if (!risk.ok) {
     if (session.cfg.enableChase && !session.chasePlacedThisCycle) {
       await placeChaseOnly(session);
-      markMonitorAlgoTriggered(session, triggerTerm);
+      session.privateAlgoLastBetTerm = triggerTerm;
     }
     return;
   }
 
-  const privateComboAmounts = sumKillGroupAmounts(getPrivateMonitorActiveBets(triggerTerm));
-  const canadaComboAmounts = sumKillGroupAmounts(getCanadaMonitorActiveBets(triggerTerm));
-  const mergedComboAmounts: Record<KillGroupOption, number> = {
-    大单: privateComboAmounts.大单 + canadaComboAmounts.大单,
-    大双: privateComboAmounts.大双 + canadaComboAmounts.大双,
-    小单: privateComboAmounts.小单 + canadaComboAmounts.小单,
-    小双: privateComboAmounts.小双 + canadaComboAmounts.小双,
-  };
-  const killed = decideAmountBasedKillGroup("merged", triggerTerm);
-  if (!killed) return;
-  const betSides = KILL_GROUP_ALL.filter(item => item !== killed);
-  logger.info(
-    {
-      triggerTerm,
-      source,
-      watchGroupId: session.watchGroupId,
-      tgUserId: session.me?.id?.toString?.() ?? null,
-      privateComboAmounts,
-      canadaComboAmounts,
-      mergedComboAmounts,
-      killed,
-      betSides,
-    },
-    "[monitor-kill-ai] pre-bet decision",
-  );
-  session.lastAlgoUsed = resolveMonitorAlgoId(session);
+  const direction = decidePrivateMonitorComboBet(session);
+  if (!direction) return;
+  session.lastAlgoUsed = "private_combo_ai";
   session.lastBetPeriod = triggerTerm;
-  session.lastRawAlgoDir = `kill:${killed}|term:${triggerTerm}|merged:${JSON.stringify(mergedComboAmounts)}`;
-  markMonitorAlgoTriggered(session, triggerTerm);
-  pushEvent(session, "bet:kill", {
-    killed,
-    algo: session.lastAlgoUsed,
-    source,
-    triggerTerm,
-    privateComboAmounts,
-    canadaComboAmounts,
-    mergedComboAmounts,
-    betSides,
-  });
-  await placeKillGroupBets(session, killed);
-}
-
-async function runCanadaMonitorAutoBet(session: TgSession, triggerTerm: number): Promise<void> {
-  await runMonitorKillAutoBet(session, triggerTerm, "canada");
-}
-
-async function broadcastCanadaMonitorAutoBet(triggerTerm: number): Promise<void> {
-  const targets = [...tgSessions.values()].filter(session =>
-    !!session.me
-    && session.cfg.autoBet
-    && !!session.watchGroupId
-    && session.cfg.gameMode === "lottery"
-    && hasMonitorKillAlgo(session),
-  );
-  await Promise.allSettled(targets.map(async session => {
-    session.canadaCountdown30Term = triggerTerm;
-    await runCanadaMonitorAutoBet(session, triggerTerm);
-  }));
-}
-
-async function runPrivateMonitorAutoBet(session: TgSession, triggerTerm: number): Promise<void> {
-  await runMonitorKillAutoBet(session, triggerTerm, "private");
+  session.privateAlgoLastBetTerm = triggerTerm;
+  if (session.cfg.killGroupMode && (KILL_GROUP_ALL as readonly string[]).includes(direction)) {
+    await placeKillGroupBets(session, direction as KillGroupOption);
+    return;
+  }
+  await placeAllBets(session, direction);
 }
 
 async function broadcastPrivateMonitorAutoBet(triggerTerm: number): Promise<void> {
@@ -4764,7 +4651,7 @@ async function broadcastPrivateMonitorAutoBet(triggerTerm: number): Promise<void
     && session.cfg.autoBet
     && !!session.watchGroupId
     && session.cfg.gameMode === "lottery"
-    && hasMonitorKillAlgo(session),
+    && session.cfg.algorithms.includes("private_combo_ai"),
   );
   await Promise.allSettled(targets.map(async session => {
     session.privateCountdown30Term = triggerTerm;
@@ -5249,8 +5136,8 @@ async function runAutoBet(session: TgSession): Promise<void> {
     return;
   }
 
-  if (session.cfg.gameMode === "lottery" && hasMonitorKillAlgo(session)) {
-    logger.info("[monitor-kill-ai] waiting for monitor 30s trigger");
+  if (session.cfg.gameMode === "lottery" && session.cfg.algorithms.includes("private_combo_ai")) {
+    logger.info("[private-combo-ai] waiting for private monitor 30s trigger");
     return;
   }
 
@@ -5609,8 +5496,8 @@ function startGroupListener(session: TgSession): void {
       return;
     }
 
-    if (hasMonitorKillAlgo(session)) {
-      logger.info("[msg-bet] monitor_kill_ai uses monitor trigger only");
+    if (session.cfg.algorithms.includes("private_combo_ai")) {
+      logger.info("[msg-bet] private_combo_ai uses private monitor trigger only");
       return;
     }
 
@@ -6436,10 +6323,6 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
           scheduleSnapshot(canadaCurrentBetTerm, 0);
         }
         if (newTerm !== null) canadaCurrentBetTerm = newTerm;
-        for (const tgSession of tgSessions.values()) {
-          tgSession.canadaCountdown30Term = null;
-          tgSession.canadaAlgoLastBetTerm = null;
-        }
         continue;
       }
 
@@ -6455,17 +6338,6 @@ async function pollOneCanadaGroup(session: TgSession, groupId: string): Promise<
           scheduleSnapshot(stopTerm, SNAPSHOT_DELAY_MS);
         }
         continue;
-      }
-
-      const countdownTriggerTerm = canadaCurrentBetTerm ?? currentLotteryTerm;
-      if (countdownTriggerTerm && isCanadaMonitorCountdown30(text)) {
-        const alreadyTriggered = [...tgSessions.values()]
-          .filter(s => hasMonitorKillAlgo(s))
-          .every(s => s.canadaCountdown30Term === countdownTriggerTerm);
-        if (!alreadyTriggered) {
-          if (canadaCurrentBetTerm === null) canadaCurrentBetTerm = countdownTriggerTerm;
-          void broadcastCanadaMonitorAutoBet(countdownTriggerTerm);
-        }
       }
 
       const u = msg.sender as Api.User | null;
@@ -6616,19 +6488,13 @@ function parsePrivateBetConfirm(text: string, senderName: string): GroupBetEntry
   const entries: GroupBetEntry[] = [];
 
   const classifyNum = (n: number): string => `${n > 13 ? "大" : "小"}${n % 2 !== 0 ? "单" : "双"}`;
-  const detectCurrency = (raw: string): "kk" | "usdt" | "cny" => {
-    if (/USDT/i.test(raw) || /U\b/.test(raw)) return "usdt";
-    if (/KKCOIN|KK\b/i.test(raw)) return "kk";
-    return "usdt";
-  };
-
-  const mkEntry = (player: string, dir: string, amount: number, raw: string, currency: "kk" | "usdt" | "cny") => {
+  const mkEntry = (player: string, dir: string, amount: number, raw: string) => {
     entries.push({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       ts: Date.now(),
       senderId: "",
       senderName: player,
-      currency,
+      currency: "cny",
       amount,
       direction: dir,
       raw,
@@ -6666,7 +6532,7 @@ function parsePrivateBetConfirm(text: string, senderName: string): GroupBetEntry
             return classifyNum(n);
           })()
         : rawDir;
-      mkEntry(s.player, dir, amount, s.body.slice(0, 200), detectCurrency(s.body));
+      mkEntry(s.player, dir, amount, s.body.slice(0, 200));
     }
 
     const yaLine = /(\d+(?:\.\d+)?)\s*押\s*(\d{1,2})\s+投注成功/gi;
@@ -6676,7 +6542,7 @@ function parsePrivateBetConfirm(text: string, senderName: string): GroupBetEntry
       const n = parseInt(y[2]!, 10);
       if (!isFinite(amount) || amount <= 0) continue;
       if (!isFinite(n)) continue;
-      mkEntry(s.player, classifyNum(n), amount, s.body.slice(0, 200), detectCurrency(s.body));
+      mkEntry(s.player, classifyNum(n), amount, s.body.slice(0, 200));
     }
   }
   return entries;
@@ -6732,9 +6598,7 @@ async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise
       }
 
       if (privateCurrentTerm && isPrivateMonitorCountdown30(text)) {
-        const alreadyTriggered = [...tgSessions.values()]
-          .filter(s => hasMonitorKillAlgo(s))
-          .every(s => s.privateCountdown30Term === privateCurrentTerm);
+        const alreadyTriggered = [...tgSessions.values()].every(s => s.privateCountdown30Term === privateCurrentTerm);
         if (!alreadyTriggered) {
           void broadcastPrivateMonitorAutoBet(privateCurrentTerm);
         }
@@ -7115,7 +6979,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       hashPhase: "idle", hashPeriod: null, hashResults: [], hashLastMsgId: 0, hashResultLastMsgId: 0,
       canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
       privateMonitorGroupIds: (existing as unknown as { privateMonitorGroupIds?: string[] } | undefined)?.privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
-      privateCountdown30Term: null, privateAlgoLastBetTerm: null, canadaCountdown30Term: null, canadaAlgoLastBetTerm: null,
+      privateCountdown30Term: null, privateAlgoLastBetTerm: null,
     };
     tgSessions.set(userId, session);
     res.json({ ok: true });
