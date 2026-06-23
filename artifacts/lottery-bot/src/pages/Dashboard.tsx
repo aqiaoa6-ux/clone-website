@@ -27,7 +27,7 @@ const ALGO_LABELS: Record<string, string> = {
   abc_trend:        "加拿大-ABC走势",
   abc_digit_ai:     "加拿大-ABC三位数字AI",
   abc_digit_cycle_ai:"加拿大-ABC轮打AI",
-  private_combo_ai: "加拿大-新群综合AI",
+  private_combo_ai: "监控杀组AI（新群/加拿大共用）",
   canada_monitor_kill_ai: "加拿大监控-杀组AI",
   hash_abc_digit_ai:"哈希-ABC三位数字AI",
   hash_abc_digit_cycle_ai:"哈希-ABC轮打AI",
@@ -53,6 +53,7 @@ const REMOVED_CANADA_ALGOS = new Set([
   "canada_kill",
   "canada_kill_plus",
   "canada_smart_plus",
+  "canada_monitor_kill_ai",
 ]);
 
 const VISIBLE_ALGO_LABELS = Object.fromEntries(
@@ -62,7 +63,8 @@ const VISIBLE_ALGO_LABELS = Object.fromEntries(
 const AVAILABLE_ALGOS = new Set(Object.keys(VISIBLE_ALGO_LABELS));
 
 function normalizeAlgos(a: string[], gameMode: "lottery" | "kuaisan" | "hash" = "lottery") {
-  const filtered = a
+  const mapped = a.map(x => x === "canada_monitor_kill_ai" ? "private_combo_ai" : x);
+  const filtered = mapped
     .filter(x => !REMOVED_CANADA_ALGOS.has(x))
     .filter(x => AVAILABLE_ALGOS.has(x))
     .filter((x, index, arr) => arr.indexOf(x) === index);
