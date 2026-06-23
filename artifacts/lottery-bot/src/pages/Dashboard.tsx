@@ -28,6 +28,7 @@ const ALGO_LABELS: Record<string, string> = {
   abc_digit_ai:     "加拿大-ABC三位数字AI",
   abc_digit_cycle_ai:"加拿大-ABC轮打AI",
   private_combo_ai: "加拿大-新群综合AI",
+  canada_monitor_kill_ai: "加拿大监控-杀组AI",
   hash_abc_digit_ai:"哈希-ABC三位数字AI",
   hash_abc_digit_cycle_ai:"哈希-ABC轮打AI",
   hash_follow:      "哈希-算法1",
