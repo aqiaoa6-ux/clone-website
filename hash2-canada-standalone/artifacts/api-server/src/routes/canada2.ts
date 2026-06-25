@@ -6,7 +6,7 @@ import path from "path";
 import { requireCard } from "../middleware/requireAuth";
 import { sendAlertEmail } from "../lib/email";
 import { logger } from "../lib/logger";
-import { tgSessions, type TgSession } from "./telegram";
+import { getAllTgSessions, type TgSession } from "./telegram";
 
 const router = Router();
 
@@ -134,8 +134,8 @@ const HASH2_DEFAULT_SPECIAL_ODDS: Record<string, number> = {
   pair: 3.4,
   straight: 18,
 };
-const canadaLoopInFlight = new Set<number>();
-const canadaBetDelayTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const canadaLoopInFlight = new Set<string>();
+const canadaBetDelayTimers = new Map<string, ReturnType<typeof setTimeout>>();
 let cachedDataDir: string | null = null;
 
 function tryEnsureWritableDir(dir: string): boolean {
@@ -302,8 +302,10 @@ function saveConfig(userId: number, config: CanadaConfig): void {
   fs.writeFileSync(canadaFile(userId), JSON.stringify(config, null, 2), "utf-8");
 }
 
-function runtimeFile(userId: number): string {
-  return path.join(dataDir(), `.canada2-runtime-${userId}.json`);
+function runtimeFile(userId: number, sessionKey = "primary"): string {
+  return sessionKey === "primary"
+    ? path.join(dataDir(), `.canada2-runtime-${userId}.json`)
+    : path.join(dataDir(), `.canada2-runtime-${userId}-${sessionKey}.json`);
 }
 
 function defaultPlanRuntime(): CanadaPlanRuntime {
@@ -361,9 +363,9 @@ function normalizeRuntime(input: Partial<CanadaRuntime> | undefined, config: Can
   };
 }
 
-function loadRuntime(userId: number, config: CanadaConfig): CanadaRuntime {
+function loadRuntime(userId: number, config: CanadaConfig, sessionKey = "primary"): CanadaRuntime {
   try {
-    const file = runtimeFile(userId);
+    const file = runtimeFile(userId, sessionKey);
     if (!fs.existsSync(file)) return normalizeRuntime(undefined, config);
     const raw = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<CanadaRuntime>;
     return normalizeRuntime(raw, config);
@@ -372,8 +374,8 @@ function loadRuntime(userId: number, config: CanadaConfig): CanadaRuntime {
   }
 }
 
-function saveRuntime(userId: number, runtime: CanadaRuntime): void {
-  fs.writeFileSync(runtimeFile(userId), JSON.stringify(runtime, null, 2), "utf-8");
+function saveRuntime(userId: number, runtime: CanadaRuntime, sessionKey = "primary"): void {
+  fs.writeFileSync(runtimeFile(userId, sessionKey), JSON.stringify(runtime, null, 2), "utf-8");
 }
 
 function makeAlert(plan: CanadaPlan, message: string, level: CanadaAlertLevel): CanadaAlert {
@@ -752,7 +754,7 @@ async function triggerPlanForPeriod(session: TgSession, userId: number, plan: Ca
   try {
     await session.client.sendMessage(session.watchGroupId, { message });
     state.lastMessage = message;
-    logger.info({ userId, plan: plan.name, period, message }, "[hash-new] plan sent");
+    logger.info({ userId, sessionKey: session.sessionKey, plan: plan.name, period, message }, "[hash-new] plan sent");
   } catch (err) {
     state.blockedReason = err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80);
     if (plan.webAlertEnabled) runtime.lastAlert = makeAlert(plan, `${plan.name} 发送失败：${state.blockedReason}`, "error");
@@ -836,10 +838,11 @@ async function settlePlanResult(session: TgSession, userId: number, plan: Canada
 }
 
 async function processUserCanada(session: TgSession): Promise<void> {
+  if (!session.me) return;
   const userId = session.userId;
   const config = loadConfig(userId);
   if (!config.plans.some(plan => plan.enabled)) return;
-  const runtime = loadRuntime(userId, config);
+  const runtime = loadRuntime(userId, config, session.sessionKey);
   const primaryPlan = config.plans.find(plan => plan.enabled) ?? config.plans[0] ?? defaultPlan(0);
   const channel = HASH_NEW_RESULT_CHANNEL as Parameters<typeof session.client.getMessages>[0];
   let changed = false;
@@ -924,25 +927,26 @@ async function processUserCanada(session: TgSession): Promise<void> {
   if (runtime.activePeriod !== prevActive) changed = true;
   if (changed) {
     runtime.updatedAt = Date.now();
-    saveRuntime(userId, runtime);
+    saveRuntime(userId, runtime, session.sessionKey);
   }
 }
 
-function clearCanadaBetDelayTimer(userId: number): void {
-  const timer = canadaBetDelayTimers.get(userId);
+function clearCanadaBetDelayTimer(sessionKey: string): void {
+  const timer = canadaBetDelayTimers.get(sessionKey);
   if (timer) {
     clearTimeout(timer);
-    canadaBetDelayTimers.delete(userId);
+    canadaBetDelayTimers.delete(sessionKey);
   }
 }
 
 function scheduleCanadaAutoBet(session: TgSession, settledPeriod: string): void {
-  clearCanadaBetDelayTimer(session.userId);
-  canadaBetDelayTimers.set(session.userId, setTimeout(() => {
-    canadaBetDelayTimers.delete(session.userId);
+  clearCanadaBetDelayTimer(session.sessionKey);
+  canadaBetDelayTimers.set(session.sessionKey, setTimeout(() => {
+    canadaBetDelayTimers.delete(session.sessionKey);
     void (async () => {
+      if (!session.me) return;
       const config = loadConfig(session.userId);
-      const runtime = loadRuntime(session.userId, config);
+      const runtime = loadRuntime(session.userId, config, session.sessionKey);
       const nextPeriod = String((Number(settledPeriod) || 0) + 1);
       const targetPeriod = runtime.activePeriod ?? nextPeriod;
       runtime.activePeriod = targetPeriod;
@@ -954,17 +958,17 @@ function scheduleCanadaAutoBet(session: TgSession, settledPeriod: string): void 
         await triggerPlanForPeriod(session, session.userId, plan, state, runtime, targetPeriod);
       }
       runtime.updatedAt = Date.now();
-      saveRuntime(session.userId, runtime);
+      saveRuntime(session.userId, runtime, session.sessionKey);
     })();
   }, 50_000));
 }
 
 function startCanadaLoop(): void {
   setInterval(() => {
-    for (const session of tgSessions.values()) {
-      if (canadaLoopInFlight.has(session.userId)) continue;
-      canadaLoopInFlight.add(session.userId);
-      void processUserCanada(session).finally(() => canadaLoopInFlight.delete(session.userId));
+    for (const session of getAllTgSessions()) {
+      if (canadaLoopInFlight.has(session.sessionKey)) continue;
+      canadaLoopInFlight.add(session.sessionKey);
+      void processUserCanada(session).finally(() => canadaLoopInFlight.delete(session.sessionKey));
     }
   }, 3000);
 }

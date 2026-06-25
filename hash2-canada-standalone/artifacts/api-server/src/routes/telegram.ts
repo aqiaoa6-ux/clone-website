@@ -291,6 +291,7 @@ function handleBetSendError(session: TgSession, errMsg: string): void {
 
 export interface TgSession {
   userId: number;
+  sessionKey: string;
   client: TelegramClient;
   stringSession: StringSession;
   phone: string;
@@ -394,6 +395,7 @@ export interface TgSession {
 }
 
 interface PersistedData {
+  sessionKey?: string;
   sessionString: string;
   phone: string;
   balance: number;
@@ -492,9 +494,89 @@ const HASH_BET_LABELS: Record<string, string> = {
 // ─── Module state ─────────────────────────────────────────────────────────────
 
 export const tgSessions = new Map<number, TgSession>();
+const tgExtraSessions = new Map<number, Map<string, TgSession>>();
+const tgPendingSessions = new Map<number, TgSession>();
 let lotteryHistoryCache: string[] = [];
 // 哈希28 全局开奖历史（所有用户共享，最新优先，最多保留 100 期）
 let hashHistoryCache: HashResult[] = [];
+
+function makeSessionKey(userId: number): string {
+  return `${userId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function sessionFile(userId: number, sessionKey = "primary"): string {
+  const suffix = sessionKey === "primary" ? "" : `-${sessionKey}`;
+  return path.join(sessionDir(), `.tg-session-${userId}${suffix}.json`);
+}
+
+function registerSession(session: TgSession, preferPrimary = false): void {
+  const primary = tgSessions.get(session.userId);
+  if (!primary || primary.sessionKey === session.sessionKey || preferPrimary) {
+    if (primary && primary.sessionKey !== session.sessionKey) {
+      const extras = tgExtraSessions.get(session.userId) ?? new Map<string, TgSession>();
+      extras.set(primary.sessionKey, primary);
+      tgExtraSessions.set(session.userId, extras);
+    }
+    const extras = tgExtraSessions.get(session.userId);
+    extras?.delete(session.sessionKey);
+    if (extras && extras.size === 0) tgExtraSessions.delete(session.userId);
+    tgSessions.set(session.userId, session);
+    return;
+  }
+  const extras = tgExtraSessions.get(session.userId) ?? new Map<string, TgSession>();
+  extras.set(session.sessionKey, session);
+  tgExtraSessions.set(session.userId, extras);
+}
+
+function unregisterSession(session: TgSession): void {
+  const primary = tgSessions.get(session.userId);
+  if (primary?.sessionKey === session.sessionKey) {
+    const extras = tgExtraSessions.get(session.userId);
+    if (extras && extras.size > 0) {
+      const [nextKey, nextSession] = extras.entries().next().value as [string, TgSession];
+      extras.delete(nextKey);
+      if (extras.size === 0) tgExtraSessions.delete(session.userId);
+      tgSessions.set(session.userId, nextSession);
+    } else {
+      tgSessions.delete(session.userId);
+    }
+    return;
+  }
+  const extras = tgExtraSessions.get(session.userId);
+  if (!extras) return;
+  extras.delete(session.sessionKey);
+  if (extras.size === 0) tgExtraSessions.delete(session.userId);
+}
+
+function isRegisteredSession(session: TgSession): boolean {
+  const primary = tgSessions.get(session.userId);
+  if (primary?.sessionKey === session.sessionKey) return true;
+  return tgExtraSessions.get(session.userId)?.get(session.sessionKey) === session;
+}
+
+function isPrimarySession(session: TgSession): boolean {
+  return tgSessions.get(session.userId)?.sessionKey === session.sessionKey;
+}
+
+export function getUserTgSessions(userId: number): TgSession[] {
+  const sessions: TgSession[] = [];
+  const primary = tgSessions.get(userId);
+  if (primary) sessions.push(primary);
+  const extras = tgExtraSessions.get(userId);
+  if (extras) sessions.push(...extras.values());
+  return sessions;
+}
+
+export function getAllTgSessions(): TgSession[] {
+  const sessions: TgSession[] = [];
+  for (const userId of tgSessions.keys()) sessions.push(...getUserTgSessions(userId));
+  return sessions;
+}
+
+function findSessionByPhone(userId: number, phone: string): TgSession | undefined {
+  const normalized = phone.trim();
+  return getUserTgSessions(userId).find(session => session.phone.trim() === normalized);
+}
 
 // ─── 独立走势缓存预热（不依赖 TG 会话，服务启动即运行）────────────────────────
 async function warmLotteryCache(): Promise<void> {
@@ -751,13 +833,10 @@ function sessionDir(): string {
   throw new Error("数据目录不可写");
 }
 
-function sessionFile(userId: number): string {
-  return path.join(sessionDir(), `.tg-session-${userId}.json`);
-}
-
 function saveSession(session: TgSession): void {
   try {
     const data: PersistedData = {
+      sessionKey: session.sessionKey,
       sessionString: session.stringSession.save(),
       phone: session.phone,
       balance: session.balance,
@@ -780,10 +859,10 @@ function saveSession(session: TgSession): void {
     };
     if (session.canadaMonitorGroupIds.length > 0) (data as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
     if (session.privateMonitorGroupIds.length > 0) (data as unknown as Record<string, unknown>).privateMonitorGroupIds = session.privateMonitorGroupIds;
-    fs.writeFileSync(sessionFile(session.userId), JSON.stringify(data, null, 2), "utf-8");
+    fs.writeFileSync(sessionFile(session.userId, session.sessionKey), JSON.stringify(data, null, 2), "utf-8");
     // 同步到数据库（异步，失败不影响主流程）
     const sessionStr = data.sessionString;
-    if (sessionStr) {
+    if (sessionStr && isPrimarySession(session)) {
       db.update(users).set({ tgSessionString: sessionStr }).where(eq(users.id, session.userId))
         .catch(err => logger.warn({ err }, "[tg] db session save failed"));
     }
@@ -918,11 +997,13 @@ function isFatalAuthError(e: unknown): boolean {
 /** 清除 session 内存状态 + 清除 sessionString，保留用户配置（监控群组/watchGroup/余额等），让用户重新登录 */
 function destroySession(session: TgSession, reason: string): void {
   stopAllTimers(session);
-  tgSessions.delete(session.userId);
+  unregisterSession(session);
+  tgPendingSessions.delete(session.userId);
   try { session.client.disconnect(); } catch { /* ok */ }
   // 保留用户配置（canadaMonitorGroupIds / watchGroupId / cfg / balance 等），仅清除 TG 认证信息
   try {
     const stub: PersistedData = {
+      sessionKey: session.sessionKey,
       sessionString: "",           // 清空 auth key，强制重新登录
       phone: session.phone ?? "",
       balance: session.balance,
@@ -941,7 +1022,7 @@ function destroySession(session: TgSession, reason: string): void {
       (stub as unknown as Record<string, unknown>).canadaMonitorGroupIds = session.canadaMonitorGroupIds;
     if (session.privateMonitorGroupIds.length > 0)
       (stub as unknown as Record<string, unknown>).privateMonitorGroupIds = session.privateMonitorGroupIds;
-    fs.writeFileSync(sessionFile(session.userId), JSON.stringify(stub, null, 2), "utf-8");
+    fs.writeFileSync(sessionFile(session.userId, session.sessionKey), JSON.stringify(stub, null, 2), "utf-8");
   } catch { /* ok */ }
   logger.warn({ userId: session.userId, reason }, "[tg] fatal auth error — session destroyed, user must re-login");
   pushEvent(session, "session:fatal", { reason });
@@ -951,12 +1032,12 @@ function startWatchdog(session: TgSession): void {
   stopAllTimers(session);
 
   session.saveTimer = setInterval(() => {
-    if (tgSessions.get(session.userId) !== session) { clearInterval(session.saveTimer); return; }
+    if (!isRegisteredSession(session)) { clearInterval(session.saveTimer); return; }
     saveSession(session);
   }, 5 * 60 * 1000);
 
   session.watchdogTimer = setInterval(() => {
-    if (tgSessions.get(session.userId) !== session) { clearInterval(session.watchdogTimer); return; }
+    if (!isRegisteredSession(session)) { clearInterval(session.watchdogTimer); return; }
     void (async () => {
       try {
         await session.client.getMe();
@@ -1026,6 +1107,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
 
   const session: TgSession = {
     userId,
+    sessionKey: data.sessionKey ?? "primary",
     client, stringSession,
     phone: data.phone ?? "",
     groups: connected ? await fetchGroups(client) : [],
@@ -1074,7 +1156,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     alertGroupId: data.alertGroupId,
   };
 
-  tgSessions.set(userId, session);
+  registerSession(session, session.sessionKey === "primary");
 
   if (connected) {
     if (session.watchGroupId) startGroupListener(session);
@@ -1100,7 +1182,7 @@ async function restoreUserSessionFromDb(userId: number, sessionString: string): 
   let hadFile = false;
   try {
     if (!fs.existsSync(file)) {
-      const minimal: PersistedData = { sessionString, phone: "", cfg: { ...DEFAULT_CFG }, balance: 1000000, todayPnl: 0, todayResetAt: 0, sessionPnl: 0, kkpayUsername: "kkpay", balanceSource: "manual" };
+      const minimal: PersistedData = { sessionKey: "primary", sessionString, phone: "", cfg: { ...DEFAULT_CFG }, balance: 1000000, todayPnl: 0, todayResetAt: 0, sessionPnl: 0, kkpayUsername: "kkpay", balanceSource: "manual" };
       fs.writeFileSync(file, JSON.stringify(minimal, null, 2), "utf-8");
     } else {
       hadFile = true;
@@ -1122,7 +1204,7 @@ async function restoreAllSessions(): Promise<void> {
   }
   const restoredFromFile = new Set<number>();
   try {
-    const files = fs.readdirSync(cwd).filter(f => /^\.tg-session-\d+\.json$/.test(f));
+    const files = fs.readdirSync(cwd).filter(f => /^\.tg-session-\d+(?:-[a-z0-9-]+)?\.json$/i.test(f));
     for (const f of files) {
       const userId = parseInt(f.replace(".tg-session-", "").replace(".json", ""), 10);
       if (!isNaN(userId)) {
@@ -1161,18 +1243,20 @@ setInterval(async () => {
   if (tgSessions.size === 0) return;
   try {
     const now = new Date();
-    for (const [userId, session] of tgSessions) {
+    for (const [userId] of tgSessions) {
       const [active] = await db.select({ id: cardKeys.id })
         .from(cardKeys)
         .where(and(eq(cardKeys.userId, userId), gt(cardKeys.expiresAt!, now)))
         .limit(1);
       if (!active) {
         logger.info({ userId }, "[tg] card expired — auto-disconnecting session");
-        stopAllTimers(session);
-        try { await session.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
-        try { await session.client.disconnect(); } catch { /* ok */ }
-        tgSessions.delete(userId);
-        try { fs.unlinkSync(sessionFile(userId)); } catch { /* ok */ }
+        for (const session of getUserTgSessions(userId)) {
+          stopAllTimers(session);
+          try { await session.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
+          try { await session.client.disconnect(); } catch { /* ok */ }
+          unregisterSession(session);
+          try { fs.unlinkSync(sessionFile(session.userId, session.sessionKey)); } catch { /* ok */ }
+        }
       }
     }
   } catch (err) {
@@ -3817,17 +3901,17 @@ function startHashResultPoller(session: TgSession): void {
     } catch (err) {
       logger.warn({ err, channel: HX28_RESULT_CHANNEL }, "[hash-result] 无法读取开奖频道，30s 后重试");
       setTimeout(() => {
-        if (tgSessions.get(session.userId) === session && session.cfg.gameMode === "hash") {
+        if (isRegisteredSession(session) && session.cfg.gameMode === "hash") {
           startHashResultPoller(session);
         }
       }, 30_000);
       return;
     }
 
-    if (tgSessions.get(session.userId) !== session) return;
+    if (!isRegisteredSession(session)) return;
 
     session.hashResultPollTimer = setInterval(() => {
-      if (tgSessions.get(session.userId) !== session) {
+      if (!isRegisteredSession(session)) {
         clearInterval(session.hashResultPollTimer); session.hashResultPollTimer = undefined; return;
       }
       void (async () => {
@@ -3974,7 +4058,7 @@ function scheduleSnapshot(term: number, delayMs: number): void {
 function scheduleCanadaLoop(session: TgSession): void {
   if (session.canadaSharedPoller) return; // already scheduled
   const loop = async () => {
-    if (tgSessions.get(session.userId) !== session) return;
+    if (!isRegisteredSession(session)) return;
     const activeGroups = Object.keys(session.canadaMonitorPollers).filter(g => session.canadaMonitorPollers[g]);
     if (activeGroups.length === 0) { session.canadaSharedPoller = undefined; return; }
     let started = 0;
@@ -4206,7 +4290,7 @@ async function pollOnePrivateGroup(session: TgSession, groupId: string): Promise
 function schedulePrivateLoop(session: TgSession): void {
   if (session.privateSharedPoller) return;
   const loop = async () => {
-    if (tgSessions.get(session.userId) !== session) return;
+    if (!isRegisteredSession(session)) return;
     const activeGroups = Object.keys(session.privateMonitorPollers).filter(g => session.privateMonitorPollers[g]);
     if (activeGroups.length === 0) { session.privateSharedPoller = undefined; return; }
     const len = activeGroups.length;
@@ -4264,10 +4348,10 @@ function startHashListener(session: TgSession): void {
       }
     } catch { /* ignore, poller will start with minId=0 and skip gracefully */ }
 
-    if (tgSessions.get(session.userId) !== session) return; // session already replaced
+    if (!isRegisteredSession(session)) return;
 
     session.hashPollTimer = setInterval(() => {
-    if (tgSessions.get(session.userId) !== session) {
+    if (!isRegisteredSession(session)) {
       clearInterval(session.hashPollTimer); session.hashPollTimer = undefined; return;
     }
     void (async () => {
@@ -4316,7 +4400,7 @@ function startKuaisanListener(session: TgSession): void {
 
   // Poll every 2 seconds for new messages
   session.kuaisanPollTimer = setInterval(() => {
-    if (tgSessions.get(session.userId) !== session) {
+    if (!isRegisteredSession(session)) {
       clearInterval(session.kuaisanPollTimer); session.kuaisanPollTimer = undefined; return;
     }
     void (async () => {
@@ -4513,23 +4597,27 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
   const { apiId, apiHash } = getCredentials();
   if (!apiId || !apiHash) { res.status(500).json({ error: "服务端未配置 Telegram API 凭证" }); return; }
   try {
-    const existing = tgSessions.get(userId);
-    if (existing?.client?.connected) {
-      try { await existing.client.disconnect(); } catch { /* ok */ }
+    const pending = tgPendingSessions.get(userId);
+    if (pending?.client) {
+      stopAllTimers(pending);
+      try { await pending.client.disconnect(); } catch { /* ok */ }
     }
+    const existing = tgSessions.get(userId) ?? getUserTgSessions(userId)[0];
     const stringSession = new StringSession("");
     const client = new TelegramClient(stringSession, apiId, apiHash, makeClientOptions());
     await client.connect();
     const result = await client.sendCode({ apiId, apiHash }, phone);
     const session: TgSession = {
       userId,
+      sessionKey: makeSessionKey(userId),
       client, stringSession, phone,
       phoneCodeHash: result.phoneCodeHash,
       groups: [],
       // 保留原有配置和群组，避免重新登录时丢失设置
       cfg: existing?.cfg ? { ...existing.cfg } : { ...DEFAULT_CFG },
       watchGroupId: existing?.watchGroupId,
-      betLog: [], sseClients: existing?.sseClients ?? new Set(),
+      alertGroupId: existing?.alertGroupId,
+      betLog: [], sseClients: new Set(),
       messageHandler: null, messageHandlerBuilder: null,
       kkpayHandler: null, kkpayHandlerBuilder: null,
       consecutiveLosses: 0, consecutiveAlgoLosses: 0, recentAlgoOutcomes: [], sessionPnl: 0,
@@ -4551,7 +4639,7 @@ router.post("/tg/send-code", requireCard, async (req, res) => {
       canadaMonitorGroupIds: existing?.canadaMonitorGroupIds ?? [], canadaMonitorPollers: {}, canadaSharedPoller: undefined, canadaMonitorLastMsgIds: {}, canadaMonitorInFlight: {}, canadaPollCursor: 0,
       privateMonitorGroupIds: (existing as unknown as { privateMonitorGroupIds?: string[] } | undefined)?.privateMonitorGroupIds ?? [], privateMonitorPollers: {}, privateSharedPoller: undefined, privateMonitorLastMsgIds: {}, privateMonitorInFlight: {}, privatePollCursor: 0,
     };
-    tgSessions.set(userId, session);
+    tgPendingSessions.set(userId, session);
     res.json({ ok: true });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -4564,7 +4652,7 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
   const userId = req.user!.userId;
   const { code } = req.body as { code?: string };
   if (!code) { res.status(400).json({ error: "请输入验证码" }); return; }
-  const session = tgSessions.get(userId);
+  const session = tgPendingSessions.get(userId);
   if (!session) { res.status(400).json({ error: "请先发送验证码" }); return; }
   const { apiId, apiHash } = getCredentials();
   try {
@@ -4581,6 +4669,15 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
+    const duplicate = findSessionByPhone(userId, session.phone);
+    if (duplicate) {
+      stopAllTimers(duplicate);
+      try { duplicate.client.disconnect(); } catch { /* ok */ }
+      unregisterSession(duplicate);
+      try { fs.unlinkSync(sessionFile(duplicate.userId, duplicate.sessionKey)); } catch { /* ok */ }
+    }
+    registerSession(session);
+    tgPendingSessions.delete(userId);
     saveSession(session);
     startWatchdog(session);
     res.json({ ok: true, me: { id: me.id, firstName: me.firstName, lastName: me.lastName, username: me.username, phone: me.phone } });
@@ -4597,7 +4694,7 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
   const userId = req.user!.userId;
   const { password } = req.body as { password?: string };
   if (!password) { res.status(400).json({ error: "请输入二步验证密码" }); return; }
-  const session = tgSessions.get(userId);
+  const session = tgPendingSessions.get(userId);
   if (!session) { res.status(400).json({ error: "会话已失效，请重新登录" }); return; }
   const { apiId, apiHash } = getCredentials();
   try {
@@ -4610,6 +4707,15 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
     startGlobalListener(session);
     startKkpayListener(session).catch(() => { /* ignore */ });
+    const duplicate = findSessionByPhone(userId, session.phone);
+    if (duplicate) {
+      stopAllTimers(duplicate);
+      try { duplicate.client.disconnect(); } catch { /* ok */ }
+      unregisterSession(duplicate);
+      try { fs.unlinkSync(sessionFile(duplicate.userId, duplicate.sessionKey)); } catch { /* ok */ }
+    }
+    registerSession(session);
+    tgPendingSessions.delete(userId);
     saveSession(session);
     startWatchdog(session);
     res.json({ ok: true, me: { id: me.id, firstName: me.firstName, lastName: me.lastName, username: me.username, phone: me.phone } });
@@ -4714,24 +4820,32 @@ router.post("/tg/resolve-group", requireCard, async (req, res) => {
 });
 
 router.post("/tg/set-group", requireCard, (req, res) => {
-  const session = tgSessions.get(req.user!.userId);
+  const userId = req.user!.userId;
+  const sessions = getUserTgSessions(userId);
+  const session = sessions[0];
   if (!session) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   const { groupId } = req.body as { groupId?: string };
-  if (groupId !== undefined) session.watchGroupId = groupId;
-  if (session.watchGroupId) startGroupListener(session);
-  saveSession(session);
+  for (const item of sessions) {
+    if (groupId !== undefined) item.watchGroupId = groupId;
+    if (item.watchGroupId) startGroupListener(item);
+    saveSession(item);
+  }
   res.json({ ok: true });
 });
 
 router.post("/tg/set-alert-group", requireCard, (req, res) => {
-  const session = tgSessions.get(req.user!.userId);
+  const userId = req.user!.userId;
+  const sessions = getUserTgSessions(userId);
+  const session = sessions[0];
   if (!session) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   const { groupId } = req.body as { groupId?: string };
   if (groupId === undefined) { res.json({ ok: true }); return; }
   const next = groupId.trim();
   if (!next) {
-    session.alertGroupId = undefined;
-    saveSession(session);
+    for (const item of sessions) {
+      item.alertGroupId = undefined;
+      saveSession(item);
+    }
     res.json({ ok: true });
     return;
   }
@@ -4740,8 +4854,11 @@ router.post("/tg/set-alert-group", requireCard, (req, res) => {
     res.status(400).json({ error: "提醒目标必须是群/频道" });
     return;
   }
-  session.alertGroupId = canonicalGroupId(session, next);
-  saveSession(session);
+  const targetGroupId = canonicalGroupId(session, next);
+  for (const item of sessions) {
+    item.alertGroupId = targetGroupId;
+    saveSession(item);
+  }
   res.json({ ok: true });
 });
 
@@ -4839,6 +4956,10 @@ router.post("/tg/config", requireCard, (req, res) => {
       startPoller(session);
       void pollLottery(session);
     }
+  }
+  for (const extra of getUserTgSessions(req.user!.userId).filter(item => item.sessionKey !== session.sessionKey)) {
+    extra.cfg = { ...session.cfg };
+    saveSession(extra);
   }
   saveSession(session);
   res.json({ ok: true, cfg: session.cfg });
@@ -5477,31 +5598,35 @@ router.post("/admin/tg/sessions/:userId/send", requireAdminSecret, async (req, r
 
 router.post("/tg/disconnect", requireAuth, async (req, res) => {
   const userId = req.user!.userId;
-  const session = tgSessions.get(userId);
-  if (session) {
+  const pending = tgPendingSessions.get(userId);
+  if (pending) {
+    stopAllTimers(pending);
+    try { await pending.client.disconnect(); } catch { /* ok */ }
+    tgPendingSessions.delete(userId);
+  }
+  for (const session of getUserTgSessions(userId)) {
     stopAllTimers(session);
     try { await session.client.invoke(new Api.auth.LogOut()); } catch { /* ok */ }
     try { await session.client.disconnect(); } catch { /* ok */ }
-    tgSessions.delete(userId);
+    unregisterSession(session);
+    try { fs.unlinkSync(sessionFile(session.userId, session.sessionKey)); } catch { /* ok */ }
   }
-  try { fs.unlinkSync(sessionFile(userId)); } catch { /* ok */ }
   res.json({ ok: true });
 });
 
 /** 登出时停止指定用户的自动投注（保留 TG 连接和会话） */
 export function stopUserAutoBet(userId: number): void {
-  const session = tgSessions.get(userId);
-  if (!session) return;
-  if (session.cfg.autoBet) {
+  const sessions = getUserTgSessions(userId);
+  if (sessions.length === 0) return;
+  for (const session of sessions) {
+    if (!session.cfg.autoBet) continue;
     session.cfg.autoBet = false;
     stopPoller(session);
-    // 停快三自动投注轮询
     if (session.kuaisanPollTimer) { clearInterval(session.kuaisanPollTimer); session.kuaisanPollTimer = undefined; }
     if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
-    // 保存会话（autoBet=false 持久化）
     saveSession(session);
-    logger.info({ userId }, "[auth] logout — autoBet stopped");
   }
+  logger.info({ userId }, "[auth] logout — autoBet stopped");
 }
 
 // ─── Admin hash group bet monitor endpoints ───────────────────────────────────
