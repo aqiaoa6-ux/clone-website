@@ -6,7 +6,7 @@ import path from "path";
 import { requireCard } from "../middleware/requireAuth";
 import { sendAlertEmail } from "../lib/email";
 import { logger } from "../lib/logger";
-import { getAllTgSessions, type TgSession } from "./telegram";
+import { getAllTgSessions, getUserTgSessions, type TgSession } from "./telegram";
 
 const router = Router();
 
@@ -376,6 +376,19 @@ function loadRuntime(userId: number, config: CanadaConfig, sessionKey = "primary
 
 function saveRuntime(userId: number, runtime: CanadaRuntime, sessionKey = "primary"): void {
   fs.writeFileSync(runtimeFile(userId, sessionKey), JSON.stringify(runtime, null, 2), "utf-8");
+}
+
+function pickCanada2Session(userId: number, config: CanadaConfig): TgSession | null {
+  const sessions = getUserTgSessions(userId).filter(session => !!session.me);
+  if (sessions.length === 0) return null;
+  const ranked = [...sessions].sort((a, b) => {
+    const aRuntime = loadRuntime(userId, config, a.sessionKey);
+    const bRuntime = loadRuntime(userId, config, b.sessionKey);
+    const aScore = (a.watchGroupId ? 10 : 0) + (a.cfg.autoBet ? 5 : 0) + (aRuntime.updatedAt || 0);
+    const bScore = (b.watchGroupId ? 10 : 0) + (b.cfg.autoBet ? 5 : 0) + (bRuntime.updatedAt || 0);
+    return bScore - aScore;
+  });
+  return ranked[0] ?? null;
 }
 
 function makeAlert(plan: CanadaPlan, message: string, level: CanadaAlertLevel): CanadaAlert {
@@ -990,20 +1003,26 @@ router.post("/canada2/config", requireCard, (req, res) => {
 router.get("/canada2/runtime", requireCard, (req, res) => {
   const userId = req.user!.userId;
   const config = loadConfig(userId);
-  const runtime = loadRuntime(userId, config);
-  res.json({ runtime });
+  const session = pickCanada2Session(userId, config);
+  const runtime = loadRuntime(userId, config, session?.sessionKey ?? "primary");
+  res.json({
+    runtime,
+    sessionKey: session?.sessionKey ?? "primary",
+    phone: session?.me?.phone ?? session?.phone ?? null,
+  });
 });
 
 router.post("/canada2/reset-runtime", requireCard, (req, res) => {
   const userId = req.user!.userId;
   const planId = String((req.body as { planId?: string } | undefined)?.planId ?? "").trim();
   const config = loadConfig(userId);
+  const session = pickCanada2Session(userId, config);
   const plan = config.plans.find(item => item.id === planId);
   if (!plan) {
     res.status(400).json({ error: "方案不存在" });
     return;
   }
-  const runtime = loadRuntime(userId, config);
+  const runtime = loadRuntime(userId, config, session?.sessionKey ?? "primary");
   const state = runtime.plans[planId];
   if (!state) {
     res.status(400).json({ error: "方案运行状态不存在" });
@@ -1011,14 +1030,15 @@ router.post("/canada2/reset-runtime", requireCard, (req, res) => {
   }
   resetPlanRuntimeForRestart(plan, state);
   runtime.updatedAt = Date.now();
-  saveRuntime(userId, runtime);
+  saveRuntime(userId, runtime, session?.sessionKey ?? "primary");
   res.json({ ok: true, runtime });
 });
 
 router.post("/canada2/test-alert", requireCard, (req, res) => {
   const userId = req.user!.userId;
   const config = loadConfig(userId);
-  const runtime = loadRuntime(userId, config);
+  const session = pickCanada2Session(userId, config);
+  const runtime = loadRuntime(userId, config, session?.sessionKey ?? "primary");
   const firstPlan = config.plans.find(plan => plan.enabled) ?? config.plans[0] ?? defaultPlan(0);
   const { message } = req.body as { message?: string };
   runtime.lastAlert = makeAlert(
@@ -1028,7 +1048,7 @@ router.post("/canada2/test-alert", requireCard, (req, res) => {
       : "哈希（新版）提醒测试：已触发网页语音提醒",
     "info",
   );
-  saveRuntime(userId, runtime);
+  saveRuntime(userId, runtime, session?.sessionKey ?? "primary");
   res.json({
     ok: true,
     message: runtime.lastAlert.message,

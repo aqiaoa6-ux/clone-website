@@ -573,6 +573,14 @@ export function getAllTgSessions(): TgSession[] {
   return sessions;
 }
 
+export function getPreferredUserSession(userId: number): TgSession | null {
+  const sessions = getUserTgSessions(userId).filter(session => !!session.me);
+  if (sessions.length === 0) return null;
+  const withGroup = sessions.filter(session => !!session.watchGroupId);
+  const active = withGroup.find(session => session.cfg.autoBet) ?? sessions.find(session => session.cfg.autoBet);
+  return active ?? withGroup[0] ?? sessions[0] ?? null;
+}
+
 function findSessionByPhone(userId: number, phone: string): TgSession | undefined {
   const normalized = phone.trim();
   return getUserTgSessions(userId).find(session => session.phone.trim() === normalized);
@@ -4728,7 +4736,7 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
 
 router.get("/tg/status", requireCard, (req, res) => {
   const userId = req.user!.userId;
-  const session = tgSessions.get(userId);
+  const session = getPreferredUserSession(userId);
   if (!session?.me) { res.json({ connected: false }); return; }
   const midnight = todayMidnight();
   if (session.todayResetAt < midnight) { session.todayPnl = 0; session.todayResetAt = midnight; }
