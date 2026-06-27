@@ -910,17 +910,66 @@ function stopAllTimers(session: TgSession): void {
   if (session.saveTimer) { clearInterval(session.saveTimer); session.saveTimer = undefined; }
   if (session.autoNextBetTimer) { clearTimeout(session.autoNextBetTimer); session.autoNextBetTimer = undefined; }
   if (session.lotteryPollTimer) { clearInterval(session.lotteryPollTimer); session.lotteryPollTimer = undefined; }
+  stopGlobalListener(session);
+  stopKkpayListener(session);
+}
+
+function stopGlobalListener(session: TgSession): void {
   if (session.globalHandler && session.globalHandlerBuilder) {
     try { session.client.removeEventHandler(session.globalHandler, session.globalHandlerBuilder); } catch { /* ok */ }
     session.globalHandler = null; session.globalHandlerBuilder = null;
   }
 }
 
-function startGlobalListener(session: TgSession): void {
-  if (session.globalHandler && session.globalHandlerBuilder) {
-    try { session.client.removeEventHandler(session.globalHandler, session.globalHandlerBuilder); } catch { /* ok */ }
-    session.globalHandler = null; session.globalHandlerBuilder = null;
+function shouldUseLightweightSession(session: TgSession): boolean {
+  return session.cfg.gameMode === "hash"
+    && session.canadaMonitorGroupIds.length === 0
+    && session.privateMonitorGroupIds.length === 0;
+}
+
+function shouldFetchGroupsEagerly(session: TgSession): boolean {
+  return !shouldUseLightweightSession(session);
+}
+
+function refreshSessionMode(session: TgSession): void {
+  if (session.watchGroupId) {
+    if (session.cfg.gameMode === "kuaisan") {
+      stopPoller(session);
+      stopMainMessageListener(session);
+      stopHashListener(session);
+      startKuaisanListener(session);
+    } else if (session.cfg.gameMode === "hash") {
+      stopPoller(session);
+      stopMainMessageListener(session);
+      stopKuaisanListener(session);
+      startHashListener(session);
+    } else {
+      stopKuaisanListener(session);
+      stopHashListener(session);
+      startGroupListener(session);
+    }
+  } else {
+    stopMainMessageListener(session);
+    stopKuaisanListener(session);
+    stopHashListener(session);
   }
+}
+
+function startSessionRealtime(session: TgSession): void {
+  refreshSessionMode(session);
+  for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
+  for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
+  if (shouldUseLightweightSession(session)) {
+    stopGlobalListener(session);
+    stopKkpayListener(session);
+    return;
+  }
+  startGlobalListener(session);
+  startKkpayListener(session).catch(() => { /* ignore */ });
+}
+
+function startGlobalListener(session: TgSession): void {
+  stopGlobalListener(session);
 
   session.globalHandler = async (event: NewMessageEvent) => {
     const msg = event.message;
@@ -1053,9 +1102,10 @@ function startWatchdog(session: TgSession): void {
         if (isFatalAuthError(e1)) { destroySession(session, String(e1)); return; }
         try {
           await session.client.connect();
-          if (session.watchGroupId) startGroupListener(session);
-          startGlobalListener(session);
-          await startKkpayListener(session);
+          if (shouldFetchGroupsEagerly(session) && session.groups.length === 0) {
+            session.groups = await fetchGroups(session.client);
+          }
+          startSessionRealtime(session);
           saveSession(session);
           pushEvent(session, "session:reconnected", { at: Date.now() });
         } catch (e2) {
@@ -1118,7 +1168,7 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
     sessionKey: data.sessionKey ?? "primary",
     client, stringSession,
     phone: data.phone ?? "",
-    groups: connected ? await fetchGroups(client) : [],
+    groups: [],
     cfg: data.cfg ? { ...DEFAULT_CFG, ...data.cfg, autoBet: false } : { ...DEFAULT_CFG },
     betLog: [], sseClients: new Set(),
     messageHandler: null, messageHandlerBuilder: null,
@@ -1167,11 +1217,10 @@ async function restoreUserSession(userId: number, file: string): Promise<void> {
   registerSession(session, session.sessionKey === "primary");
 
   if (connected) {
-    if (session.watchGroupId) startGroupListener(session);
-    for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
-    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
-    startGlobalListener(session);
-    startKkpayListener(session).catch(() => { /* ignore */ });
+    if (shouldFetchGroupsEagerly(session)) {
+      session.groups = await fetchGroups(client);
+    }
+    startSessionRealtime(session);
     logger.info({ userId }, "[tg] session restored (online)");
   } else {
     logger.info({ userId }, "[tg] session restored (offline — watchdog will reconnect)");
@@ -3214,10 +3263,7 @@ function startGroupListener(session: TgSession): void {
   if (!session.watchGroupId) return;
   if (session.cfg.gameMode === "kuaisan") { startKuaisanListener(session); return; }
   if (session.cfg.gameMode === "hash") { startHashListener(session); return; }
-  if (session.messageHandler && session.messageHandlerBuilder) {
-    try { session.client.removeEventHandler(session.messageHandler, session.messageHandlerBuilder); } catch { /* ok */ }
-    session.messageHandler = null; session.messageHandlerBuilder = null;
-  }
+  stopMainMessageListener(session);
   const targetId = session.watchGroupId;
 
   session.messageHandler = async (event: NewMessageEvent) => {
@@ -3287,6 +3333,13 @@ function startGroupListener(session: TgSession): void {
 
   session.messageHandlerBuilder = new NewMessage({});
   session.client.addEventHandler(session.messageHandler, session.messageHandlerBuilder);
+}
+
+function stopMainMessageListener(session: TgSession): void {
+  if (session.messageHandler && session.messageHandlerBuilder) {
+    try { session.client.removeEventHandler(session.messageHandler, session.messageHandlerBuilder); } catch { /* ok */ }
+    session.messageHandler = null; session.messageHandlerBuilder = null;
+  }
 }
 
 // ─── Kuaisan (快三) functions ─────────────────────────────────────────────────
@@ -4442,15 +4495,7 @@ function startKuaisanListener(session: TgSession): void {
 // ─── KKPay listener ───────────────────────────────────────────────────────────
 
 async function startKkpayListener(session: TgSession): Promise<void> {
-  if (session.kkpayHandler && session.kkpayHandlerBuilder) {
-    try { session.client.removeEventHandler(session.kkpayHandler, session.kkpayHandlerBuilder); } catch { /* ok */ }
-    session.kkpayHandler = null; session.kkpayHandlerBuilder = null;
-  }
-  // Tear down any previous permanent outgoing watcher
-  if (session.kkpayOutRawHandler && session.kkpayOutRawBuilder) {
-    try { session.client.removeEventHandler(session.kkpayOutRawHandler as Parameters<typeof session.client.removeEventHandler>[0], session.kkpayOutRawBuilder); } catch { /* ok */ }
-    session.kkpayOutRawHandler = null; session.kkpayOutRawBuilder = null;
-  }
+  stopKkpayListener(session);
 
   const uname = session.kkpayUsername.replace(/^@/, "");
   try {
@@ -4566,6 +4611,18 @@ async function startKkpayListener(session: TgSession): Promise<void> {
   session.client.addEventHandler(session.kkpayHandler, session.kkpayHandlerBuilder);
 }
 
+function stopKkpayListener(session: TgSession): void {
+  if (session.kkpayHandler && session.kkpayHandlerBuilder) {
+    try { session.client.removeEventHandler(session.kkpayHandler, session.kkpayHandlerBuilder); } catch { /* ok */ }
+    session.kkpayHandler = null; session.kkpayHandlerBuilder = null;
+  }
+  if (session.kkpayOutRawHandler && session.kkpayOutRawBuilder) {
+    try { session.client.removeEventHandler(session.kkpayOutRawHandler as Parameters<typeof session.client.removeEventHandler>[0], session.kkpayOutRawBuilder); } catch { /* ok */ }
+    session.kkpayOutRawHandler = null; session.kkpayOutRawBuilder = null;
+  }
+  stopKkpayRawPwdListener(session);
+}
+
 // ─── Per-bet-type odds helper ──────────────────────────────────────────────────
 
 function getOddsForBet(betContent: string, cfg: BetCfg): number {
@@ -4671,12 +4728,8 @@ router.post("/tg/verify-code", requireCard, async (req, res) => {
     }));
     const me = (result as Api.auth.Authorization).user as Api.User;
     session.me = me;
-    session.groups = await fetchGroups(session.client);
-    if (session.watchGroupId) startGroupListener(session);
-    for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
-    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
-    startGlobalListener(session);
-    startKkpayListener(session).catch(() => { /* ignore */ });
+    session.groups = shouldFetchGroupsEagerly(session) ? await fetchGroups(session.client) : [];
+    startSessionRealtime(session);
     const duplicate = findSessionByPhone(userId, session.phone);
     if (duplicate) {
       stopAllTimers(duplicate);
@@ -4709,12 +4762,8 @@ router.post("/tg/verify-password", requireCard, async (req, res) => {
     await session.client.signInWithPassword({ apiId, apiHash }, { password: async () => password, onError: async (e: Error) => { throw e; } });
     const me = (await session.client.getMe()) as Api.User;
     session.me = me;
-    session.groups = await fetchGroups(session.client);
-    if (session.watchGroupId) startGroupListener(session);
-    for (const gid of session.canadaMonitorGroupIds) startCanadaMonitorPoller(session, gid);
-    for (const gid of session.privateMonitorGroupIds) startPrivateMonitorPoller(session, gid);
-    startGlobalListener(session);
-    startKkpayListener(session).catch(() => { /* ignore */ });
+    session.groups = shouldFetchGroupsEagerly(session) ? await fetchGroups(session.client) : [];
+    startSessionRealtime(session);
     const duplicate = findSessionByPhone(userId, session.phone);
     if (duplicate) {
       stopAllTimers(duplicate);
@@ -4803,7 +4852,7 @@ router.get("/tg/debug-group", requireCard, async (req, res) => {
 });
 
 router.get("/tg/groups", requireCard, async (req, res) => {
-  const session = tgSessions.get(req.user!.userId);
+  const session = getPreferredUserSession(req.user!.userId) ?? tgSessions.get(req.user!.userId) ?? getUserTgSessions(req.user!.userId)[0];
   if (!session?.client) { res.status(401).json({ error: "未连接 Telegram" }); return; }
   session.groups = await fetchGroups(session.client);
   res.json({ groups: session.groups });
@@ -4835,7 +4884,7 @@ router.post("/tg/set-group", requireCard, (req, res) => {
   const { groupId } = req.body as { groupId?: string };
   for (const item of sessions) {
     if (groupId !== undefined) item.watchGroupId = groupId;
-    if (item.watchGroupId) startGroupListener(item);
+    refreshSessionMode(item);
     saveSession(item);
   }
   res.json({ ok: true });
@@ -4928,21 +4977,14 @@ router.post("/tg/config", requireCard, (req, res) => {
   }
   if (body.algorithms !== undefined) session.algIndex = 0;
 
-  // Restart the appropriate listener when group or mode changes
-  if (session.watchGroupId) {
-    if (session.cfg.gameMode === "kuaisan") {
-      stopPoller(session);
-      stopHashListener(session);
-      startKuaisanListener(session);
-    } else if (session.cfg.gameMode === "hash") {
-      stopPoller(session);
-      stopKuaisanListener(session);
-      startHashListener(session);
-    } else {
-      stopKuaisanListener(session);
-      stopHashListener(session);
-      startGroupListener(session);
-    }
+  refreshSessionMode(session);
+  if (shouldUseLightweightSession(session)) {
+    session.groups = [];
+    stopGlobalListener(session);
+    stopKkpayListener(session);
+  } else {
+    startGlobalListener(session);
+    startKkpayListener(session).catch(() => { /* ignore */ });
   }
 
   if (body.autoBet === false && prev.autoBet) stopPoller(session);
@@ -4967,6 +5009,15 @@ router.post("/tg/config", requireCard, (req, res) => {
   }
   for (const extra of getUserTgSessions(req.user!.userId).filter(item => item.sessionKey !== session.sessionKey)) {
     extra.cfg = { ...session.cfg };
+    refreshSessionMode(extra);
+    if (shouldUseLightweightSession(extra)) {
+      extra.groups = [];
+      stopGlobalListener(extra);
+      stopKkpayListener(extra);
+    } else {
+      startGlobalListener(extra);
+      startKkpayListener(extra).catch(() => { /* ignore */ });
+    }
     saveSession(extra);
   }
   saveSession(session);
